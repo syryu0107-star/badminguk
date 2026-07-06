@@ -1,0 +1,61 @@
+@import "tailwindcss";
+
+:root {
+  --red: #C60C30;
+  --blue: #003478;
+  --bg: #F4F4F6;
+  --surface: #FFFFFF;
+  --border: #E2E4E9;
+  --text: #111827;
+  --muted: #6B7280;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+* { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  overscroll-behavior: none;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  margin: 0;
+}
+
+#root {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100%;
+  position: relative;
+  background: var(--bg);
+}
+
+.safe-bottom { padding-bottom: calc(4.5rem + var(--safe-bottom)); }
+
+.chip-왕초심 { background:#F3F4F6; color:#6B7280; border:1px solid #D1D5DB; }
+.chip-초심   { background:#ECFDF5; color:#059669; border:1px solid #A7F3D0; }
+.chip-D조    { background:#EFF6FF; color:#2563EB; border:1px solid #BFDBFE; }
+.chip-C조    { background:#F5F3FF; color:#7C3AED; border:1px solid #DDD6FE; }
+.chip-B조    { background:#FFF7ED; color:#C2410C; border:1px solid #FED7AA; }
+.chip-A조    { background:linear-gradient(135deg,#FEF9C3,#FDE68A); color:#92400E; border:1px solid #FCD34D; }
+.chip-준자강  { background:linear-gradient(135deg,#E0F2FE,#BAE6FD); color:#0369A1; border:1px solid #7DD3FC; }
+.chip-자강조  { background:linear-gradient(135deg,#C60C30,#003478); color:#FFF; border:none; }
+
+@keyframes fadeUp {
+  from { opacity:0; transform:translateY(12px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+.fade-up { animation: fadeUp .22s ease both; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner { animation: spin 1s linear infinite; }
+
+@keyframes pulse-glow {
+  0%,100% { box-shadow: 0 0 0 0 rgba(198,12,48,.4); }
+  50%      { box-shadow: 0 0 0 8px rgba(198,12,48,0); }
+}
+.pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
