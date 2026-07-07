@@ -45,7 +45,7 @@ export default function App() {
     setLoading(false)
   }
 
-  if (loading) return <FullPageSpinner />
+  if (!TEST_MODE && loading) return <FullPageSpinner />
 
   return (
     <BrowserRouter>
