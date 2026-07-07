@@ -8,9 +8,9 @@ export default function Onboarding() {
   const navigate  = useNavigate()
   const location  = useLocation()
 
-  // Auth.jsx에서 넘겨준 이전 기록
   const phoneRecord = location.state?.phoneRecord ?? null
   const phone       = location.state?.phone ?? null
+  const role        = location.state?.role ?? 'player'
 
   const [step,    setStep]    = useState(0)  // 0=이름 1=급수 2=종목
   const [name,    setName]    = useState('')
@@ -37,6 +37,7 @@ export default function Onboarding() {
       id:              user.id,
       name,
       phone,
+      role,
       official_grade:  grade,
       preferred_sports: sports,
       mmr:             restoredMMR,
@@ -44,7 +45,7 @@ export default function Onboarding() {
     })
 
     if (e) { setError(e.message); setSaving(false); return }
-    navigate('/home', { replace: true })
+    navigate(role === 'organizer' ? '/organizer' : '/home', { replace: true })
   }
 
   const gradeList = gradeIsLocked

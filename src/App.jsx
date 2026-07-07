@@ -5,6 +5,7 @@ import { FullPageSpinner } from './components/Spinner'
 
 import Auth from './pages/Auth'
 import Onboarding from './pages/Onboarding'
+import RoleLanding from './pages/RoleLanding'
 
 import PlayerHome from './pages/player/Home'
 import Tournaments from './pages/player/Tournaments'
@@ -19,10 +20,13 @@ import EntryManagement from './pages/organizer/EntryManagement'
 import BracketGenerator from './pages/organizer/BracketGenerator'
 import LiveDashboard from './pages/organizer/LiveDashboard'
 
+// TEST_MODE=true 이면 로그인 없이 모든 페이지 접근 가능
+const TEST_MODE = true
+
 export default function App() {
-  const [session, setSession]   = useState(undefined)
-  const [profile, setProfile]   = useState(null)
-  const [loading, setLoading]   = useState(true)
+  const [session, setSession] = useState(undefined)
+  const [profile, setProfile] = useState(null)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -50,8 +54,10 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/auth"       element={TEST_MODE ? <Navigate to="/home" replace /> : (!session ? <Auth /> : <Navigate to="/home" replace />)} />
-        <Route path="/onboarding" element={TEST_MODE ? <Navigate to="/home" replace /> : (session ? <Onboarding /> : <Navigate to="/auth" replace />)} />
+        {/* 진입점: 역할 선택 랜딩 */}
+        <Route path="/"  element={TEST_MODE ? <RoleLanding /> : (!session ? <Auth /> : <Navigate to="/home" replace />)} />
+        <Route path="/auth" element={TEST_MODE ? <RoleLanding /> : (!session ? <Auth /> : <Navigate to="/home" replace />)} />
+        <Route path="/onboarding" element={TEST_MODE ? <Navigate to="/" replace /> : (session ? <Onboarding /> : <Navigate to="/auth" replace />)} />
 
         <Route path="/home"            element={<Req s={session} p={profile}><PlayerHome /></Req>} />
         <Route path="/tournaments"     element={<Req s={session} p={profile}><Tournaments /></Req>} />
@@ -66,18 +72,15 @@ export default function App() {
         <Route path="/organizer/:id/bracket" element={<Req s={session} p={profile}><BracketGenerator /></Req>} />
         <Route path="/organizer/:id/live"    element={<Req s={session} p={profile}><LiveDashboard /></Req>} />
 
-        <Route path="*" element={<Navigate to="/home" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   )
 }
 
-// TEST_MODE=true 이면 로그인 없이 모든 페이지 접근 가능
-const TEST_MODE = true
-
 function Req({ s, p, children }) {
   if (TEST_MODE) return children
-  if (!s) return <Navigate to="/auth" replace />
+  if (!s) return <Navigate to="/" replace />
   if (p !== null && !p?.name) return <Navigate to="/onboarding" replace />
   return children
 }
