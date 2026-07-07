@@ -12,7 +12,7 @@ export default function MyMatches() {
   useEffect(() => {
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
+      if (!user) { setLoading(false); return }
 
       // 내가 속한 entries 조회
       const { data: entries } = await supabase
