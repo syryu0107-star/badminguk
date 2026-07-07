@@ -15,6 +15,13 @@ function normalizePhone(v) {
   return null
 }
 
+function formatBirth(v) {
+  const d = v.replace(/\D/g, '').slice(0, 8)
+  if (d.length < 5) return d
+  if (d.length < 7) return d.slice(0, 4) + '-' + d.slice(4)
+  return d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6)
+}
+
 const ROLES = [
   {
     key: 'player',
@@ -22,7 +29,6 @@ const ROLES = [
     title: '선수',
     desc: 'MMR 확인 · 대회 참가 · 전국 랭킹',
     bg: 'from-[#C60C30] to-[#a00a28]',
-    border: 'border-[#C60C30]',
   },
   {
     key: 'organizer',
@@ -30,19 +36,24 @@ const ROLES = [
     title: '대회 주최자',
     desc: 'AI 대진표 · 실시간 스코어 · 참가자 관리',
     bg: 'from-[#003478] to-[#001f4d]',
-    border: 'border-[#003478]',
   },
 ]
 
 export default function Auth() {
   const navigate = useNavigate()
-  const [step,    setStep]    = useState('role')   // role | phone | otp
+  const [step,    setStep]    = useState('role')   // role | phone | otp | identity
   const [role,    setRole]    = useState('')
   const [phone,   setPhone]   = useState('')
   const [otp,     setOtp]     = useState('')
   const [masked,  setMasked]  = useState('')
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState('')
+
+  // 본인인증 스텝 상태
+  const [idName,    setIdName]    = useState('')
+  const [idBirth,   setIdBirth]   = useState('')
+  const [isNewUser, setIsNewUser] = useState(false)
+  const [phoneRecord, setPhoneRecord] = useState(null)
 
   function selectRole(r) {
     setRole(r)
@@ -94,13 +105,72 @@ export default function Auth() {
       }
     }
 
-    if (data.isNewUser) {
+    setIsNewUser(!!data.isNewUser)
+    setPhoneRecord(data.phoneRecord ?? null)
+
+    // 기존 사용자이고 이미 실명인증 완료 → 바로 이동
+    if (!data.isNewUser && data.phoneRecord?.identity_verified) {
+      navigate(role === 'organizer' ? '/organizer' : '/home', { replace: true })
+      return
+    }
+
+    // 신규 사용자 or 미인증 → 본인인증 스텝으로
+    setStep('identity')
+    setLoading(false)
+  }
+
+  async function verifyIdentity() {
+    const birthRaw = idBirth.replace(/\D/g, '')
+    if (!idName.trim() || idName.trim().length < 2) {
+      setError('이름을 올바르게 입력해주세요.')
+      return
+    }
+    if (birthRaw.length !== 8) {
+      setError('생년월일 8자리를 입력해주세요. (예: 19900101)')
+      return
+    }
+
+    setLoading(true); setError('')
+    const norm = normalizePhone(phone)
+
+    const { data, error: e } = await supabase.functions.invoke('verify-identity', {
+      body: { name: idName.trim(), birth: birthRaw, phone: norm },
+    })
+
+    if (e || data?.error) {
+      setError(data?.error ?? '본인인증에 실패했습니다.')
+      setLoading(false)
+      return
+    }
+
+    // profiles에도 저장
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      await supabase.from('profiles').update({
+        verified_name: data.verified_name,
+        verified_birth: data.verified_birth,
+        identity_verified: true,
+      }).eq('id', user.id)
+    }
+
+    if (isNewUser) {
       navigate('/onboarding', {
-        state: { phoneRecord: data.phoneRecord, phone: norm, role },
+        state: { phoneRecord, phone: norm, role },
         replace: true,
       })
     } else {
-      // 기존 사용자 → 선택한 역할에 따라 이동
+      navigate(role === 'organizer' ? '/organizer' : '/home', { replace: true })
+    }
+  }
+
+  // 본인인증 건너뛰기 (나중에 하기)
+  function skipIdentity() {
+    if (isNewUser) {
+      navigate('/onboarding', {
+        state: { phoneRecord, phone: normalizePhone(phone), role },
+        replace: true,
+      })
+    } else {
       navigate(role === 'organizer' ? '/organizer' : '/home', { replace: true })
     }
   }
@@ -119,7 +189,23 @@ export default function Auth() {
         <p className="text-xs text-gray-400 mt-0.5">대한민국 배드민턴 공인 MMR</p>
       </div>
 
-      {/* 역할 선택 */}
+      {/* 진행 단계 표시 */}
+      {step !== 'role' && (
+        <div className="flex items-center justify-center gap-2 mb-2">
+          {['phone', 'otp', 'identity'].map((s, i) => (
+            <div key={s} className="flex items-center gap-1">
+              <div className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center
+                ${['phone','otp','identity'].indexOf(step) >= i
+                  ? 'bg-[#C60C30] text-white'
+                  : 'bg-gray-100 text-gray-400'}`}
+              >{i + 1}</div>
+              {i < 2 && <div className="w-6 h-px bg-gray-200" />}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── 역할 선택 ─────────────────────────────────────────── */}
       {step === 'role' && (
         <div className="flex-1 px-6 fade-up">
           <h2 className="text-lg font-black mb-1 text-center">어떤 역할로 입장할까요?</h2>
@@ -147,10 +233,9 @@ export default function Auth() {
         </div>
       )}
 
-      {/* 전화번호 입력 */}
+      {/* ── 전화번호 입력 ──────────────────────────────────────── */}
       {step === 'phone' && (
         <div className="flex-1 px-6 fade-up">
-          {/* 선택된 역할 표시 */}
           <div className="flex items-center justify-center gap-2 mb-8">
             <span className="text-xl">{ROLES.find(r => r.key === role)?.emoji}</span>
             <span className="font-bold text-gray-700">
@@ -195,7 +280,7 @@ export default function Auth() {
         </div>
       )}
 
-      {/* OTP 입력 */}
+      {/* ── OTP 입력 ──────────────────────────────────────────── */}
       {step === 'otp' && (
         <div className="flex-1 px-6 fade-up">
           <div className="text-center mb-8">
@@ -238,6 +323,76 @@ export default function Auth() {
               재전송
             </button>
           </div>
+        </div>
+      )}
+
+      {/* ── 본인인증 (이름 + 생년월일) ─────────────────────────── */}
+      {step === 'identity' && (
+        <div className="flex-1 px-6 fade-up">
+          <div className="text-center mb-6">
+            <div className="w-14 h-14 rounded-full bg-blue-50 flex items-center justify-center mx-auto mb-3">
+              <span className="text-2xl">🪪</span>
+            </div>
+            <h2 className="text-lg font-black">본인 확인</h2>
+            <p className="text-sm text-gray-400 mt-1 leading-relaxed">
+              대회 대리출전 방지를 위해<br/>실명 확인이 필요합니다.
+            </p>
+          </div>
+
+          <div className="space-y-4 mb-6">
+            <div>
+              <label className="block text-sm font-bold mb-1.5 text-gray-700">이름 (실명)</label>
+              <input
+                autoFocus
+                type="text"
+                value={idName}
+                onChange={e => { setIdName(e.target.value); setError('') }}
+                placeholder="홍길동"
+                className="w-full border-2 border-gray-200 rounded-2xl px-4 py-3.5 text-base
+                           font-medium outline-none focus:border-[#C60C30] transition-colors"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-bold mb-1.5 text-gray-700">생년월일</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={idBirth}
+                onChange={e => { setIdBirth(formatBirth(e.target.value)); setError('') }}
+                onKeyDown={e => e.key === 'Enter' && verifyIdentity()}
+                placeholder="1990-01-01"
+                maxLength={10}
+                className="w-full border-2 border-gray-200 rounded-2xl px-4 py-3.5 text-base
+                           font-medium outline-none focus:border-[#C60C30] transition-colors"
+              />
+            </div>
+          </div>
+
+          {error && <p className="text-sm text-red-500 font-medium mb-3">{error}</p>}
+
+          <div className="bg-blue-50 rounded-2xl p-3.5 mb-5">
+            <p className="text-xs text-blue-700 leading-relaxed">
+              🔒 입력한 정보는 대회 당일 신원 확인에만 사용되며,<br/>
+              다른 참가자에게는 공개되지 않습니다.
+            </p>
+          </div>
+
+          <button
+            onClick={verifyIdentity}
+            disabled={loading}
+            className="w-full py-4 rounded-2xl font-bold text-white text-base
+                       transition active:scale-[.97] disabled:opacity-50"
+            style={{ background: 'linear-gradient(135deg, #003478, #C60C30)' }}
+          >
+            {loading ? '확인 중...' : '본인 확인 완료'}
+          </button>
+
+          <button
+            onClick={skipIdentity}
+            className="w-full py-3 mt-3 text-sm text-gray-400 underline"
+          >
+            나중에 하기
+          </button>
         </div>
       )}
     </div>

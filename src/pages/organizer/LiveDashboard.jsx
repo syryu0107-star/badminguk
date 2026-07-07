@@ -4,12 +4,23 @@ import { supabase } from '../../lib/supabase'
 import { resolveMatchMMR, CERT_LEVELS } from '../../lib/mmr'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
-import { Clock, Shield } from 'lucide-react'
+import { Clock, Shield, UserCheck, Flag, CheckCircle } from 'lucide-react'
 
 function fmt(dt) {
   if (!dt) return '--:--'
   const d = new Date(dt)
   return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
+}
+
+function maskBirth(birth) {
+  if (!birth || birth.length < 6) return '미인증'
+  // 1990-01-01 → 1990-**-**
+  return birth.slice(0, 4) + '-**-**'
+}
+
+function maskName(name) {
+  if (!name || name.length < 2) return '미인증'
+  return name[0] + '*'.repeat(name.length - 1)
 }
 
 const CERT_COLOR = { none: 'bg-gray-100 text-gray-500', c: 'bg-blue-100 text-blue-700', b: 'bg-purple-100 text-purple-700', a: 'bg-red-100 text-red-700' }
@@ -22,6 +33,12 @@ export default function LiveDashboard() {
   const [activeCat, setActiveCat]   = useState(null)
   const [loading, setLoading]       = useState(true)
   const [scoring, setScoring]       = useState(null)
+  const [viewMode, setViewMode]     = useState('matches') // 'matches' | 'checkin'
+
+  // 체크인 상태
+  const [entries, setEntries]         = useState([])
+  const [checkins, setCheckins]       = useState([])
+  const [checkinLoading, setCheckinLoading] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -47,6 +64,10 @@ export default function LiveDashboard() {
     return () => supabase.removeChannel(sub)
   }, [activeCat])
 
+  useEffect(() => {
+    if (viewMode === 'checkin') loadCheckins()
+  }, [viewMode, activeCat])
+
   async function loadMatches() {
     const { data } = await supabase
       .from('tournament_matches')
@@ -67,6 +88,26 @@ export default function LiveDashboard() {
       .eq('category_id', activeCat)
       .order('scheduled_time', { ascending: true })
     setMatches(data ?? [])
+  }
+
+  async function loadCheckins() {
+    if (!activeCat) return
+    setCheckinLoading(true)
+    const [{ data: ents }, { data: chk }] = await Promise.all([
+      supabase.from('tournament_entries')
+        .select(`
+          id, player1_id, player2_id,
+          player1:profiles!player1_id(id, name, verified_name, verified_birth, identity_verified),
+          player2:profiles!player2_id(id, name, verified_name, verified_birth, identity_verified)
+        `)
+        .eq('category_id', activeCat),
+      supabase.from('tournament_checkins')
+        .select('*')
+        .eq('tournament_id', id),
+    ])
+    setEntries(ents ?? [])
+    setCheckins(chk ?? [])
+    setCheckinLoading(false)
   }
 
   async function startMatch(matchId) {
@@ -91,7 +132,6 @@ export default function LiveDashboard() {
       winner_entry_id: winnerEntryId,
     }).eq('id', matchId)
 
-    // MMR 반영 (이미 적용된 경기 제외)
     if (!match.mmr_applied) {
       const certLevel = tournament?.cert_level ?? 'none'
       const t1raw = [match.team1?.player1, match.team1?.player2].filter(Boolean)
@@ -100,7 +140,6 @@ export default function LiveDashboard() {
       if (t1raw.length === 2 && t2raw.length === 2) {
         const team1 = t1raw.map(p => ({ id: p.id, mmr: p.mmr, gamesPlayed: p.mmr_games_played }))
         const team2 = t2raw.map(p => ({ id: p.id, mmr: p.mmr, gamesPlayed: p.mmr_games_played }))
-
         const results = resolveMatchMMR({ team1, team2, winner: winningSide, certLevel })
 
         for (const r of results) {
@@ -137,6 +176,29 @@ export default function LiveDashboard() {
     loadMatches()
   }
 
+  async function checkinPlayer(playerId, method = 'verbal') {
+    const { error } = await supabase.from('tournament_checkins').upsert({
+      tournament_id: id,
+      player_id: playerId,
+      verified_method: method,
+      checked_in_at: new Date().toISOString(),
+      flagged: false,
+    }, { onConflict: 'tournament_id,player_id' })
+    if (!error) loadCheckins()
+  }
+
+  async function flagPlayer(playerId, reason) {
+    const { error } = await supabase.from('tournament_checkins').upsert({
+      tournament_id: id,
+      player_id: playerId,
+      verified_method: 'verbal',
+      checked_in_at: new Date().toISOString(),
+      flagged: true,
+      flag_reason: reason,
+    }, { onConflict: 'tournament_id,player_id' })
+    if (!error) loadCheckins()
+  }
+
   if (loading) return <div className="flex justify-center py-20"><Spinner /></div>
 
   const certLevel = tournament?.cert_level ?? 'none'
@@ -156,132 +218,272 @@ export default function LiveDashboard() {
         <span className="text-xs text-gray-400">{certInfo?.desc}</span>
       </div>
 
-      {/* 진행률 */}
-      <div className="px-4 py-3 bg-white border-b border-gray-100 mt-2">
-        <div className="flex items-center justify-between text-sm mb-1.5">
-          <span className="font-semibold">진행률</span>
-          <span className="text-[#C60C30] font-bold">{done}/{catMatches.length}</span>
-        </div>
-        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-          <div
-            className="h-full rounded-full transition-all"
-            style={{
-              width: catMatches.length ? `${(done/catMatches.length)*100}%` : '0%',
-              background: 'linear-gradient(90deg, #C60C30, #003478)',
-            }}
-          />
-        </div>
+      {/* 모드 전환 탭 */}
+      <div className="flex mx-4 mt-3 bg-gray-100 rounded-xl p-1 gap-1">
+        <button
+          onClick={() => setViewMode('matches')}
+          className={`flex-1 py-2 rounded-lg text-sm font-bold transition
+            ${viewMode === 'matches' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}
+        >
+          🏸 경기 진행
+        </button>
+        <button
+          onClick={() => setViewMode('checkin')}
+          className={`flex-1 py-2 rounded-lg text-sm font-bold transition flex items-center justify-center gap-1
+            ${viewMode === 'checkin' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}
+        >
+          <UserCheck size={14} /> 체크인
+        </button>
       </div>
 
-      {/* 종목 탭 */}
-      <div className="flex gap-2 px-4 py-2 bg-white border-b border-gray-100 overflow-x-auto">
-        {categories.map(cat => (
-          <button key={cat.id} onClick={() => setActiveCat(cat.id)}
-            className={`px-3 py-1.5 rounded-full text-sm font-semibold whitespace-nowrap transition
-                        ${activeCat === cat.id ? 'bg-[#C60C30] text-white' : 'bg-gray-100 text-gray-600'}`}
-          >{cat.sport_type}</button>
-        ))}
-      </div>
-
-      <div className="px-4 py-4 space-y-3">
-        {catMatches.map(m => {
-          const t1p = [m.team1?.player1, m.team1?.player2].filter(Boolean)
-          const t2p = [m.team2?.player1, m.team2?.player2].filter(Boolean)
-          const t1name = t1p.map(p => p.name).join(' / ')
-          const t2name = t2p.map(p => p.name).join(' / ')
-          const t1mmr  = t1p.length ? Math.round(t1p.reduce((a,p) => a+p.mmr, 0)/t1p.length) : 0
-          const t2mmr  = t2p.length ? Math.round(t2p.reduce((a,p) => a+p.mmr, 0)/t2p.length) : 0
-          const isScoring = scoring === m.id
-
-          return (
-            <div key={m.id} className={`bg-white rounded-2xl border p-4
-              ${m.status === 'in_progress' ? 'border-[#C60C30] shadow-md' : 'border-gray-100'}`}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-1.5 text-xs text-gray-400">
-                  <Clock size={11} /> {fmt(m.scheduled_time)}
-                  {m.court_number && <span>· 코트 {m.court_number}</span>}
-                </div>
-                <span className={`text-xs font-bold px-2 py-0.5 rounded-full
-                  ${m.status === 'completed'   ? 'bg-emerald-100 text-emerald-700'
-                  : m.status === 'in_progress' ? 'bg-red-100 text-red-600 animate-pulse'
-                  : m.status === 'forfeited'   ? 'bg-yellow-100 text-yellow-700'
-                  : 'bg-gray-100 text-gray-500'}`}
-                >
-                  {m.status === 'scheduled' ? '예정' : m.status === 'in_progress' ? '진행중'
-                  : m.status === 'completed' ? '완료' : '기권'}
-                </span>
-              </div>
-
-              {/* 팀 대결 */}
-              <div className="flex items-center gap-2 mb-1">
-                <div className="flex-1">
-                  <p className={`text-sm font-bold ${m.winner_entry_id === m.team1_entry_id ? 'text-emerald-600' : ''}`}>
-                    {t1name || '팀 A'}
-                  </p>
-                  <p className="text-xs text-gray-400">MMR {t1mmr}</p>
-                </div>
-                <span className="text-gray-300 text-xs font-bold">VS</span>
-                <div className="flex-1 text-right">
-                  <p className={`text-sm font-bold ${m.winner_entry_id === m.team2_entry_id ? 'text-emerald-600' : ''}`}>
-                    {t2name || '팀 B'}
-                  </p>
-                  <p className="text-xs text-gray-400">MMR {t2mmr}</p>
-                </div>
-              </div>
-
-              {m.status === 'scheduled' && (
-                <div className="flex gap-2 mt-3">
-                  <button onClick={() => startMatch(m.id)}
-                    className="flex-1 py-2 rounded-xl bg-[#003478] text-white text-xs font-bold active:opacity-80">
-                    경기 시작
-                  </button>
-                  <button onClick={() => forfeitMatch(m.id, 1)}
-                    className="py-2 px-3 rounded-xl bg-amber-100 text-amber-700 text-xs font-bold active:opacity-80">
-                    팀1 기권
-                  </button>
-                  <button onClick={() => forfeitMatch(m.id, 2)}
-                    className="py-2 px-3 rounded-xl bg-amber-100 text-amber-700 text-xs font-bold active:opacity-80">
-                    팀2 기권
-                  </button>
-                </div>
-              )}
-
-              {m.status === 'in_progress' && !isScoring && (
-                <button onClick={() => setScoring(m.id)}
-                  className="w-full py-2.5 rounded-xl bg-[#C60C30] text-white text-sm font-bold active:opacity-80 mt-3">
-                  스코어 입력
-                </button>
-              )}
-
-              {isScoring && (
-                <ScoreInput
-                  match={m}
-                  t1name={t1name} t2name={t2name}
-                  team1={t1p} team2={t2p}
-                  certLevel={certLevel}
-                  onSave={saveScore}
-                  onCancel={() => setScoring(null)}
-                />
-              )}
-
-              {m.status === 'completed' && m.scores?.length > 0 && (
-                <div className="flex justify-center gap-3 text-sm text-gray-400 mt-2">
-                  {m.scores.map((s,i) => (
-                    <span key={i} className="font-mono">{s.team1_score}:{s.team2_score}</span>
-                  ))}
-                </div>
-              )}
+      {viewMode === 'matches' && (
+        <>
+          {/* 진행률 */}
+          <div className="px-4 py-3 bg-white border-b border-gray-100 mt-2">
+            <div className="flex items-center justify-between text-sm mb-1.5">
+              <span className="font-semibold">진행률</span>
+              <span className="text-[#C60C30] font-bold">{done}/{catMatches.length}</span>
             </div>
-          )
-        })}
-
-        {catMatches.length === 0 && (
-          <div className="text-center py-12 text-gray-400 text-sm">
-            대진표를 먼저 생성해주세요.
+            <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all"
+                style={{
+                  width: catMatches.length ? `${(done/catMatches.length)*100}%` : '0%',
+                  background: 'linear-gradient(90deg, #C60C30, #003478)',
+                }}
+              />
+            </div>
           </div>
-        )}
-      </div>
+
+          {/* 종목 탭 */}
+          <div className="flex gap-2 px-4 py-2 bg-white border-b border-gray-100 overflow-x-auto">
+            {categories.map(cat => (
+              <button key={cat.id} onClick={() => setActiveCat(cat.id)}
+                className={`px-3 py-1.5 rounded-full text-sm font-semibold whitespace-nowrap transition
+                            ${activeCat === cat.id ? 'bg-[#C60C30] text-white' : 'bg-gray-100 text-gray-600'}`}
+              >{cat.sport_type}</button>
+            ))}
+          </div>
+
+          <div className="px-4 py-4 space-y-3">
+            {catMatches.map(m => {
+              const t1p = [m.team1?.player1, m.team1?.player2].filter(Boolean)
+              const t2p = [m.team2?.player1, m.team2?.player2].filter(Boolean)
+              const t1name = t1p.map(p => p.name).join(' / ')
+              const t2name = t2p.map(p => p.name).join(' / ')
+              const t1mmr  = t1p.length ? Math.round(t1p.reduce((a,p) => a+p.mmr, 0)/t1p.length) : 0
+              const t2mmr  = t2p.length ? Math.round(t2p.reduce((a,p) => a+p.mmr, 0)/t2p.length) : 0
+              const isScoring = scoring === m.id
+
+              return (
+                <div key={m.id} className={`bg-white rounded-2xl border p-4
+                  ${m.status === 'in_progress' ? 'border-[#C60C30] shadow-md' : 'border-gray-100'}`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-1.5 text-xs text-gray-400">
+                      <Clock size={11} /> {fmt(m.scheduled_time)}
+                      {m.court_number && <span>· 코트 {m.court_number}</span>}
+                    </div>
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full
+                      ${m.status === 'completed'   ? 'bg-emerald-100 text-emerald-700'
+                      : m.status === 'in_progress' ? 'bg-red-100 text-red-600 animate-pulse'
+                      : m.status === 'forfeited'   ? 'bg-yellow-100 text-yellow-700'
+                      : 'bg-gray-100 text-gray-500'}`}
+                    >
+                      {m.status === 'scheduled' ? '예정' : m.status === 'in_progress' ? '진행중'
+                      : m.status === 'completed' ? '완료' : '기권'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="flex-1">
+                      <p className={`text-sm font-bold ${m.winner_entry_id === m.team1_entry_id ? 'text-emerald-600' : ''}`}>
+                        {t1name || '팀 A'}
+                      </p>
+                      <p className="text-xs text-gray-400">MMR {t1mmr}</p>
+                    </div>
+                    <span className="text-gray-300 text-xs font-bold">VS</span>
+                    <div className="flex-1 text-right">
+                      <p className={`text-sm font-bold ${m.winner_entry_id === m.team2_entry_id ? 'text-emerald-600' : ''}`}>
+                        {t2name || '팀 B'}
+                      </p>
+                      <p className="text-xs text-gray-400">MMR {t2mmr}</p>
+                    </div>
+                  </div>
+
+                  {m.status === 'scheduled' && (
+                    <div className="flex gap-2 mt-3">
+                      <button onClick={() => startMatch(m.id)}
+                        className="flex-1 py-2 rounded-xl bg-[#003478] text-white text-xs font-bold active:opacity-80">
+                        경기 시작
+                      </button>
+                      <button onClick={() => forfeitMatch(m.id, 1)}
+                        className="py-2 px-3 rounded-xl bg-amber-100 text-amber-700 text-xs font-bold active:opacity-80">
+                        팀1 기권
+                      </button>
+                      <button onClick={() => forfeitMatch(m.id, 2)}
+                        className="py-2 px-3 rounded-xl bg-amber-100 text-amber-700 text-xs font-bold active:opacity-80">
+                        팀2 기권
+                      </button>
+                    </div>
+                  )}
+
+                  {m.status === 'in_progress' && !isScoring && (
+                    <button onClick={() => setScoring(m.id)}
+                      className="w-full py-2.5 rounded-xl bg-[#C60C30] text-white text-sm font-bold active:opacity-80 mt-3">
+                      스코어 입력
+                    </button>
+                  )}
+
+                  {isScoring && (
+                    <ScoreInput
+                      match={m}
+                      t1name={t1name} t2name={t2name}
+                      team1={t1p} team2={t2p}
+                      certLevel={certLevel}
+                      onSave={saveScore}
+                      onCancel={() => setScoring(null)}
+                    />
+                  )}
+
+                  {m.status === 'completed' && m.scores?.length > 0 && (
+                    <div className="flex justify-center gap-3 text-sm text-gray-400 mt-2">
+                      {m.scores.map((s,i) => (
+                        <span key={i} className="font-mono">{s.team1_score}:{s.team2_score}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+
+            {catMatches.length === 0 && (
+              <div className="text-center py-12 text-gray-400 text-sm">
+                대진표를 먼저 생성해주세요.
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ── 체크인 관리 패널 ─────────────────────────────────── */}
+      {viewMode === 'checkin' && (
+        <div className="px-4 py-4">
+          {/* 종목 탭 */}
+          <div className="flex gap-2 mb-4 overflow-x-auto">
+            {categories.map(cat => (
+              <button key={cat.id} onClick={() => setActiveCat(cat.id)}
+                className={`px-3 py-1.5 rounded-full text-sm font-semibold whitespace-nowrap transition
+                            ${activeCat === cat.id ? 'bg-[#003478] text-white' : 'bg-gray-100 text-gray-600'}`}
+              >{cat.sport_type}</button>
+            ))}
+          </div>
+
+          {/* 안내 */}
+          <div className="bg-blue-50 rounded-2xl p-3.5 mb-4 flex gap-2.5">
+            <span className="text-lg shrink-0">💬</span>
+            <p className="text-xs text-blue-700 leading-relaxed">
+              선수에게 <strong>"성함과 생년월일 말씀해주세요?"</strong> 라고 물어본 후<br/>
+              아래 표시된 실명·생년과 일치하면 체크인 완료를 누르세요.
+            </p>
+          </div>
+
+          {checkinLoading ? (
+            <div className="flex justify-center py-8"><Spinner /></div>
+          ) : (
+            <div className="space-y-2">
+              {entries.length === 0 && (
+                <div className="text-center py-8 text-gray-400 text-sm">참가 신청자가 없습니다.</div>
+              )}
+              {entries.map(entry => {
+                const players = [entry.player1, entry.player2].filter(Boolean)
+                return players.map(player => {
+                  const chk = checkins.find(c => c.player_id === player.id)
+                  const isCheckedIn = !!chk && !chk.flagged
+                  const isFlagged   = !!chk && chk.flagged
+
+                  return (
+                    <div key={player.id}
+                      className={`bg-white rounded-2xl border p-4 transition
+                        ${isFlagged ? 'border-red-300 bg-red-50'
+                        : isCheckedIn ? 'border-emerald-200 bg-emerald-50'
+                        : 'border-gray-100'}`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          {/* 닉네임 */}
+                          <p className="font-bold text-sm truncate">{player.name}</p>
+
+                          {/* 실명 정보 (심판용) */}
+                          <div className="mt-1.5 space-y-0.5">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-400 w-12 shrink-0">실명</span>
+                              {player.identity_verified ? (
+                                <span className="text-sm font-bold text-gray-800">
+                                  {maskName(player.verified_name)}
+                                  <span className="ml-1 text-xs text-gray-400 font-normal">
+                                    ({player.verified_name})
+                                  </span>
+                                </span>
+                              ) : (
+                                <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
+                                  미인증
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-400 w-12 shrink-0">생년</span>
+                              <span className="text-sm font-mono text-gray-700">
+                                {player.identity_verified
+                                  ? maskBirth(player.verified_birth)
+                                  : '—'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 상태 + 버튼 */}
+                        <div className="flex flex-col items-end gap-1.5 shrink-0">
+                          {isFlagged ? (
+                            <span className="text-xs font-bold text-red-600 bg-red-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                              <Flag size={10} /> 신고됨
+                            </span>
+                          ) : isCheckedIn ? (
+                            <span className="text-xs font-bold text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                              <CheckCircle size={10} /> 완료
+                            </span>
+                          ) : null}
+
+                          {!isCheckedIn && !isFlagged && (
+                            <button
+                              onClick={() => checkinPlayer(player.id)}
+                              className="text-xs font-bold text-white bg-[#003478] px-3 py-1.5 rounded-xl active:opacity-80"
+                            >
+                              체크인 완료
+                            </button>
+                          )}
+
+                          {!isFlagged && (
+                            <button
+                              onClick={() => {
+                                const reason = prompt('신고 사유를 입력해주세요:') ?? '대리출전 의심'
+                                flagPlayer(player.id, reason)
+                              }}
+                              className="text-xs font-bold text-red-500 bg-red-50 px-3 py-1.5 rounded-xl active:opacity-80 flex items-center gap-1"
+                            >
+                              <Flag size={11} /> 의심 신고
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -305,7 +507,6 @@ function ScoreInput({ match, t1name, t2name, team1, team2, certLevel, onSave, on
 
   const winner = determineWinner()
 
-  // 승패 미리보기: 현재 스코어 기준 예상 MMR 변화
   function previewMMR(winningSide) {
     if (!team1?.length || !team2?.length) return []
     const t1 = team1.map(p => ({ id: p.id, mmr: p.mmr, gamesPlayed: p.mmr_games_played }))
