@@ -66,13 +66,17 @@ export default function App() {
         <Route path="/organizer/:id/bracket" element={<Req s={session} p={profile}><BracketGenerator /></Req>} />
         <Route path="/organizer/:id/live"    element={<Req s={session} p={profile}><LiveDashboard /></Req>} />
 
-        <Route path="*" element={<Navigate to={session ? '/home' : '/auth'} replace />} />
+        <Route path="*" element={<Navigate to="/home" replace />} />
       </Routes>
     </BrowserRouter>
   )
 }
 
+// TEST_MODE=true 이면 로그인 없이 모든 페이지 접근 가능
+const TEST_MODE = true
+
 function Req({ s, p, children }) {
+  if (TEST_MODE) return children
   if (!s) return <Navigate to="/auth" replace />
   if (p !== null && !p?.name) return <Navigate to="/onboarding" replace />
   return children
