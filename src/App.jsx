@@ -50,8 +50,8 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/auth"       element={!session ? <Auth /> : <Navigate to="/home" replace />} />
-        <Route path="/onboarding" element={session ? <Onboarding /> : <Navigate to="/auth" replace />} />
+        <Route path="/auth"       element={TEST_MODE ? <Navigate to="/home" replace /> : (!session ? <Auth /> : <Navigate to="/home" replace />)} />
+        <Route path="/onboarding" element={TEST_MODE ? <Navigate to="/home" replace /> : (session ? <Onboarding /> : <Navigate to="/auth" replace />)} />
 
         <Route path="/home"            element={<Req s={session} p={profile}><PlayerHome /></Req>} />
         <Route path="/tournaments"     element={<Req s={session} p={profile}><Tournaments /></Req>} />
