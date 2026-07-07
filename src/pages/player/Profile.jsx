@@ -1,33 +1,82 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
-import { getMMRPercentile } from '../../lib/grades'
+import { getGradeInfo, getMMRPercentile, GRADES } from '../../lib/grades'
+import { CERT_LEVELS } from '../../lib/mmr'
 import BottomNav from '../../components/BottomNav'
 import GradeChip from '../../components/GradeChip'
 import Spinner from '../../components/Spinner'
-import { LogOut, Upload, ChevronRight, Award } from 'lucide-react'
+import { LogOut, Upload, Award, Shield, TrendingUp, TrendingDown } from 'lucide-react'
+
+// 미니 MMR 추이 차트 (SVG)
+function MiniChart({ history }) {
+  if (!history.length) return null
+  const vals = [...history].reverse().map(h => h.mmr_after)
+  const min  = Math.min(...vals)
+  const max  = Math.max(...vals)
+  const range = max - min || 1
+  const W = 280, H = 48, pad = 4
+
+  const pts = vals.map((v, i) => {
+    const x = pad + (i / Math.max(vals.length - 1, 1)) * (W - pad * 2)
+    const y = pad + (1 - (v - min) / range) * (H - pad * 2)
+    return `${x},${y}`
+  })
+
+  const isUp = vals[vals.length - 1] >= vals[0]
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" preserveAspectRatio="none">
+      <polyline
+        points={pts.join(' ')}
+        fill="none"
+        stroke={isUp ? '#10b981' : '#ef4444'}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
 
 export default function Profile() {
   const navigate = useNavigate()
-  const [profile, setProfile]   = useState(null)
-  const [history, setHistory]   = useState([])
-  const [loading, setLoading]   = useState(true)
+  const [profile, setProfile]     = useState(null)
+  const [history, setHistory]     = useState([])
+  const [tourneys, setTourneys]   = useState([])
+  const [loading, setLoading]     = useState(true)
   const [uploading, setUploading] = useState(false)
+  const [tab, setTab]             = useState('mmr')  // 'mmr' | 'career'
   const fileRef = useRef()
 
   useEffect(() => {
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
-      const [{ data: p }, { data: h }] = await Promise.all([
+      if (!user) { setLoading(false); return }
+
+      const [{ data: p }, { data: h }, { data: entries }] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', user.id).single(),
         supabase.from('mmr_history')
           .select('*')
           .eq('player_id', user.id)
           .order('created_at', { ascending: false })
+          .limit(30),
+        supabase.from('tournament_entries')
+          .select(`
+            *,
+            category:tournament_categories(
+              sport_type, grade_min, grade_max,
+              tournament:tournaments(id, title, date, cert_level, status)
+            )
+          `)
+          .or(`player1_id.eq.${user.id},player2_id.eq.${user.id}`)
+          .order('created_at', { ascending: false })
           .limit(20),
       ])
+
       setProfile(p)
       setHistory(h ?? [])
+      setTourneys(entries ?? [])
       setLoading(false)
     }
     load()
@@ -50,116 +99,268 @@ export default function Profile() {
 
   async function signOut() {
     await supabase.auth.signOut()
-    navigate('/auth', { replace: true })
+    navigate('/', { replace: true })
   }
 
   if (loading) return <div className="flex justify-center py-20"><Spinner size={36} /></div>
 
-  const pct = getMMRPercentile(profile?.mmr ?? 1000)
-  const wins  = history.filter(h => h.delta > 0).length
-  const losses = history.filter(h => h.delta < 0).length
+  const mmr         = profile?.mmr ?? 1000
+  const grade       = profile?.official_grade ?? '왕초심'
+  const gradeInfo   = getGradeInfo(grade)
+  const pct         = getMMRPercentile(mmr)
+  const gamesPlayed = profile?.mmr_games_played ?? 0
+  const wins        = history.filter(h => h.delta > 0).length
+  const losses      = history.filter(h => h.delta < 0).length
+  const winRate     = gamesPlayed > 0 ? Math.round((wins / gamesPlayed) * 100) : 0
 
   return (
     <div className="safe-bottom">
-      {/* 프로필 헤더 */}
+      {/* 헤더 */}
       <div
-        className="px-5 pt-14 pb-8 text-white"
+        className="px-5 pt-14 pb-6 text-white"
         style={{ background: 'linear-gradient(160deg, #003478, #C60C30)' }}
       >
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 mb-5">
           <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center text-3xl">
-            🏸
+            {gradeInfo?.flair ?? '🏸'}
           </div>
           <div>
-            <h1 className="text-xl font-black">{profile?.name}</h1>
+            <h1 className="text-xl font-black">{profile?.name ?? '게스트'}</h1>
             <div className="flex items-center gap-2 mt-1">
-              <GradeChip grade={profile?.official_grade} size="md" />
+              <GradeChip grade={grade} size="md" />
               {profile?.grade_verified && (
                 <span className="text-xs bg-emerald-400/30 text-emerald-200 px-2 py-0.5 rounded-full font-semibold">
-                  ✓ 인증
+                  ✓ 공인
                 </span>
               )}
             </div>
           </div>
         </div>
 
-        {/* 스탯 3종 */}
-        <div className="grid grid-cols-3 gap-3 mt-5">
+        {/* 급수 vs MMR 분리 스탯 */}
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          <div className="bg-white/10 rounded-2xl p-3">
+            <p className="text-white/60 text-xs flex items-center gap-1 mb-1">
+              <Award size={11}/> 공인 급수 <span className="text-white/40">(하락 없음)</span>
+            </p>
+            <p className="font-black text-xl">{grade}</p>
+            <p className="text-white/50 text-xs">스포넷 기준 인증</p>
+          </div>
+          <div className="bg-white/10 rounded-2xl p-3">
+            <p className="text-white/60 text-xs flex items-center gap-1 mb-1">
+              <TrendingUp size={11}/> 플랫폼 MMR <span className="text-white/40">(실시간)</span>
+            </p>
+            <p className="font-black text-xl tabular-nums">{mmr.toLocaleString()}</p>
+            <p className="text-white/50 text-xs">{pct}</p>
+          </div>
+        </div>
+
+        {/* 승/패/승률 */}
+        <div className="grid grid-cols-3 gap-2">
           {[
-            { label: 'MMR', value: (profile?.mmr ?? 1000).toLocaleString() },
-            { label: '전체 %', value: pct.replace('상위 ', '') },
-            { label: '총 경기', value: `${profile?.mmr_games_played ?? 0}경기` },
+            { label: '승', value: wins,     color: 'text-emerald-300' },
+            { label: '패', value: losses,   color: 'text-red-300' },
+            { label: '승률', value: `${winRate}%`, color: 'text-white' },
           ].map(s => (
-            <div key={s.label} className="bg-white/15 rounded-xl p-3 text-center">
-              <p className="text-white/70 text-xs">{s.label}</p>
-              <p className="font-black text-lg">{s.value}</p>
+            <div key={s.label} className="bg-white/10 rounded-xl p-2.5 text-center">
+              <p className="text-white/60 text-xs">{s.label}</p>
+              <p className={`font-black text-lg ${s.color}`}>{s.value}</p>
             </div>
           ))}
         </div>
+
+        {/* 미니 MMR 추이 그래프 */}
+        {history.length > 1 && (
+          <div className="mt-3 bg-white/10 rounded-xl p-2">
+            <p className="text-white/50 text-xs mb-1">최근 MMR 추이</p>
+            <MiniChart history={history.slice(0, 20)} />
+          </div>
+        )}
       </div>
 
-      {/* 급수 인증 */}
-      <section className="px-4 mt-5">
-        <div className="bg-white rounded-2xl p-4 border border-gray-100">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <Award size={18} className="text-amber-500" />
-              <h2 className="font-bold">급수 인증</h2>
-            </div>
-            {profile?.grade_verified && (
-              <span className="text-xs text-emerald-600 font-semibold">인증 완료 ✓</span>
-            )}
-          </div>
-          <p className="text-xs text-gray-500 mb-3">
-            스포넷 급수 확인 캡처를 업로드하면 <strong>공인 급수</strong> 인증 뱃지가 부여됩니다.
-          </p>
-          {profile?.grade_proof_url ? (
-            <img
-              src={profile.grade_proof_url}
-              className="w-full h-32 object-cover rounded-xl mb-2"
-              alt="급수 증빙"
-            />
-          ) : null}
-          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={uploadProof} />
+      {/* 탭 */}
+      <div className="flex border-b border-gray-100 bg-white sticky top-0 z-10">
+        {[
+          { key: 'mmr',    label: 'MMR 기록' },
+          { key: 'career', label: '대회 커리어' },
+          { key: 'cert',   label: '급수 인증' },
+        ].map(t => (
           <button
-            onClick={() => fileRef.current?.click()}
-            disabled={uploading}
-            className="w-full py-2.5 border-2 border-dashed border-gray-200 rounded-xl
-                       text-sm text-gray-500 font-semibold flex items-center justify-center gap-2
-                       active:bg-gray-50"
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`flex-1 py-3 text-sm font-semibold transition
+              ${tab === t.key ? 'text-[#C60C30] border-b-2 border-[#C60C30]' : 'text-gray-400'}`}
           >
-            <Upload size={15} />
-            {uploading ? '업로드 중...' : profile?.grade_proof_url ? '다시 업로드' : '스포넷 캡처 업로드'}
+            {t.label}
           </button>
-        </div>
-      </section>
+        ))}
+      </div>
 
-      {/* MMR 히스토리 */}
-      {history.length > 0 && (
-        <section className="px-4 mt-5">
-          <h2 className="font-bold mb-3">최근 MMR 변화</h2>
-          <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-            {history.slice(0, 10).map((h, i) => (
-              <div
-                key={h.id}
-                className={`flex items-center justify-between px-4 py-3
-                            ${i < history.length - 1 ? 'border-b border-gray-50' : ''}`}
-              >
-                <div>
-                  <p className="text-xs text-gray-400">{new Date(h.created_at).toLocaleDateString('ko-KR')}</p>
-                  <p className="text-sm font-semibold">{h.mmr_before} → {h.mmr_after}</p>
+      {/* MMR 기록 탭 */}
+      {tab === 'mmr' && (
+        <section className="px-4 py-4">
+          {history.length === 0 ? (
+            <div className="text-center py-12 text-gray-400 text-sm">
+              아직 공인 대회 기록이 없습니다.
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+              {history.slice(0, 20).map((h, i) => {
+                const certInfo = CERT_LEVELS[h.cert_level] ?? CERT_LEVELS.none
+                return (
+                  <div
+                    key={h.id}
+                    className={`flex items-center px-4 py-3 gap-3
+                                ${i < history.length - 1 ? 'border-b border-gray-50' : ''}`}
+                  >
+                    <div className="flex-1">
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <span className={`text-xs font-bold px-1.5 py-0.5 rounded-md
+                          ${h.cert_level === 'a' ? 'bg-red-100 text-red-700'
+                          : h.cert_level === 'b' ? 'bg-purple-100 text-purple-700'
+                          : h.cert_level === 'c' ? 'bg-blue-100 text-blue-700'
+                          : 'bg-gray-100 text-gray-500'}`}
+                        >
+                          {certInfo.label}
+                        </span>
+                        {h.partner_adj !== 0 && h.partner_adj != null && (
+                          <span className="text-xs text-gray-400">
+                            파트너보정 {h.partner_adj > 0 ? '+' : ''}{h.partner_adj}%
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-400">{new Date(h.created_at).toLocaleDateString('ko-KR')}</p>
+                      <p className="text-sm font-semibold tabular-nums">
+                        {h.mmr_before} → {h.mmr_after}
+                      </p>
+                    </div>
+                    <span className={`font-black text-xl tabular-nums ${h.delta >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                      {h.delta >= 0 ? '+' : ''}{h.delta}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* 대회 커리어 탭 */}
+      {tab === 'career' && (
+        <section className="px-4 py-4">
+          {tourneys.length === 0 ? (
+            <div className="text-center py-12 text-gray-400 text-sm">
+              참가한 대회가 없습니다.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {tourneys.map((entry, i) => {
+                const t = entry.category?.tournament
+                const certLevel = t?.cert_level ?? 'none'
+                const certInfo = CERT_LEVELS[certLevel]
+                return (
+                  <div key={i} className="bg-white rounded-2xl border border-gray-100 p-4">
+                    <div className="flex items-start justify-between mb-1">
+                      <p className="font-bold text-sm">{t?.title ?? '대회'}</p>
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full flex items-center gap-0.5
+                        ${certLevel === 'a' ? 'bg-red-100 text-red-700'
+                        : certLevel === 'b' ? 'bg-purple-100 text-purple-700'
+                        : certLevel === 'c' ? 'bg-blue-100 text-blue-700'
+                        : 'bg-gray-100 text-gray-500'}`}
+                      >
+                        <Shield size={9}/> {certInfo?.label}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-gray-400">
+                      <span>{t?.date}</span>
+                      <span>·</span>
+                      <span>{entry.category?.sport_type}</span>
+                      {entry.category?.grade_max && (
+                        <>
+                          <span>·</span>
+                          <GradeChip grade={entry.category.grade_max} size="xs" />
+                          <span>이하</span>
+                        </>
+                      )}
+                    </div>
+                    <div className="mt-2">
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full
+                        ${entry.entry_status === 'approved' ? 'bg-emerald-100 text-emerald-700'
+                        : entry.entry_status === 'rejected' ? 'bg-red-100 text-red-600'
+                        : 'bg-amber-100 text-amber-700'}`}
+                      >
+                        {entry.entry_status === 'approved' ? '✅ 승인'
+                        : entry.entry_status === 'rejected' ? '❌ 거절'
+                        : '⏳ 검토 중'}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* 급수 인증 탭 */}
+      {tab === 'cert' && (
+        <section className="px-4 py-4">
+          <div className="bg-white rounded-2xl p-4 border border-gray-100 mb-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Award size={18} className="text-amber-500" />
+              <h2 className="font-bold">스포넷 급수 인증</h2>
+            </div>
+            <p className="text-xs text-gray-500 mb-3 leading-relaxed">
+              스포넷 앱에서 내 급수 확인 화면을 캡처해 업로드하세요.<br/>
+              인증 완료 시 <strong>공인 급수 뱃지</strong>가 부여됩니다.<br/>
+              ※ 공인 급수는 절대 하락하지 않습니다.
+            </p>
+            {profile?.grade_proof_url && (
+              <img
+                src={profile.grade_proof_url}
+                className="w-full h-36 object-cover rounded-xl mb-3"
+                alt="급수 증빙"
+              />
+            )}
+            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={uploadProof} />
+            <button
+              onClick={() => fileRef.current?.click()}
+              disabled={uploading}
+              className="w-full py-2.5 border-2 border-dashed border-gray-200 rounded-xl
+                         text-sm text-gray-500 font-semibold flex items-center justify-center gap-2
+                         active:bg-gray-50 disabled:opacity-50"
+            >
+              <Upload size={15} />
+              {uploading ? '업로드 중...' : profile?.grade_proof_url ? '다시 업로드' : '캡처 이미지 업로드'}
+            </button>
+          </div>
+
+          {/* 급수 체계 안내 */}
+          <div className="bg-white rounded-2xl border border-gray-100 p-4">
+            <h3 className="font-bold text-sm mb-3">배드민국 급수 체계</h3>
+            <div className="space-y-1.5">
+              {GRADES.map((g, i) => (
+                <div key={g.key}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-xl
+                    ${g.key === grade ? 'bg-red-50 border border-[#C60C30]' : 'bg-gray-50'}`}
+                >
+                  <span className="text-lg">{g.flair}</span>
+                  <span className={`font-bold text-sm ${g.key === grade ? 'text-[#C60C30]' : 'text-gray-700'}`}>
+                    {g.label}
+                  </span>
+                  <span className="text-xs text-gray-400 ml-auto">기준 MMR {g.initialMMR}</span>
+                  {g.key === grade && (
+                    <span className="text-xs text-[#C60C30] font-bold">← 현재</span>
+                  )}
                 </div>
-                <span className={`font-black text-base ${h.delta >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                  {h.delta >= 0 ? '+' : ''}{h.delta}
-                </span>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </section>
       )}
 
       {/* 로그아웃 */}
-      <section className="px-4 mt-5 mb-8">
+      <section className="px-4 mt-4 mb-8">
         <button
           onClick={signOut}
           className="w-full py-3 rounded-xl border border-gray-200 text-gray-500
