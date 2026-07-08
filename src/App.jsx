@@ -12,6 +12,7 @@ import Tournaments from './pages/player/Tournaments'
 import TournamentDetail from './pages/player/TournamentDetail'
 import MyMatches from './pages/player/MyMatches'
 import Profile from './pages/player/Profile'
+import Ranking from './pages/player/Ranking'
 
 import OrganizerDashboard from './pages/organizer/Dashboard'
 import CreateTournament from './pages/organizer/CreateTournament'
@@ -63,6 +64,7 @@ export default function App() {
         <Route path="/tournaments"     element={<Req s={session} p={profile}><Tournaments /></Req>} />
         <Route path="/tournaments/:id" element={<Req s={session} p={profile}><TournamentDetail /></Req>} />
         <Route path="/my-matches"      element={<Req s={session} p={profile}><MyMatches /></Req>} />
+        <Route path="/ranking"         element={<Req s={session} p={profile}><Ranking /></Req>} />
         <Route path="/profile"         element={<Req s={session} p={profile}><Profile /></Req>} />
 
         <Route path="/organizer"             element={<Req s={session} p={profile}><OrganizerDashboard /></Req>} />

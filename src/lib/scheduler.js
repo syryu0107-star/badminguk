@@ -1,6 +1,29 @@
-// AI 대진/일정 생성 엔진
+// 대진/일정 생성 엔진
 
-// 리그 방식 (라운드 로빈)
+// ── 공개 씨드 기반 셔플 (투명한 추첨용) ─────────────────────────
+export function makeSeed() {
+  // 현재 시각 → 공개 코드. 누구나 같은 씨드+팀목록으로 결과 검증 가능
+  return new Date().toISOString().slice(0, 19).replace('T', ' ')
+}
+
+export function seededShuffle(arr, seed) {
+  const a = [...arr]
+  let h = 0
+  for (let i = 0; i < seed.length; i++) {
+    h = Math.imul(31, h) + seed.charCodeAt(i) | 0
+  }
+  const rand = () => {
+    h = Math.imul(1664525, h) + 1013904223 | 0
+    return (h >>> 0) / 4294967296
+  }
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
+// ── 리그 방식 (라운드 로빈) ──────────────────────────────────────
 export function buildRoundRobin(entries) {
   const list = [...entries]
   if (list.length % 2 !== 0) list.push(null) // 부전승

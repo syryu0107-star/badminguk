@@ -1,18 +1,17 @@
-import { NavLink, useLocation } from 'react-router-dom'
-import { Home, Trophy, CalendarDays, User, LayoutDashboard, PlusCircle, GitBranch, Zap } from 'lucide-react'
+import { NavLink } from 'react-router-dom'
+import { Home, Trophy, Medal, CalendarDays, User, LayoutDashboard, PlusCircle, GitBranch, Zap } from 'lucide-react'
 
 const playerNav = [
-  { to: '/home',        icon: Home,          label: '홈' },
-  { to: '/tournaments', icon: Trophy,         label: '대회' },
-  { to: '/my-matches',  icon: CalendarDays,   label: '내 경기' },
-  { to: '/profile',     icon: User,           label: '프로필' },
+  { to: '/home',        icon: Home,        label: '홈' },
+  { to: '/tournaments', icon: Trophy,       label: '대회' },
+  { to: '/ranking',     icon: Medal,        label: '랭킹' },
+  { to: '/my-matches',  icon: CalendarDays, label: '내 경기' },
+  { to: '/profile',     icon: User,         label: '프로필' },
 ]
 
 const organizerNav = [
-  { to: '/organizer',           icon: LayoutDashboard, label: '대시보드' },
-  { to: '/organizer/create',    icon: PlusCircle,      label: '대회 만들기' },
-  { to: '/organizer/bracket',   icon: GitBranch,       label: '대진표' },
-  { to: '/organizer/live',      icon: Zap,             label: '실시간' },
+  { to: '/organizer',        icon: LayoutDashboard, label: '대시보드' },
+  { to: '/organizer/create', icon: PlusCircle,      label: '대회 만들기' },
 ]
 
 export default function BottomNav({ mode = 'player' }) {
@@ -36,7 +35,7 @@ export default function BottomNav({ mode = 'player' }) {
           >
             {({ isActive }) => (
               <>
-                <Icon size={22} strokeWidth={isActive ? 2.2 : 1.8} />
+                <Icon size={20} strokeWidth={isActive ? 2.2 : 1.8} />
                 {label}
               </>
             )}
