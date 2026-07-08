@@ -1,0 +1,94 @@
+name: 배드민국 AI 자율 개선
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # 매 정시 UTC
+  workflow_dispatch:
+
+jobs:
+  improve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Git config
+        run: |
+          git config user.name  "배드민국 AI"
+          git config user.email "bot@badminguk.app"
+
+      - name: Pick angle
+        id: angle
+        run: |
+          HOUR=$(date -u +%-H)
+          MOD=$((HOUR % 6))
+          case $MOD in
+            0) A="UX/UI"       T="Korean sports app mobile UX, onboarding, skeleton loading, accessibility";;
+            1) A="MMR"         T="Elo Glicko-2 TrueSkill badminton rating decay provisional K-factor";;
+            2) A="대회운영"    T="Korean badminton tournament 조편성 와일드카드 기권처리 시드배정";;
+            3) A="성능/PWA"    T="React 19 performance Supabase realtime PWA offline web vitals";;
+            4) A="부정방지"    T="sandbagging prevention proxy attendance anomaly detection sports rating";;
+            5) A="AI기능"      T="match prediction player growth smart scheduling coach insights sports AI";;
+          esac
+          echo "ANGLE=$A" >> $GITHUB_OUTPUT
+          echo "TOPIC=$T"  >> $GITHUB_OUTPUT
+          echo "Angle: $A | Topic: $T"
+
+      - name: Run AI agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          claude -p \
+            --allowedTools "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch" \
+            "You are an autonomous improvement agent for 배드민국 (Korean badminton MMR platform).
+            Repo is already checked out in the current directory.
+
+            THIS RUN ANGLE: ${{ steps.angle.outputs.ANGLE }}
+            RESEARCH TOPIC: ${{ steps.angle.outputs.TOPIC }}
+
+            STACK: React 19 + Vite + Tailwind 4 (CSS-first) + Supabase + Korean UI (#C60C30 red, #003478 blue)
+
+            ALREADY EXISTS (do not duplicate):
+            - Elo MMR with partner adjustment, cert levels
+            - Pool+knockout tournament with seeded public draw
+            - National ranking page, public scoreboard /live/:id
+            - Court dashboard, check-in panel, real-name verification
+
+            YOUR TASK:
+            1. WebSearch the RESEARCH TOPIC to find 10 implementable improvements
+            2. Pick the best 3 (each <40 lines, no new DB tables, won't break existing features)
+            3. Read relevant files, implement all 3 changes
+            4. Run: git add -A && git diff --cached --stat
+            5. Run: git commit -m '[AI ${{ steps.angle.outputs.ANGLE }}] <summary>'
+
+            RULES:
+            - Korean UI text only
+            - Pure JSX/JS (no TypeScript)
+            - Tailwind only
+            - Never touch: send-otp/, verify-otp/, .github/, TEST_MODE in App.jsx
+            - Never delete existing migration files
+            - If nothing implementable found, write a brief RESEARCH_LOG.md summary and commit that
+
+            Start with WebSearch now." 2>&1
+
+      - name: Push changes
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git push origin master
+            echo "Pushed."
+          else
+            echo "No changes."
+          fi

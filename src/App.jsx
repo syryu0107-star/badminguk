@@ -20,6 +20,9 @@ import TournamentManage from './pages/organizer/TournamentManage'
 import EntryManagement from './pages/organizer/EntryManagement'
 import BracketGenerator from './pages/organizer/BracketGenerator'
 import LiveDashboard from './pages/organizer/LiveDashboard'
+import CourtView from './pages/organizer/CourtView'
+
+import LiveScore from './pages/public/LiveScore'
 
 // TEST_MODE=true 이면 로그인 없이 모든 페이지 접근 가능
 const TEST_MODE = true
@@ -73,6 +76,9 @@ export default function App() {
         <Route path="/organizer/:id/entries" element={<Req s={session} p={profile}><EntryManagement /></Req>} />
         <Route path="/organizer/:id/bracket" element={<Req s={session} p={profile}><BracketGenerator /></Req>} />
         <Route path="/organizer/:id/live"    element={<Req s={session} p={profile}><LiveDashboard /></Req>} />
+        <Route path="/organizer/:id/courts" element={<Req s={session} p={profile}><CourtView /></Req>} />
+
+        <Route path="/live/:id" element={<LiveScore />} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

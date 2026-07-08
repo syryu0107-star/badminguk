@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
-import { Users, GitBranch, Zap, ChevronRight, Send } from 'lucide-react'
+import { Users, GitBranch, Zap, Monitor, ChevronRight, Send } from 'lucide-react'
 
 export default function TournamentManage() {
   const { id } = useParams()
@@ -100,6 +100,7 @@ export default function TournamentManage() {
         {[
           { label: '참가 신청 관리', icon: Users,      path: `/organizer/${id}/entries`, desc: `신청자 관리 및 승인` },
           { label: 'AI 대진표 생성', icon: GitBranch,  path: `/organizer/${id}/bracket`, desc: '자동 일정 및 대진 생성' },
+          { label: '코트 현황판',    icon: Monitor,     path: `/organizer/${id}/courts`,  desc: '실시간 코트별 경기 현황 (프로젝션용)' },
           { label: '실시간 진행',    icon: Zap,         path: `/organizer/${id}/live`,    desc: '경기 스코어 입력 · MMR 반영' },
         ].map(({ label, icon: Icon, path, desc }) => (
           <button

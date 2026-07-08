@@ -4,7 +4,7 @@ import { supabase } from '../../lib/supabase'
 import { GRADES, SPORT_TYPES } from '../../lib/grades'
 import { CERT_LEVELS } from '../../lib/mmr'
 import TopBar from '../../components/TopBar'
-import { Plus, Trash2, Info } from 'lucide-react'
+import { Plus, Trash2, Info, ChevronDown, ChevronUp, Settings } from 'lucide-react'
 
 const DEFAULT_CAT = {
   sport_type: '남복',
@@ -14,6 +14,17 @@ const DEFAULT_CAT = {
   max_mmr: '',
   max_teams: 16,
   entry_fee: 0,
+  // 대진 방식
+  tournament_format: 'pool_knockout',
+  pool_size: 4,
+  advancement_per_pool: 2,
+  wildcard_count: 0,
+  wildcard_criteria: 'score_diff',
+  games_per_match: 3,
+  points_per_game: 21,
+  prize_spots: 3,
+  min_teams: 4,
+  seeding_enabled: false,
 }
 
 const CERT_OPTIONS = [
@@ -22,6 +33,218 @@ const CERT_OPTIONS = [
   { key: 'b',    label: '공인 B', icon: '⭐⭐', desc: 'K=48 · 인증 주최자' },
   { key: 'a',    label: '공인 A', icon: '⭐⭐⭐', desc: 'K=64 · 협회 연계' },
 ]
+
+const FORMAT_OPTIONS = [
+  { key: 'pool_knockout', label: '조별+토너먼트', sub: '풀리그 후 토너먼트' },
+  { key: 'round_robin',   label: '리그전',        sub: '모두와 한 번씩' },
+  { key: 'single_elim',  label: '토너먼트',       sub: '단판 제거전' },
+  { key: 'pool_only',    label: '조별리그만',     sub: '조 1위팀 우승' },
+]
+
+const GAMES_OPTIONS = [
+  { value: 1, label: '단판', sub: '빠른 진행' },
+  { value: 3, label: '3판2선승', sub: '공정한 결과' },
+]
+
+const POINTS_OPTIONS = [
+  { value: 21, label: '21점제', sub: '표준' },
+  { value: 15, label: '15점제', sub: '빠른' },
+  { value: 11, label: '11점제', sub: '초빠른' },
+]
+
+const PRIZE_OPTIONS = [
+  { value: 1, label: '우승만', sub: '1팀' },
+  { value: 3, label: '3위까지', sub: '3팀' },
+  { value: 4, label: '4강', sub: '4팀' },
+]
+
+function formatSummary(cat) {
+  const fmt = FORMAT_OPTIONS.find(f => f.key === cat.tournament_format)?.label ?? '조별+토너먼트'
+  const pool = (cat.tournament_format === 'pool_knockout' || cat.tournament_format === 'pool_only')
+    ? ` · ${cat.pool_size}팀조` : ''
+  const games = cat.games_per_match === 1 ? ' · 단판' : ' · 3판2선승'
+  return `${fmt}${pool}${games}`
+}
+
+function Stepper({ value, min, max, step = 1, onChange, format }) {
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        onClick={() => onChange(Math.max(min, value - step))}
+        className="w-7 h-7 rounded-full bg-gray-100 font-bold flex items-center justify-center text-base leading-none select-none"
+      >−</button>
+      <span className="text-sm font-bold min-w-[64px] text-center">{format ? format(value) : value}</span>
+      <button
+        onClick={() => onChange(Math.min(max, value + step))}
+        className="w-7 h-7 rounded-full bg-gray-100 font-bold flex items-center justify-center text-base leading-none select-none"
+      >+</button>
+    </div>
+  )
+}
+
+function FormatSection({ cat, idx, updateCat }) {
+  const showPool = cat.tournament_format === 'pool_knockout' || cat.tournament_format === 'pool_only'
+
+  return (
+    <div className="space-y-4 pt-1">
+      {/* A: 대진 방식 */}
+      <div>
+        <p className="text-xs font-semibold text-gray-500 mb-2">대진 방식</p>
+        <div className="grid grid-cols-2 gap-2">
+          {FORMAT_OPTIONS.map(opt => (
+            <button
+              key={opt.key}
+              onClick={() => updateCat(idx, 'tournament_format', opt.key)}
+              className={`py-2.5 px-3 rounded-xl border-2 text-left transition
+                ${cat.tournament_format === opt.key
+                  ? 'border-[#C60C30] bg-red-50'
+                  : 'border-gray-100 bg-gray-50'}`}
+            >
+              <p className={`text-sm font-bold ${cat.tournament_format === opt.key ? 'text-[#C60C30]' : 'text-gray-700'}`}>
+                {opt.label}
+              </p>
+              <p className="text-xs text-gray-400 mt-0.5">{opt.sub}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* B: 조 설정 (pool_knockout / pool_only만) */}
+      {showPool && (
+        <div>
+          <p className="text-xs font-semibold text-gray-500 mb-2">조 설정</p>
+          <div className="bg-gray-50 rounded-xl divide-y divide-gray-100">
+            <div className="flex items-center justify-between px-3 py-2.5">
+              <span className="text-sm text-gray-600">조 크기</span>
+              <Stepper
+                value={cat.pool_size}
+                min={4} max={8}
+                onChange={v => updateCat(idx, 'pool_size', v)}
+                format={v => `${v}팀/조`}
+              />
+            </div>
+            <div className="flex items-center justify-between px-3 py-2.5">
+              <span className="text-sm text-gray-600">조별 진출</span>
+              <Stepper
+                value={cat.advancement_per_pool}
+                min={1} max={3}
+                onChange={v => updateCat(idx, 'advancement_per_pool', v)}
+                format={v => `${v}팀/조 진출`}
+              />
+            </div>
+            {cat.tournament_format === 'pool_knockout' && (
+              <div className="flex items-center justify-between px-3 py-2.5">
+                <span className="text-sm text-gray-600">와일드카드</span>
+                <Stepper
+                  value={cat.wildcard_count}
+                  min={0} max={4}
+                  onChange={v => updateCat(idx, 'wildcard_count', v)}
+                  format={v => v === 0 ? '없음' : `와일드카드 ${v}장`}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* C: 경기 방식 */}
+      <div>
+        <p className="text-xs font-semibold text-gray-500 mb-2">경기 방식</p>
+        <div className="grid grid-cols-2 gap-2">
+          {GAMES_OPTIONS.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => updateCat(idx, 'games_per_match', opt.value)}
+              className={`py-2.5 px-3 rounded-xl border-2 text-left transition
+                ${cat.games_per_match === opt.value
+                  ? 'border-[#C60C30] bg-red-50'
+                  : 'border-gray-100 bg-gray-50'}`}
+            >
+              <p className={`text-sm font-bold ${cat.games_per_match === opt.value ? 'text-[#C60C30]' : 'text-gray-700'}`}>
+                {opt.label}
+              </p>
+              <p className="text-xs text-gray-400 mt-0.5">{opt.sub}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* D: 점수 방식 */}
+      <div>
+        <p className="text-xs font-semibold text-gray-500 mb-2">점수 방식</p>
+        <div className="grid grid-cols-3 gap-2">
+          {POINTS_OPTIONS.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => updateCat(idx, 'points_per_game', opt.value)}
+              className={`py-2.5 px-2 rounded-xl border-2 text-center transition
+                ${cat.points_per_game === opt.value
+                  ? 'border-[#C60C30] bg-red-50'
+                  : 'border-gray-100 bg-gray-50'}`}
+            >
+              <p className={`text-sm font-bold ${cat.points_per_game === opt.value ? 'text-[#C60C30]' : 'text-gray-700'}`}>
+                {opt.label}
+              </p>
+              <p className="text-xs text-gray-400 mt-0.5">{opt.sub}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* E: 입상 */}
+      <div>
+        <p className="text-xs font-semibold text-gray-500 mb-2">입상</p>
+        <div className="grid grid-cols-3 gap-2">
+          {PRIZE_OPTIONS.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => updateCat(idx, 'prize_spots', opt.value)}
+              className={`py-2.5 px-2 rounded-xl border-2 text-center transition
+                ${cat.prize_spots === opt.value
+                  ? 'border-[#C60C30] bg-red-50'
+                  : 'border-gray-100 bg-gray-50'}`}
+            >
+              <p className={`text-sm font-bold ${cat.prize_spots === opt.value ? 'text-[#C60C30]' : 'text-gray-700'}`}>
+                {opt.label}
+              </p>
+              <p className="text-xs text-gray-400 mt-0.5">{opt.sub}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* F: 최소 팀 수 + G: 시드 배정 */}
+      <div className="bg-gray-50 rounded-xl divide-y divide-gray-100">
+        <div className="flex items-center justify-between px-3 py-2.5">
+          <span className="text-sm text-gray-600">최소 팀 수</span>
+          <Stepper
+            value={cat.min_teams}
+            min={4} max={32} step={2}
+            onChange={v => updateCat(idx, 'min_teams', v)}
+            format={v => `${v}팀 이상`}
+          />
+        </div>
+
+        <div className="flex items-center justify-between px-3 py-2.5">
+          <div>
+            <span className="text-sm text-gray-600">시드 배정</span>
+            <p className="text-xs text-gray-400 mt-0.5">상위 MMR 선수를 다른 조에 배치</p>
+          </div>
+          <button
+            onClick={() => updateCat(idx, 'seeding_enabled', !cat.seeding_enabled)}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors
+              ${cat.seeding_enabled ? 'bg-[#C60C30]' : 'bg-gray-200'}`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform
+                ${cat.seeding_enabled ? 'translate-x-6' : 'translate-x-1'}`}
+            />
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export default function CreateTournament() {
   const navigate = useNavigate()
@@ -37,6 +260,7 @@ export default function CreateTournament() {
     cert_level: 'none',
   })
   const [categories, setCategories] = useState([{ ...DEFAULT_CAT }])
+  const [expandedCats, setExpandedCats] = useState({})
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState('')
 
@@ -46,6 +270,9 @@ export default function CreateTournament() {
   }
   function addCat()      { setCategories(prev => [...prev, { ...DEFAULT_CAT }]) }
   function removeCat(i)  { setCategories(prev => prev.filter((_, idx) => idx !== i)) }
+  function toggleExpand(i) {
+    setExpandedCats(prev => ({ ...prev, [i]: !prev[i] }))
+  }
 
   async function submit() {
     if (!form.title || !form.venue || !form.date) {
@@ -72,8 +299,6 @@ export default function CreateTournament() {
 
     navigate(`/organizer/${t.id}`, { replace: true })
   }
-
-  const certInfo = CERT_LEVELS[form.cert_level]
 
   return (
     <div className="safe-bottom">
@@ -291,6 +516,34 @@ export default function CreateTournament() {
                     />
                     <span className="text-xs text-gray-400">원</span>
                   </div>
+                </div>
+
+                {/* 대진 방식 설정 (expandable) */}
+                <div className="mt-4 border-t border-gray-100 pt-3">
+                  <button
+                    onClick={() => toggleExpand(i)}
+                    className="w-full flex items-center justify-between group"
+                  >
+                    <div className="flex items-center gap-1.5 text-gray-500">
+                      <Settings size={13} />
+                      <span className="text-xs font-semibold">대진 방식 설정</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {!expandedCats[i] && (
+                        <span className="text-xs text-gray-400">{formatSummary(cat)}</span>
+                      )}
+                      {expandedCats[i]
+                        ? <ChevronUp size={15} className="text-gray-400" />
+                        : <ChevronDown size={15} className="text-gray-400" />
+                      }
+                    </div>
+                  </button>
+
+                  {expandedCats[i] && (
+                    <div className="mt-3">
+                      <FormatSection cat={cat} idx={i} updateCat={updateCat} />
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
