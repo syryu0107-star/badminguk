@@ -4,11 +4,17 @@ import { supabase } from '../../lib/supabase'
 import { resolveMatchMMR, CERT_LEVELS } from '../../lib/mmr'
 import { calculatePoolStandings, prizeLabel } from '../../lib/tournament'
 import { completeMatch, finalizeTournament, scoresToPairs } from '../../lib/advance'
-import { callMatch, callMatchSoon } from '../../lib/notify'
-import { planAutoAdvance } from '../../lib/orchestrator'
+import { callMatch, callMatchSoon, callWalkoverWarn } from '../../lib/notify'
+import { planAutoAdvance, planNoShow } from '../../lib/orchestrator'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
-import { Clock, Shield, UserCheck, Flag, CheckCircle, Gavel, Trophy, ListOrdered, Megaphone, Zap, Timer } from 'lucide-react'
+import { Clock, Shield, UserCheck, Flag, CheckCircle, Gavel, Trophy, ListOrdered, Megaphone, Zap, Timer, AlertTriangle } from 'lucide-react'
+
+// 초 → "m:ss" 카운트다운 표기
+function fmtCountdown(sec) {
+  const s = Math.max(0, Math.round(sec ?? 0))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
 
 function fmt(dt) {
   if (!dt) return '--:--'
@@ -65,6 +71,12 @@ export default function LiveDashboard() {
   const soonSentRef   = useRef({})   // { [matchId]: ts } 사전알림 중복 방지
   const orchestrating = useRef(false)
 
+  // ── 노쇼(호출 미응답) 타이머 상태 (C7) ─────────────────────────────
+  const [noShow, setNoShow]   = useState({})   // { [matchId]: { phase, secondsLeft, elapsedSec, ... } }
+  const [resolving, setResolving] = useState(null) // 부전승 처리 중인 match id
+  const warnedRef = useRef({})   // { [matchId]: ts } 미입장 경고 중복 방지
+  const [nowTick, setNowTick] = useState(Date.now()) // 카운트다운 갱신용 틱
+
   // 체크인 상태
   const [entries, setEntries]         = useState([])
   const [checkins, setCheckins]       = useState([])
@@ -117,6 +129,37 @@ export default function LiveDashboard() {
     // calledIds 변경만으로는 재실행 안 함(무한 루프 방지) — 실시간 matches 갱신이 트리거.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matches, autoRun, activeCat])
+
+  // ── 노쇼 타이머 틱: 호출됐지만 시작 안 된 경기의 카운트다운을 10초마다 갱신 ──
+  //   호출 이력(calledIds)이 있는 동안만 돈다(불필요한 리렌더 방지).
+  useEffect(() => {
+    if (!Object.keys(calledIds).length) return
+    const iv = setInterval(() => setNowTick(Date.now()), 10000)
+    return () => clearInterval(iv)
+  }, [calledIds])
+
+  // ── 노쇼 판정: 호출 후 미응답 경기를 단계별로 분류하고, 자동 진행 시 경고 발송 ──
+  //   waiting/warned/overdue 3단계. 경고(WALKOVER_WARN)는 무인 진행이 켜졌을 때만
+  //   1회 자동 발송(warnedRef 중복 차단). 부전승 최종 처리는 사람이 확인(overdue 패널).
+  useEffect(() => {
+    const plan = planNoShow(matches, {
+      calledAt: calledIds, warnedAt: warnedRef.current, now: nowTick,
+    })
+    setNoShow(plan.status)
+    if (autoRun && plan.toWarn.length) {
+      plan.toWarn.forEach(m => {
+        warnedRef.current[m.id] = Date.now() // 먼저 표시해 중복 발송 차단
+        const st = plan.status[m.id]
+        callWalkoverWarn({
+          match: m, tournamentId: id, court: m.court_number, sport: sportOf(m),
+          secondsLeft: st?.secondsLeft ?? null, recipients: recipientsOf(m),
+        })
+          .then(() => pushAutoLog(`${m.court_number}번 코트 미입장 경고 — ${teamNamesOf(m)}`))
+          .catch(() => {})
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matches, calledIds, autoRun, nowTick])
 
   async function loadMatches() {
     const { data } = await supabase
@@ -283,6 +326,7 @@ export default function LiveDashboard() {
         recipients: recipientsOf(m),
       })
       setCalledIds(prev => ({ ...prev, [m.id]: Date.now() }))
+      delete warnedRef.current[m.id] // 재호출 시 노쇼 경고 다시 보낼 수 있게 초기화
       if (!res.persist.persisted && res.persist.reason === 'table_missing') {
         // 인앱 호출은 나갔지만 이력 저장은 아직(013 미적용). 진행은 막지 않음.
         console.info('[호출] 실시간 방송 완료 — 이력 저장은 013 마이그레이션 적용 후 활성화')
@@ -328,6 +372,7 @@ export default function LiveDashboard() {
         try {
           await callMatch({ match: m, tournamentId: id, court: m.court_number, sport: sportOf(m), recipients: recipientsOf(m) })
           setCalledIds(prev => ({ ...prev, [m.id]: Date.now() }))
+          delete warnedRef.current[m.id]
           pushAutoLog(`${m.court_number}번 코트 자동 호출 — ${teamNamesOf(m)}`)
         } catch { /* 다음 틱에 재시도 */ }
       }
@@ -410,6 +455,36 @@ export default function LiveDashboard() {
     loadMatches()
   }
 
+  // ── 노쇼(호출 미응답) 부전승 처리 (C7) ────────────────────────────
+  //   호출 후 유예 시간이 지나도 안 온 팀을 부전승 처리. "누가 안 왔는지" 는
+  //   현장 판단이 필요한 예외라 사람이 한 번 확인한다(원터치). 나머지(감지·경고·
+  //   카운트다운)는 전부 자동. resultType='walkover' → MMR 미반영(계약: RPC 내부 판정).
+  async function resolveNoShow(match, absentTeam) {
+    if (resolving) return
+    const label = absentTeam === 1 ? '팀1' : '팀2'
+    if (!confirm(`${label}이 호출에 응답하지 않았어요.\n미입장(노쇼) 부전승으로 처리할까요? (되돌릴 수 없어요)`)) return
+    setResolving(match.id)
+    const winningSide = absentTeam === 1 ? 2 : 1
+    const winnerEntryId = winningSide === 1 ? match.team1_entry_id : match.team2_entry_id
+    try {
+      const res = await completeMatch(supabase, match.id, {
+        winnerEntryId,
+        resultType: 'walkover',
+        forfeitTeam: absentTeam,
+        forfeitReason: '호출 미응답(노쇼)',
+      })
+      delete warnedRef.current[match.id]
+      if (res?.mmrError) {
+        alert('처리는 됐지만 MMR 반영에 실패했어요.\n주최자 계정으로 로그인돼 있는지 확인한 뒤 다시 시도해주세요.')
+      }
+      pushAutoLog(`${match.court_number ?? '-'}번 코트 노쇼 부전승 — ${teamNamesOf(match)}`)
+    } catch (e) {
+      alert('부전승 처리 중 문제가 생겼어요: ' + e.message)
+    }
+    setResolving(null)
+    loadMatches()
+  }
+
   // ── 대회 종료 · 시상 확정 ─────────────────────────────────────
   async function finishTournament() {
     if (finishing) return
@@ -472,6 +547,7 @@ export default function LiveDashboard() {
   const certInfo  = CERT_LEVELS[certLevel]
   const activeCatObj = categories.find(c => c.id === activeCat)
   const catMatches = matches.filter(m => m.category_id === activeCat)
+  const overdueMatches = catMatches.filter(m => noShow[m.id]?.phase === 'overdue')
   const done = catMatches.filter(m => DONE_STATUSES.includes(m.status)).length
   const isCompleted = tournament?.status === 'completed'
 
@@ -592,6 +668,51 @@ export default function LiveDashboard() {
             </div>
           </div>
 
+          {/* ── 노쇼 확인 대기 (호출 후 미응답 → 부전승 처리 필요) ─────────── */}
+          {overdueMatches.length > 0 && (
+            <div className="px-4 pt-4">
+              <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4">
+                <p className="font-bold text-sm text-amber-800 flex items-center gap-1.5">
+                  <AlertTriangle size={16} /> 노쇼 확인 대기 {overdueMatches.length}건
+                </p>
+                <p className="text-[11px] text-amber-700/80 mt-0.5 leading-tight">
+                  호출 후 응답이 없는 경기예요. 안 온 팀을 눌러 부전승 처리하면 대진이 자동으로 이어져요.
+                </p>
+                <div className="mt-3 space-y-2.5">
+                  {overdueMatches.map(m => {
+                    const ns = noShow[m.id]
+                    const elapsedMin = ns ? Math.max(1, Math.round(ns.elapsedSec / 60)) : null
+                    const t1name = [m.team1?.player1?.name, m.team1?.player2?.name].filter(Boolean).join(' / ') || '팀 A'
+                    const t2name = [m.team2?.player1?.name, m.team2?.player2?.name].filter(Boolean).join(' / ') || '팀 B'
+                    return (
+                      <div key={m.id} className="bg-white rounded-xl border border-amber-200 p-3">
+                        <p className="text-xs text-gray-500 flex items-center gap-1 flex-wrap">
+                          {m.court_number != null && <span className="font-bold text-gray-700">{m.court_number}번 코트</span>}
+                          <span className="text-amber-700 font-semibold">· 호출 {elapsedMin}분 경과 · 미응답</span>
+                        </p>
+                        <p className="text-sm font-bold mt-0.5">{t1name} <span className="text-gray-300">vs</span> {t2name}</p>
+                        <div className="flex gap-2 mt-2">
+                          <button onClick={() => resolveNoShow(m, 1)} disabled={resolving === m.id}
+                            className="flex-1 py-2 rounded-lg bg-amber-500 text-white text-xs font-bold active:opacity-80 disabled:opacity-40">
+                            {t1name} 노쇼 (부전승)
+                          </button>
+                          <button onClick={() => resolveNoShow(m, 2)} disabled={resolving === m.id}
+                            className="flex-1 py-2 rounded-lg bg-amber-500 text-white text-xs font-bold active:opacity-80 disabled:opacity-40">
+                            {t2name} 노쇼 (부전승)
+                          </button>
+                        </div>
+                        <button onClick={() => handleCall(m)} disabled={calling === m.id}
+                          className="w-full mt-1.5 py-1.5 rounded-lg bg-gray-100 text-gray-600 text-[11px] font-bold active:opacity-80 disabled:opacity-40">
+                          {calling === m.id ? '재호출 중…' : '다시 호출 (한 번 더 기다리기)'}
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="px-4 py-4 space-y-3">
             {catMatches.map(m => {
               const t1p = [m.team1?.player1, m.team1?.player2].filter(Boolean)
@@ -612,10 +733,16 @@ export default function LiveDashboard() {
                     <div className="flex items-center gap-1.5 text-xs text-gray-400 flex-wrap">
                       <Clock size={11} /> {fmt(m.scheduled_time)}
                       {m.court_number && <span>· 코트 {m.court_number}</span>}
-                      {m.status === 'scheduled' && estimates[m.id] && (
+                      {m.status === 'scheduled' && !noShow[m.id] && estimates[m.id] && (
                         <span className="flex items-center gap-0.5 text-[#003478] font-semibold">
                           <Timer size={10} /> 예상 호출 {fmt(estimates[m.id].at)}쯤
                           {estimates[m.id].ahead > 0 ? ` · 앞 ${estimates[m.id].ahead}경기` : ' · 대기 없음'}
+                        </span>
+                      )}
+                      {m.status === 'scheduled' && (noShow[m.id]?.phase === 'waiting' || noShow[m.id]?.phase === 'warned') && (
+                        <span className={`flex items-center gap-0.5 font-bold
+                          ${noShow[m.id].phase === 'warned' ? 'text-[#C60C30]' : 'text-amber-600'}`}>
+                          <AlertTriangle size={10} /> 미응답 부전승까지 {fmtCountdown(noShow[m.id].secondsLeft)}
                         </span>
                       )}
                     </div>

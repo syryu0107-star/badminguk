@@ -88,3 +88,48 @@ export function planAutoAdvance(matches, {
   }
   return { toCall, toSoon, estimates, queues }
 }
+
+// 노쇼(호출 미응답) 타이머 (C7) — 호출됐지만 시작 안 된 경기의 경과 시간으로 단계 산출.
+// ──────────────────────────────────────────────────────────────────────
+// 호출(callMatch) 이후에도 선수가 코트로 오지 않으면 대회가 멈춘다. 이 함수가
+// "호출 후 얼마나 지났는지"만 순수하게 계산해 3단계로 나눈다:
+//   waiting  — 아직 유예 시간 안 (기다리는 중)
+//   warned   — warnAfterSec 경과 → 선수에게 "곧 부전승" 경고 1회 발송 대상(toWarn)
+//   overdue  — forfeitAfterSec 경과 → 부전승 처리 대상(overdue), 사람이 최종 확인
+// 실제 발송·부전승 처리·DB 변경은 호출부(LiveDashboard)가 담당한다(순수 함수 유지).
+//   calledAt   : { [matchId]: ts } 호출 시각 (재호출 시 갱신됨)
+//   warnedAt   : { [matchId]: ts } 이미 경고 보낸 경기 (중복 경고 방지)
+//   warnAfterSec / forfeitAfterSec : 유예 임계 (기본 2분 / 5분)
+//   now        : 기준 시각(ms)
+export function planNoShow(matches, {
+  calledAt = {},
+  warnedAt = {},
+  warnAfterSec = 120,
+  forfeitAfterSec = 300,
+  now = Date.now(),
+} = {}) {
+  const toWarn = []      // 지금 "곧 부전승" 경고 보낼 경기
+  const overdue = []     // 부전승 처리 대상 (사람 최종 확인)
+  const status = {}      // matchId → { phase, calledAt, warnAt, deadlineAt, secondsLeft, elapsedSec }
+  for (const m of matches ?? []) {
+    if (m.status !== 'scheduled') continue     // 시작·완료된 경기는 노쇼 대상 아님
+    const c = calledAt[m.id]
+    if (!c) continue                            // 호출 안 된 경기는 노쇼 판정 없음
+    const warnAt = c + warnAfterSec * 1000
+    const deadlineAt = c + forfeitAfterSec * 1000
+    let phase = 'waiting'
+    if (now >= deadlineAt) phase = 'overdue'
+    else if (now >= warnAt) phase = 'warned'
+    status[m.id] = {
+      phase,
+      calledAt: c,
+      warnAt,
+      deadlineAt,
+      secondsLeft: Math.max(0, Math.round((deadlineAt - now) / 1000)),
+      elapsedSec: Math.max(0, Math.round((now - c) / 1000)),
+    }
+    if (phase === 'overdue') overdue.push(m)
+    else if (phase === 'warned' && !warnedAt[m.id]) toWarn.push(m)
+  }
+  return { toWarn, overdue, status }
+}

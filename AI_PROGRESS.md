@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-09 — [C7] 노쇼(호출 미응답) 타이머 → 미입장 부전승 카운트다운
+
+- **C7 호출 미응답 타이머 → 워크오버 카운트다운 (필수/대, 운영 완주 최대 공백)**
+  - 파일: `src/lib/orchestrator.js`(planNoShow 추가), `src/lib/notify.js`(buildWalkoverWarn·callWalkoverWarn 추가), `src/pages/organizer/LiveDashboard.jsx`, `src/pages/player/MyMatches.jsx`
+  - 요약: 직전 런에서 만든 자동 호출 오케스트레이터는 "부르기"까지만 자동이라, 선수가 코트로 오지 않으면 경기가 무한 정지하고 사람이 손으로 부전승을 눌러야 했다(운영 완주를 막는 최대 공백). 이번 런은 순수 함수 `planNoShow(matches, {calledAt, warnedAt, warnAfterSec=120, forfeitAfterSec=300, now})`를 신설해 호출 시각 대비 경과 시간으로 각 경기를 waiting/warned/overdue 3단계로 분류한다(호출 안 됐거나 이미 시작·완료된 경기는 제외). LiveDashboard는 호출 이력이 있는 동안 10초 틱(setInterval)으로 카운트다운을 갱신하고, 예정 카드에 "미응답 부전승까지 m:ss"를 waiting(주황)/warned(빨강)으로 표기한다. 무인 진행 스위치가 켜져 있으면 warned 진입 순간 `callWalkoverWarn`(기존에 정의만 되고 미사용이던 WALKOVER_WARN 타입 활용)를 선수에게 1회 자동 발송하고(warnedRef로 중복 차단, 재호출 시 초기화해 다시 경고 가능), 자동 조치 로그에 남긴다. forfeitAfterSec를 넘긴 overdue 경기는 상단 "노쇼 확인 대기" 패널에 모아 경과 시간·팀별 원터치 부전승·"다시 호출" 버튼으로 노출 — 부전승은 `completeMatch(walkover)`로 처리돼 MMR 미반영 + 승자 다음 라운드 자동 진출까지 이어진다. "정확히 누가 안 왔는지"는 현장 판단이 필요한 예외라 사람이 1탭 확인만 한다(near-zero touch). 선수 MyMatches는 walkover_warn 방송 수신 시 호출/사전알림보다 우선하는 빨간 긴급 배너(강한 진동 패턴)로 "약 N분 내 미입장 시 부전승 처리" 를 띄우고, 정상 호출이 다시 오면 자동으로 내린다.
+
 ## 2026-07-09 — [C6/C1] 빈 코트 자동 투입 오케스트레이터 (무인 진행)
 
 - **C6 빈코트 감시→다음경기 자동투입 + C1 사전알림·예상 호출시각 (필수/대, 운영 최대 공백)**

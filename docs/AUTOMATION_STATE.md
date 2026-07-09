@@ -6,9 +6,9 @@
 | 플로우 | 점수 | 완주 막는 잔여 갭 |
 |--------|:---:|------------------|
 | 주최자 | 42% | 입금확인·상태전환·승인 트리거 전부 수동 |
-| 선수   | 53% | 셀프 체크인·결제 부재 (경기 호출·사전알림 인앱 도달 ✅) |
+| 선수   | 55% | 셀프 체크인·결제 부재 (경기 호출·사전알림·미입장 경고 인앱 도달 ✅) |
 | 심판   | 70% | 무심판 코트 셀프스코어 부재 |
-| 운영   | 58% | 빈코트 자동투입·자동호출·사전알림·예상시각 ✅ / 노쇼 타이머·지연재조정(rescheduleAfterForfeit) 미연결 |
+| 운영   | 68% | 빈코트 자동투입·자동호출·사전알림·예상시각·노쇼 타이머(미응답 경고 자동발송+카운트다운+부전승 원터치) ✅ / 지연재조정(rescheduleAfterForfeit)·자동 부전승 확정 미연결 |
 
 ## 클러스터 상태 (C1~C12)
 | C | 클러스터 | 상태 | 비고(코드 근거) |
@@ -19,7 +19,7 @@
 | C4 | 셀프 체크인 | ⚠️ | 운영자 수동 클릭 체크인만 (LiveDashboard) |
 | C5 | AI 대진 최적화 | ⚠️ | seededShuffle 단일 셔플 + MMR 시드만 |
 | C6 | 실시간 진행·지연 재조정 | ⚠️ | 빈코트 감시→다음경기 자동투입(orchestrator.planAutoAdvance, LiveDashboard 무인 진행 스위치) ✅. rescheduleAfterForfeit·누적지연 시뮬은 아직 미연결 |
-| C7 | 노쇼·기권·실격 자동처리 | ⚠️ | 수동 워크오버만, 타이머 없음 |
+| C7 | 노쇼·기권·실격 자동처리 | ⚠️ | 노쇼 타이머 신설(orchestrator.planNoShow): 호출 후 미응답 경기를 waiting/warned/overdue 3단계로 판정 → 무인 진행 시 WALKOVER_WARN 자동 발송(선수 긴급 배너)+대시보드 카운트다운, overdue는 "노쇼 확인 대기" 패널 원터치 부전승(completeMatch walkover). "누가 안 왔는지"는 현장 예외라 사람 1탭 확인. 실격 출전권 무효·자동 부전승 확정은 미구현 |
 | C8 | 요강·설정 마법사 | ⚠️ | 설정 폼만, 역산/문서생성 없음 |
 | C9 | 문의 챗봇 | ❌ | 없음 |
 | C10 | 결과·시상·정산 | ⚠️ | 순위집계·급수승급 자동, 상장/정산 없음 |
@@ -27,6 +27,14 @@
 | C12 | 대회 탐색·파트너·전적 | ⚠️ | 파트너 초대·랭킹 있음, 추천/매칭 없음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-09 · C7 · `src/lib/orchestrator.js`(planNoShow 추가)·`src/lib/notify.js`(callWalkoverWarn 추가)·LiveDashboard·MyMatches
+  · 노쇼(호출 미응답) 타이머 신설 — 지금껏 호출 후 안 오면 대회가 무한 정지(사람이 손으로 부전승)했던 최대 운영 공백을
+    메움. 순수함수 `planNoShow`가 호출 시각(calledIds) 대비 경과로 waiting/warned/overdue 3단계 판정. LiveDashboard가
+    10초 틱으로 카운트다운 갱신하고, 무인 진행 ON이면 warned 진입 시 `callWalkoverWarn`(WALKOVER_WARN, 기존 미사용 타입)
+    을 1회 자동 발송(warnedRef 중복차단, 재호출 시 초기화). overdue 경기는 "노쇼 확인 대기" 패널에 카운트다운·원터치
+    부전승(팀별)·다시 호출로 노출 → 부전승은 completeMatch(walkover, MMR 미반영)로 대진 자동 진출. "누가 안 왔는지"만
+    현장 예외로 1탭 확인. 선수 MyMatches는 walkover_warn 수신 시 최우선 빨간 긴급 배너(강한 진동)로 "N분 내 미입장 시
+    부전승" 표시. C7 타이머·경고 ✅(자동 부전승 확정만 잔여). (자동화율 운영 58%→68%, 선수 53%→55%)
 - 2026-07-09 · C6/C1 · `src/lib/orchestrator.js`(신규)·`src/lib/notify.js`·LiveDashboard·MyMatches
   · 빈코트 자동투입 오케스트레이터: 코트가 비면 다음 경기 자동 호출 + 다음 팀 "곧 호출" 사전알림
     + 코트 회전 기반 예상 호출시각. LiveDashboard "무인 자동 진행" 스위치(기본 OFF, 자동 조치 로그),

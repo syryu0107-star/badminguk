@@ -69,6 +69,29 @@ export function buildMatchSoon({ match, tournamentId, court, sport, aheadCount }
   }
 }
 
+// 미입장 부전승 경고(곧 부전승) 페이로드 — 호출했는데 응답이 없는 팀에게.
+export function buildWalkoverWarn({ match, tournamentId, court, sport, secondsLeft }) {
+  const c = court ?? match?.court_number ?? null
+  const secs = typeof secondsLeft === 'number' ? Math.max(0, secondsLeft) : null
+  const mins = secs != null ? Math.max(1, Math.ceil(secs / 60)) : null
+  return {
+    type: NOTIFY.WALKOVER_WARN,
+    tournamentId,
+    matchId: match?.id ?? null,
+    court: c,
+    sport: sport ?? null,
+    entryIds: [match?.team1_entry_id, match?.team2_entry_id].filter(Boolean),
+    secondsLeft: secs,
+    title: '⚠️ 미입장 부전승 경고',
+    body: c != null
+      ? (mins != null
+          ? `${c}번 코트 호출에 응답이 없어요. ${mins}분 내 입장하지 않으면 부전승 처리될 수 있어요!`
+          : `${c}번 코트 호출에 응답이 없어요. 지금 바로 입장하지 않으면 부전승 처리될 수 있어요!`)
+      : '경기 호출에 응답이 없어요. 지금 바로 입장하지 않으면 부전승 처리될 수 있어요!',
+    createdAt: new Date().toISOString(),
+  }
+}
+
 // ── 채널 1: 인앱 실시간 방송 (스키마 불필요) ───────────────────────────
 async function broadcast(payload) {
   if (!payload?.tournamentId) return { sent: false }
@@ -142,6 +165,16 @@ export async function callMatch({ match, tournamentId, court, sport, recipients 
 // 빈 코트 자동 투입 오케스트레이터가, 다음 차례 팀에게 미리 "곧 호출" 을 보낸다.
 export async function callMatchSoon({ match, tournamentId, court, sport, aheadCount, recipients = [] }) {
   const payload = buildMatchSoon({ match, tournamentId, court, sport, aheadCount })
+  const bc = await broadcast(payload)
+  const ps = await persist(payload, recipients)
+  const ex = dispatchExternal(payload, recipients)
+  return { payload, broadcast: bc, persist: ps, external: ex }
+}
+
+// ── 고수준 진입점: 미입장 부전승 경고 (C7) ────────────────────────────
+// 노쇼 타이머가 경고 임계를 넘긴 팀에게 "곧 부전승" 을 1회 보낸다.
+export async function callWalkoverWarn({ match, tournamentId, court, sport, secondsLeft, recipients = [] }) {
+  const payload = buildWalkoverWarn({ match, tournamentId, court, sport, secondsLeft })
   const bc = await broadcast(payload)
   const ps = await persist(payload, recipients)
   const ex = dispatchExternal(payload, recipients)

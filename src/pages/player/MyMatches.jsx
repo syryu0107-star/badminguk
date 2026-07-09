@@ -4,7 +4,7 @@ import { subscribeNotifications, fetchRecentCalls, markCallRead } from '../../li
 import BottomNav from '../../components/BottomNav'
 import MatchCard from '../../components/MatchCard'
 import Spinner from '../../components/Spinner'
-import { CalendarDays, Mail, Check, X, Clock, Megaphone } from 'lucide-react'
+import { CalendarDays, Mail, Check, X, Clock, Megaphone, AlertTriangle } from 'lucide-react'
 
 // ── 다음 경기 하이라이트용 상수·헬퍼 ────────────────────────────
 // 이미 끝난 경기 상태 (다음 경기 후보에서 제외)
@@ -138,6 +138,7 @@ export default function MyMatches() {
   const [acting, setActing]     = useState(null) // 처리 중인 entry id
   const [call, setCall]         = useState(null) // 수신한 경기 호출 { court, sport, matchId, notificationId }
   const [soon, setSoon]         = useState(null) // 사전 알림 { court, sport, aheadCount }
+  const [warn, setWarn]         = useState(null) // 미입장 부전승 경고 { court, sport, secondsLeft }
   const myEntryIds     = useRef(new Set())        // 내가 속한 엔트리 id (호출 대상 판정용)
   const myTournamentIds = useRef([])              // 내가 참가한 대회 id (구독 대상)
 
@@ -259,9 +260,17 @@ export default function MyMatches() {
         try { if (navigator.vibrate) navigator.vibrate(120) } catch { /* noop */ }
         return
       }
+      // 미입장 부전승 경고 — 가장 급함(부전승 처리 직전). 다른 배너를 덮는다.
+      if (payload.type === 'walkover_warn') {
+        setWarn({ court: payload.court, sport: payload.sport, secondsLeft: payload.secondsLeft ?? null })
+        setSoon(null)
+        try { if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]) } catch { /* noop */ }
+        return
+      }
       if (payload.type !== 'match_call') return
       setCall({ court: payload.court, sport: payload.sport, matchId: payload.matchId })
       setSoon(null) // 진짜 호출이 왔으니 사전 알림은 내림
+      setWarn(null) // 정상 호출이 다시 왔으니 경고는 내림
       // 진동·알림(있으면). 화면을 보고 있지 않아도 감지되도록.
       try { if (navigator.vibrate) navigator.vibrate([300, 120, 300]) } catch { /* noop */ }
     })
@@ -310,8 +319,38 @@ export default function MyMatches() {
 
   return (
     <div className="safe-bottom">
+      {/* ── 미입장 부전승 경고 배너 (가장 급함 — 부전승 직전) ───────── */}
+      {warn && (
+        <div className="fixed inset-x-0 top-0 z-50 px-3 pt-3 fade-up">
+          <div
+            className="rounded-2xl p-4 text-white shadow-xl flex items-center gap-3 animate-pulse"
+            style={{ background: 'linear-gradient(135deg, #C60C30, #7a0a1f)' }}
+            role="alert"
+          >
+            <AlertTriangle size={26} className="shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-bold text-white/80">미입장 부전승 경고{warn.sport ? ` · ${warn.sport}` : ''}</p>
+              <p className="text-base font-black leading-tight">
+                {warn.court != null ? `지금 바로 ${warn.court}번 코트로 입장하세요!` : '지금 바로 코트로 입장하세요!'}
+              </p>
+              <p className="text-[11px] text-white/80">
+                {typeof warn.secondsLeft === 'number' && warn.secondsLeft > 0
+                  ? `약 ${Math.max(1, Math.ceil(warn.secondsLeft / 60))}분 내 미입장 시 부전승 처리돼요`
+                  : '응답이 없으면 부전승 처리돼요'}
+              </p>
+            </div>
+            <button
+              onClick={() => setWarn(null)}
+              className="shrink-0 bg-white text-[#C60C30] font-black text-sm px-3 py-2 rounded-xl active:opacity-80"
+            >
+              확인
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── 경기 호출 배너 (주최자 호출 시 즉시 표시) ─────────────── */}
-      {call && (
+      {!warn && call && (
         <div className="fixed inset-x-0 top-0 z-50 px-3 pt-3 fade-up">
           <div
             className="rounded-2xl p-4 text-white shadow-xl flex items-center gap-3 animate-pulse"
@@ -336,7 +375,7 @@ export default function MyMatches() {
       )}
 
       {/* ── 곧 호출 사전 알림 (자동 진행 시 미리 도착) ─────────────── */}
-      {!call && soon && (
+      {!warn && !call && soon && (
         <div className="fixed inset-x-0 top-0 z-40 px-3 pt-3 fade-up">
           <div className="rounded-2xl p-3.5 bg-[#003478] text-white shadow-lg flex items-center gap-3" role="status">
             <Clock size={22} className="shrink-0" />
