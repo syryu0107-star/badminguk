@@ -300,10 +300,18 @@ export default function LiveScore() {
     loadData();
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-refresh every 30 s
+  // 30초 자동 갱신 — 탭이 백그라운드일 땐 폴링 중단(배터리·네트워크 절약), 복귀 시 즉시 최신화
   useEffect(() => {
-    const timer = setInterval(loadData, 30_000);
-    return () => clearInterval(timer);
+    let timer = null;
+    const start = () => { if (!timer) timer = setInterval(loadData, 30_000); };
+    const stop = () => { clearInterval(timer); timer = null; };
+    const onVisibility = () => {
+      if (document.hidden) stop();
+      else { loadData(); start(); }
+    };
+    if (!document.hidden) start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => { stop(); document.removeEventListener('visibilitychange', onVisibility); };
   }, [loadData]);
 
   // Supabase realtime subscription

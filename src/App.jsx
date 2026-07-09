@@ -1,28 +1,29 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { supabase } from './lib/supabase'
 import { FullPageSpinner } from './components/Spinner'
 
-import Auth from './pages/Auth'
-import Onboarding from './pages/Onboarding'
-import RoleLanding from './pages/RoleLanding'
+// 라우트 단위 코드 스플리팅 — 초기 번들 축소로 첫 화면 로딩(LCP) 개선
+const Auth = lazy(() => import('./pages/Auth'))
+const Onboarding = lazy(() => import('./pages/Onboarding'))
+const RoleLanding = lazy(() => import('./pages/RoleLanding'))
 
-import PlayerHome from './pages/player/Home'
-import Tournaments from './pages/player/Tournaments'
-import TournamentDetail from './pages/player/TournamentDetail'
-import MyMatches from './pages/player/MyMatches'
-import Profile from './pages/player/Profile'
-import Ranking from './pages/player/Ranking'
+const PlayerHome = lazy(() => import('./pages/player/Home'))
+const Tournaments = lazy(() => import('./pages/player/Tournaments'))
+const TournamentDetail = lazy(() => import('./pages/player/TournamentDetail'))
+const MyMatches = lazy(() => import('./pages/player/MyMatches'))
+const Profile = lazy(() => import('./pages/player/Profile'))
+const Ranking = lazy(() => import('./pages/player/Ranking'))
 
-import OrganizerDashboard from './pages/organizer/Dashboard'
-import CreateTournament from './pages/organizer/CreateTournament'
-import TournamentManage from './pages/organizer/TournamentManage'
-import EntryManagement from './pages/organizer/EntryManagement'
-import BracketGenerator from './pages/organizer/BracketGenerator'
-import LiveDashboard from './pages/organizer/LiveDashboard'
-import CourtView from './pages/organizer/CourtView'
+const OrganizerDashboard = lazy(() => import('./pages/organizer/Dashboard'))
+const CreateTournament = lazy(() => import('./pages/organizer/CreateTournament'))
+const TournamentManage = lazy(() => import('./pages/organizer/TournamentManage'))
+const EntryManagement = lazy(() => import('./pages/organizer/EntryManagement'))
+const BracketGenerator = lazy(() => import('./pages/organizer/BracketGenerator'))
+const LiveDashboard = lazy(() => import('./pages/organizer/LiveDashboard'))
+const CourtView = lazy(() => import('./pages/organizer/CourtView'))
 
-import LiveScore from './pages/public/LiveScore'
+const LiveScore = lazy(() => import('./pages/public/LiveScore'))
 
 // TEST_MODE=true 이면 로그인 없이 모든 페이지 접근 가능
 const TEST_MODE = true
@@ -57,6 +58,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <Suspense fallback={<FullPageSpinner />}>
       <Routes>
         {/* 진입점: 역할 선택 랜딩 */}
         <Route path="/"  element={TEST_MODE ? <RoleLanding /> : (!session ? <Auth /> : <Navigate to="/home" replace />)} />
@@ -82,6 +84,7 @@ export default function App() {
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      </Suspense>
     </BrowserRouter>
   )
 }
