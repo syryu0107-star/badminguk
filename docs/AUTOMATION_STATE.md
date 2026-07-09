@@ -5,8 +5,8 @@
 ## 플로우 자동화율 (0~100%)
 | 플로우 | 점수 | 완주 막는 잔여 갭 |
 |--------|:---:|------------------|
-| 주최자 | 56% | 접수 마감·대회 시작 자동 + 정상 신청 자동 승인 ✅ / 입금 확인(C3)·시상 확정(무인) 미연결 |
-| 선수   | 55% | 셀프 체크인·결제 부재 (경기 호출·사전알림·미입장 경고 인앱 도달 ✅) |
+| 주최자 | 58% | 셀프 체크인 무인 집계 ✅ / 입금 확인(C3)·시상 확정(무인) 미연결 |
+| 선수   | 63% | 셀프 체크인·디지털 선수증 ✅ (신청→체크인→예상시각→호출→결과 화면 하나로 연결) / 결제 부재 |
 | 심판   | 70% | 무심판 코트 셀프스코어 부재 |
 | 운영   | 68% | 빈코트 자동투입·자동호출·사전알림·예상시각·노쇼 타이머(미응답 경고 자동발송+카운트다운+부전승 원터치) ✅ / 지연재조정(rescheduleAfterForfeit)·자동 부전승 확정 미연결 |
 
@@ -16,7 +16,7 @@
 | C1 | 경기 호출·알림 인프라 | ⚠️ | notify.js+orchestrator.js — 자동호출·사전알림(곧 호출)·예상 호출시각 end-to-end(LiveDashboard→MyMatches). 웹푸시/알림톡/SMS는 human-gated 스텁, WO카운트다운·재알림 타이머 미구현 |
 | C2 | 대회 상태 오케스트레이션 | ⚠️ | stateMachine.js 신설 — 순수 판정 엔진. TournamentManage "무인 자동 진행" 스위치: 접수 마감 시각 경과/정원 충족 시 open→closed, 대회 당일+대진표 존재 시 closed→in_progress 자동 전환(추천 배너+원터치). EntryManagement "무인 자동 승인": 정상 신청 자동 승인, 샌드배깅 의심·입금 미확인·정원 초과만 사람 큐. draft→open(개설 공개)·시상 확정(무인)은 아직 수동 |
 | C3 | 입금·결제·환불 | ❌ | payment_status 쓰는 코드 없음 |
-| C4 | 셀프 체크인 | ⚠️ | 운영자 수동 클릭 체크인만 (LiveDashboard) |
+| C4 | 셀프 체크인 | ✅ | `checkin.js` 엔진 신설 — 선수 MyMatches "디지털 선수증" 카드에서 대회 당일/진행중 원터치 셀프 체크인(verified_method='self'). 실명인증 선수는 무인 완료, 미인증은 "본인확인 권장" 예외로만 노출. LiveDashboard 체크인 패널 실시간 반영(tournament_checkins 구독)+셀프/본인확인권장/신고 요약. 운영자 수동 체크인 병존. QR/PIN 키오스크·대리스코어링만 잔여 |
 | C5 | AI 대진 최적화 | ⚠️ | seededShuffle 단일 셔플 + MMR 시드만 |
 | C6 | 실시간 진행·지연 재조정 | ⚠️ | 빈코트 감시→다음경기 자동투입(orchestrator.planAutoAdvance, LiveDashboard 무인 진행 스위치) ✅. rescheduleAfterForfeit·누적지연 시뮬은 아직 미연결 |
 | C7 | 노쇼·기권·실격 자동처리 | ⚠️ | 노쇼 타이머 신설(orchestrator.planNoShow): 호출 후 미응답 경기를 waiting/warned/overdue 3단계로 판정 → 무인 진행 시 WALKOVER_WARN 자동 발송(선수 긴급 배너)+대시보드 카운트다운, overdue는 "노쇼 확인 대기" 패널 원터치 부전승(completeMatch walkover). "누가 안 왔는지"는 현장 예외라 사람 1탭 확인. 실격 출전권 무효·자동 부전승 확정은 미구현 |
@@ -27,6 +27,16 @@
 | C12 | 대회 탐색·파트너·전적 | ⚠️ | 파트너 초대·랭킹 있음, 추천/매칭 없음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-09 · C4 · `src/lib/checkin.js`(신규)·`src/pages/player/MyMatches.jsx`·`src/pages/organizer/LiveDashboard.jsx`
+  · 셀프 체크인(C4 ⚠️→✅) — 선수 완주를 막던 "체크인은 운영자만 손으로 클릭" 공백을 메움. 순수함수
+    `getCheckinWindow`(대회 date/status로 before/open/ended 창 판정: 당일 또는 in_progress면 체크인 가능)·
+    `assessSelfCheckin`(실명인증 선수=무인 완료, 미인증=현장 본인확인 권장)·`summarizeCheckins`(done/self/
+    flagged/reviewNeeded 집계) + Supabase 헬퍼(`selfCheckin` upsert method='self', `fetchMyCheckins`). 선수
+    MyMatches 상단에 "체크인 · 디지털 선수증" 카드(참가 확정 대회 단위, 실명·인증배지·종목·장소) — 창이 열리면
+    원터치 "지금 셀프 체크인", 완료 시 초록 확정+시각. 주최자 LiveDashboard 체크인 패널은 tournament_checkins를
+    실시간 구독해 선수 셀프 체크인을 무인 반영하고, 상단 요약(완료 N/전체·셀프·본인확인 권장·신고)+행별 "셀프 완료"·
+    "본인확인 권장"(셀프+미인증) 배지 노출. 스키마 변경 없음(기존 verified_method에 'self' 값만 추가 사용). 엔진
+    7개 시나리오 자체 검증 통과, `npx vite build` green. (자동화율 선수 55%→63%, 주최자 56%→58%)
 - 2026-07-09 · C2 · `src/lib/stateMachine.js`(신규)·`src/pages/organizer/TournamentManage.jsx`·`src/pages/organizer/EntryManagement.jsx`
   · 대회 상태 오케스트레이션 착수(C2 ❌→⚠️) — 주최자 최대 수작업이던 "접수 마감·대회 시작·참가 승인"을
     앱이 스스로 판정. 순수 엔진 `planTournamentState`(open→closed: 마감시각 경과 or 전 종목 정원 충족 /

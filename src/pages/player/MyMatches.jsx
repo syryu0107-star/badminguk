@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
 import { subscribeNotifications, fetchRecentCalls, markCallRead } from '../../lib/notify'
+import { getCheckinWindow, assessSelfCheckin, selfCheckin, fetchMyCheckins } from '../../lib/checkin'
 import BottomNav from '../../components/BottomNav'
 import MatchCard from '../../components/MatchCard'
 import Spinner from '../../components/Spinner'
-import { CalendarDays, Mail, Check, X, Clock, Megaphone, AlertTriangle } from 'lucide-react'
+import { CalendarDays, Mail, Check, X, Clock, Megaphone, AlertTriangle, UserCheck, ShieldCheck, MapPin } from 'lucide-react'
 
 // ── 다음 경기 하이라이트용 상수·헬퍼 ────────────────────────────
 // 이미 끝난 경기 상태 (다음 경기 후보에서 제외)
@@ -111,6 +112,98 @@ function NextMatchHighlight({ info }) {
   )
 }
 
+function fmtClock(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+// 디지털 선수증 + 셀프 체크인 카드 (C4)
+function CheckinCard({ card, checkin, profile, checkingIn, onCheckin }) {
+  const t = card.tournament
+  const win = getCheckinWindow(t)
+  const assess = assessSelfCheckin(profile)
+  const isCheckedIn = !!checkin && !checkin.flagged
+  const displayName = (profile?.identity_verified && profile?.verified_name) || profile?.name || '선수'
+  const busy = checkingIn === t.id
+
+  return (
+    <div
+      className={`rounded-2xl border overflow-hidden shadow-sm
+        ${isCheckedIn ? 'border-emerald-300' : 'border-gray-100'}`}
+    >
+      {/* 디지털 선수증 상단 */}
+      <div
+        className="px-4 pt-4 pb-3 text-white"
+        style={{ background: isCheckedIn
+          ? 'linear-gradient(135deg, #047857, #003478)'
+          : 'linear-gradient(135deg, #C60C30, #003478)' }}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] font-bold text-white/80 flex items-center gap-1">
+            <UserCheck size={13} /> 디지털 선수증
+          </span>
+          {profile?.identity_verified ? (
+            <span className="text-[10px] font-bold bg-white/20 px-2 py-0.5 rounded-full flex items-center gap-1">
+              <ShieldCheck size={11} /> 실명인증
+            </span>
+          ) : (
+            <span className="text-[10px] font-bold bg-white/15 px-2 py-0.5 rounded-full">미인증</span>
+          )}
+        </div>
+        <p className="text-xl font-black mt-1.5 leading-tight truncate">{displayName}</p>
+        <p className="text-white/80 text-xs mt-0.5 truncate">{t.title ?? '대회'}</p>
+        <div className="flex items-center gap-2 text-white/70 text-[11px] mt-1 flex-wrap">
+          <span className="flex items-center gap-0.5"><CalendarDays size={11} /> {t.date ?? '날짜 미정'}</span>
+          {t.location && <span className="flex items-center gap-0.5"><MapPin size={11} /> {t.location}</span>}
+        </div>
+        <div className="flex gap-1 mt-2 flex-wrap">
+          {card.sports.map(sp => (
+            <span key={sp} className="text-[10px] font-semibold bg-white/15 px-2 py-0.5 rounded-full">{sp}</span>
+          ))}
+        </div>
+      </div>
+
+      {/* 하단 액션 */}
+      <div className="bg-white px-4 py-3">
+        {isCheckedIn ? (
+          <div className="flex items-center gap-2 text-emerald-700">
+            <div className="w-9 h-9 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
+              <Check size={20} />
+            </div>
+            <div className="min-w-0">
+              <p className="font-black text-sm">체크인 완료{checkin.checked_in_at ? ` · ${fmtClock(checkin.checked_in_at)}` : ''}</p>
+              <p className="text-[11px] text-gray-500">
+                {checkin.verified_method === 'self' ? '셀프 체크인' : '현장 확인'} 완료됐어요. 경기 호출을 기다려주세요.
+              </p>
+            </div>
+          </div>
+        ) : win.canCheckin ? (
+          <>
+            <button
+              onClick={() => onCheckin(t.id)}
+              disabled={busy}
+              className="w-full py-3 rounded-xl text-white font-black text-sm flex items-center justify-center gap-2
+                         active:scale-[.98] disabled:opacity-60"
+              style={{ background: 'linear-gradient(135deg, #C60C30, #003478)' }}
+            >
+              <UserCheck size={17} /> {busy ? '체크인 중…' : '지금 셀프 체크인'}
+            </button>
+            <p className={`text-[11px] mt-2 leading-relaxed ${assess.needsReview ? 'text-amber-600' : 'text-gray-500'}`}>
+              {assess.needsReview ? '⚠️ ' : '✓ '}{assess.note}
+            </p>
+          </>
+        ) : (
+          <div className="text-center py-1">
+            <p className="text-sm font-bold text-gray-600">{win.label}</p>
+            <p className="text-[11px] text-gray-400 mt-0.5">{win.sub}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // 신청 상태 뱃지 표시 (entry_status)
 const STATUS_BADGE = {
   partner_pending:  { label: '⏳ 파트너 수락 대기', cls: 'bg-amber-100 text-amber-700' },
@@ -131,9 +224,12 @@ const PAY_BADGE = {
 
 export default function MyMatches() {
   const [userId, setUserId]     = useState(null)
+  const [profile, setProfile]   = useState(null) // 내 프로필(디지털 선수증·인증여부)
   const [entries, setEntries]   = useState([])   // 내가 신청자(A) 또는 파트너(B)인 모든 신청
   const [matches, setMatches]   = useState([])   // 경기 일정
   const [nextMatch, setNextMatch] = useState(null) // 다음 경기 하이라이트
+  const [checkins, setCheckins] = useState({})   // { [tournamentId]: row } 내 체크인 상태
+  const [checkingIn, setCheckingIn] = useState(null) // 체크인 처리 중인 tournamentId
   const [loading, setLoading]   = useState(true)
   const [acting, setActing]     = useState(null) // 처리 중인 entry id
   const [call, setCall]         = useState(null) // 수신한 경기 호출 { court, sport, matchId, notificationId }
@@ -147,6 +243,14 @@ export default function MyMatches() {
     if (!user) { setLoading(false); return }
     setUserId(user.id)
 
+    // ── 내 프로필 (디지털 선수증·본인확인 자동판정용) ────────────────
+    const { data: prof } = await supabase
+      .from('profiles')
+      .select('id, name, verified_name, identity_verified')
+      .eq('id', user.id)
+      .maybeSingle()
+    setProfile(prof ?? null)
+
     // ── 내가 속한 모든 신청 (양방향: 신청자 or 파트너) ──────────────
     const { data: es } = await supabase
       .from('tournament_entries')
@@ -154,7 +258,7 @@ export default function MyMatches() {
         *,
         category:tournament_categories(
           sport_type,
-          tournament:tournaments(id, title, date)
+          tournament:tournaments(id, title, date, status, location)
         ),
         p1:profiles!player1_id(id, name),
         p2:profiles!player2_id(id, name)
@@ -163,6 +267,15 @@ export default function MyMatches() {
       .order('created_at', { ascending: false })
 
     setEntries(es ?? [])
+
+    // ── 내 체크인 상태 (참가 확정 대회 대상) ─────────────────────────
+    const tIds = [...new Set(
+      (es ?? [])
+        .filter(e => e.entry_status === 'approved')
+        .map(e => e.category?.tournament?.id)
+        .filter(Boolean),
+    )]
+    setCheckins(await fetchMyCheckins(supabase, tIds, user.id))
 
     // ── 호출 수신용: 내 엔트리·대회 id 집합 ───────────────────────
     myEntryIds.current = new Set((es ?? []).map(e => e.id))
@@ -297,6 +410,43 @@ export default function MyMatches() {
     await load()
   }
 
+  // ── 셀프 체크인 (C4) ────────────────────────────────────────────
+  async function doSelfCheckin(tournamentId) {
+    if (!userId) return
+    setCheckingIn(tournamentId)
+    const { error } = await selfCheckin(supabase, { tournamentId, playerId: userId })
+    setCheckingIn(null)
+    if (error) { alert('체크인 중 문제가 생겼어요: ' + error.message); return }
+    // 방금 체크인한 행을 즉시 반영(재조회 없이 낙관적 업데이트)
+    setCheckins(prev => ({
+      ...prev,
+      [tournamentId]: {
+        tournament_id: tournamentId,
+        player_id: userId,
+        verified_method: 'self',
+        checked_in_at: new Date().toISOString(),
+        flagged: false,
+      },
+    }))
+  }
+
+  // 참가 확정 대회를 대회 단위로 묶어 체크인 카드 목록 생성(중복 종목은 1장으로)
+  const checkinCards = (() => {
+    const seen = new Map()
+    for (const e of entries) {
+      if (e.entry_status !== 'approved') continue
+      const t = e.category?.tournament
+      if (!t?.id) continue
+      if (!seen.has(t.id)) seen.set(t.id, { tournament: t, sports: [] })
+      const sp = e.category?.sport_type
+      if (sp && !seen.get(t.id).sports.includes(sp)) seen.get(t.id).sports.push(sp)
+    }
+    return [...seen.values()]
+      // 종료/마감된 대회는 카드에서 숨김(체크인할 게 없음). 이미 체크인한 종료대회도 숨김.
+      .filter(c => getCheckinWindow(c.tournament).phase !== 'ended')
+      .sort((a, b) => (a.tournament.date ?? '').localeCompare(b.tournament.date ?? ''))
+  })()
+
   // 받은 초대 = 내가 파트너(player2)이고 아직 수락 대기 중
   const invites = entries.filter(
     e => e.entry_status === 'partner_pending' && e.player2_id === userId,
@@ -416,6 +566,27 @@ export default function MyMatches() {
           <>
             {/* ── 다음 경기 하이라이트 ─────────────────────────── */}
             <NextMatchHighlight info={nextMatch} />
+
+            {/* ── 셀프 체크인 · 디지털 선수증 (C4) ─────────────── */}
+            {checkinCards.length > 0 && (
+              <section>
+                <h2 className="font-bold text-sm mb-2 flex items-center gap-1.5">
+                  <UserCheck size={16} className="text-[#003478]" /> 체크인
+                </h2>
+                <div className="space-y-3">
+                  {checkinCards.map(card => (
+                    <CheckinCard
+                      key={card.tournament.id}
+                      card={card}
+                      checkin={checkins[card.tournament.id]}
+                      profile={profile}
+                      checkingIn={checkingIn}
+                      onCheckin={doSelfCheckin}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
 
             {/* ── 받은 파트너 초대 ─────────────────────────────── */}
             {invites.length > 0 && (

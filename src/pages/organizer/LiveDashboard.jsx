@@ -6,6 +6,7 @@ import { calculatePoolStandings, prizeLabel } from '../../lib/tournament'
 import { completeMatch, finalizeTournament, scoresToPairs } from '../../lib/advance'
 import { callMatch, callMatchSoon, callWalkoverWarn } from '../../lib/notify'
 import { planAutoAdvance, planNoShow } from '../../lib/orchestrator'
+import { summarizeCheckins } from '../../lib/checkin'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
 import { Clock, Shield, UserCheck, Flag, CheckCircle, Gavel, Trophy, ListOrdered, Megaphone, Zap, Timer, AlertTriangle } from 'lucide-react'
@@ -114,6 +115,19 @@ export default function LiveDashboard() {
     if (viewMode === 'checkin') loadCheckins()
     if (viewMode === 'standings') loadStandings()
   }, [viewMode, activeCat])
+
+  // ── 셀프 체크인 실시간 반영 (선수가 폰으로 체크인하면 무인으로 갱신) ──
+  useEffect(() => {
+    if (viewMode !== 'checkin') return
+    const sub = supabase
+      .channel(`checkins-${id}`)
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'tournament_checkins', filter: `tournament_id=eq.${id}` },
+        () => loadCheckins())
+      .subscribe()
+    return () => supabase.removeChannel(sub)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, id])
 
   // ── 예상 호출 시각은 항상 갱신(표시용). 자동 진행이 켜져 있으면 실제 호출까지. ──
   useEffect(() => {
@@ -1040,12 +1054,46 @@ export default function LiveDashboard() {
             ))}
           </div>
 
+          {/* 체크인 요약 (셀프 체크인 무인 진행률) */}
+          {(() => {
+            const players = entries.flatMap(e => [e.player1, e.player2].filter(Boolean))
+            const sum = summarizeCheckins(players, checkins)
+            return (
+              <div className="bg-white rounded-2xl border border-gray-100 p-3.5 mb-3">
+                <div className="flex items-end justify-between">
+                  <div>
+                    <p className="text-xs text-gray-400">체크인 완료</p>
+                    <p className="text-2xl font-black text-[#003478] tabular-nums">
+                      {sum.done}<span className="text-base text-gray-400 font-bold"> / {sum.total}명</span>
+                    </p>
+                  </div>
+                  <div className="flex gap-1.5 flex-wrap justify-end">
+                    <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+                      셀프 {sum.self}
+                    </span>
+                    {sum.reviewNeeded > 0 && (
+                      <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
+                        본인확인 권장 {sum.reviewNeeded}
+                      </span>
+                    )}
+                    {sum.flagged > 0 && (
+                      <span className="text-[11px] font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded-full">
+                        신고 {sum.flagged}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+
           {/* 안내 */}
           <div className="bg-blue-50 rounded-2xl p-3.5 mb-4 flex gap-2.5">
             <span className="text-lg shrink-0">💬</span>
             <p className="text-xs text-blue-700 leading-relaxed">
-              선수에게 <strong>"성함과 생년월일 말씀해주세요?"</strong> 라고 물어본 후<br/>
-              아래 표시된 실명·생년과 일치하면 체크인 완료를 누르세요.
+              선수가 <strong>폰으로 셀프 체크인</strong>하면 여기에 자동으로 표시돼요.
+              실명인증 선수는 그대로 확정, <strong className="text-amber-700">'본인확인 권장'</strong> 표시(셀프·미인증)만
+              현장에서 한 번 확인하세요. 미도착 선수는 아래에서 직접 체크인할 수도 있어요.
             </p>
           </div>
 
@@ -1062,6 +1110,8 @@ export default function LiveDashboard() {
                   const chk = checkins.find(c => c.player_id === player.id)
                   const isCheckedIn = !!chk && !chk.flagged
                   const isFlagged   = !!chk && chk.flagged
+                  const isSelf      = isCheckedIn && chk.verified_method === 'self'
+                  const reviewSelf  = isSelf && !player.identity_verified // 셀프·미인증 → 본인확인 권장
 
                   return (
                     <div key={player.id}
@@ -1110,9 +1160,16 @@ export default function LiveDashboard() {
                               <Flag size={10} /> 신고됨
                             </span>
                           ) : isCheckedIn ? (
-                            <span className="text-xs font-bold text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
-                              <CheckCircle size={10} /> 완료
-                            </span>
+                            <div className="flex flex-col items-end gap-1">
+                              <span className="text-xs font-bold text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                <CheckCircle size={10} /> {isSelf ? '셀프 완료' : '완료'}
+                              </span>
+                              {reviewSelf && (
+                                <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
+                                  본인확인 권장
+                                </span>
+                              )}
+                            </div>
                           ) : null}
 
                           {!isCheckedIn && !isFlagged && (

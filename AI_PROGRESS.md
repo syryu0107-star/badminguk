@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-09 — [C4] 셀프 체크인 — 디지털 선수증 + 무인 실시간 집계
+
+- **C4 셀프 체크인 (필수/중, 선수 완주 최대 공백)**
+  - 파일: `src/lib/checkin.js`(신규), `src/pages/player/MyMatches.jsx`, `src/pages/organizer/LiveDashboard.jsx`
+  - 요약: 지금껏 체크인은 운영자가 선수 실명·생년을 물어보고 손으로 "체크인 완료"를 눌러야만 했던 전면 수작업이라, 선수 완주(신청→체크인→호출→결과)의 중간이 사람 손에 묶여 있었다. 이번 런은 스키마 변경 없이(기존 `tournament_checkins.verified_method`에 'self' 값만 추가) 선수가 자기 폰으로 스스로 체크인하게 만들었다. 순수 함수 엔진 `checkin.js` 신설 — `getCheckinWindow(tournament, now)`는 대회 date/status로 셀프 체크인 창을 판정한다(status가 in_progress면 지각 포함 언제나 open, 그 외엔 로컬 날짜가 대회 당일이면 open·이전이면 before·이후면 ended, completed/cancelled는 ended). `assessSelfCheckin(profile)`은 실명인증(identity_verified) 선수는 본인확인까지 무인 완료로, 미인증 선수는 "현장 본인확인 권장"으로 분류해 대리출전 예외만 사람에게 남긴다. `summarizeCheckins(players, checkins)`는 done/self/flagged/reviewNeeded 집계, `selfCheckin`(upsert method='self')·`fetchMyCheckins`(대회 다건 배치 조회, 테이블 미존재 시 try/catch degrade) Supabase 헬퍼 포함. 선수 MyMatches 상단에 "체크인 · 디지털 선수증" 섹션 추가 — 참가 확정(approved) 대회를 대회 단위로 묶어(중복 종목 1장) 카드로 보여주고(실명/닉네임·실명인증 배지·종목·장소·날짜), 창이 열려 있으면 원터치 "지금 셀프 체크인" 버튼(누르면 낙관적으로 즉시 완료 반영)·미인증 안내, 완료 시 초록 확정 카드+체크인 시각, 아직 전이면 "대회 당일 오전부터" 안내. 종료/마감 대회는 카드에서 자동 숨김. 주최자 LiveDashboard 체크인 패널은 `tournament_checkins`를 대회 id로 실시간 구독해 선수가 폰으로 체크인하는 즉시 무인으로 목록·요약이 갱신되고, 상단에 "완료 N/전체 · 셀프 K · 본인확인 권장 · 신고" 요약 카드, 각 선수 행에는 "셀프 완료" 배지와 셀프+미인증인 경우 "본인확인 권장" 배지를 달아 예외만 눈에 띄게 했다. 안내 문구도 "폰으로 셀프 체크인하면 자동 표시, 본인확인 권장만 현장 확인"으로 갱신. 엔진 7개 시나리오 자체 검증 통과, `npx vite build` green.
+
 ## 2026-07-09 — [C2] 대회 상태 오케스트레이션 — 자동 마감·시작 + 무인 참가 승인
 
 - **C2 자동 마감/시작 상태머신 + 정상 신청 자동 승인 (필수/대, 주최자 완주 최대 공백)**
