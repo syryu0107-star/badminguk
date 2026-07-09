@@ -154,10 +154,16 @@ export function calculatePoolStandings(poolEntries, matches) {
     pointDiff: s.pointsFor - s.pointsAgainst,
   }))
 
+  // 승자승은 정확히 2팀 동률일 때만 적용 (3자 이상 물림은 순환이라 득실차로 — 대회 관행)
+  const winCounts = {}
+  for (const s of list) winCounts[s.wins] = (winCounts[s.wins] ?? 0) + 1
+
   list.sort((a, b) => {
     if (b.wins !== a.wins) return b.wins - a.wins
-    const h2h = _h2hResult(a.entryId, b.entryId, relevant)
-    if (h2h !== 0) return h2h
+    if (winCounts[a.wins] === 2) {
+      const h2h = _h2hResult(a.entryId, b.entryId, relevant)
+      if (h2h !== 0) return h2h
+    }
     if (b.gameDiff !== a.gameDiff) return b.gameDiff - a.gameDiff
     return b.pointDiff - a.pointDiff
   })
@@ -269,13 +275,16 @@ export function generateKnockoutBracket(advancements, seed) {
 }
 
 function _interleaveByPool(direct, wildcards, seed) {
+  // rank가 빠진 항목이 조용히 누락되지 않게 기본값 1
   const sorted = [...direct].sort((a, b) =>
-    a.rank !== b.rank ? a.rank - b.rank : (a.poolIndex ?? 0) - (b.poolIndex ?? 0)
+    (a.rank ?? 1) !== (b.rank ?? 1)
+      ? (a.rank ?? 1) - (b.rank ?? 1)
+      : (a.poolIndex ?? 0) - (b.poolIndex ?? 0)
   )
-  const maxRank = sorted.length ? sorted[sorted.length - 1].rank : 0
+  const maxRank = sorted.length ? (sorted[sorted.length - 1].rank ?? 1) : 0
   const seeded = []
   for (let rank = 1; rank <= maxRank; rank++) {
-    const group = sorted.filter(t => t.rank === rank)
+    const group = sorted.filter(t => (t.rank ?? 1) === rank)
     seeded.push(...seededShuffle(group, `${seed ?? 'bdm'}-r${rank}`))
   }
   seeded.push(...wildcards)
