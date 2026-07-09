@@ -20,14 +20,22 @@ export default function OrganizerDashboard() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
-      const { data } = await supabase
-        .from('tournaments')
-        .select('*, categories:tournament_categories(count), entries:tournament_entries(count)')
-        .eq('organizer_id', user.id)
-        .order('created_at', { ascending: false })
-      setTournaments(data ?? [])
-      setLoading(false)
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        let q = supabase
+          .from('tournaments')
+          .select('*, categories:tournament_categories(count), entries:tournament_entries(count)')
+          .order('created_at', { ascending: false })
+        // 로그인 상태면 내 대회만, 비로그인(테스트 모드)이면 전체를 데모로 표시
+        if (user?.id) q = q.eq('organizer_id', user.id)
+        const { data } = await q
+        setTournaments(data ?? [])
+      } catch (e) {
+        console.error('[배드민국] 대회 목록 로딩 실패', e)
+        setTournaments([])
+      } finally {
+        setLoading(false)
+      }
     }
     load()
   }, [])
