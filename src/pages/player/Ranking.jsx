@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { getGradeInfo } from '../../lib/grades'
+import { calcReliability, isRanked, MIN_RANKED_GAMES } from '../../lib/reliability'
 import BottomNav from '../../components/BottomNav'
 import GradeChip from '../../components/GradeChip'
+import ReliabilityBadge from '../../components/ReliabilityBadge'
 import Spinner from '../../components/Spinner'
 import { TrendingUp, Medal } from 'lucide-react'
 
@@ -16,6 +18,7 @@ const RANK_COLORS = [
 
 export default function Ranking() {
   const [players, setPlayers]   = useState([])
+  const [provisional, setProvisional] = useState([])
   const [myRank, setMyRank]     = useState(null)
   const [myProfile, setMyProfile] = useState(null)
   const [loading, setLoading]   = useState(true)
@@ -59,7 +62,37 @@ export default function Ranking() {
     }
 
     const { data } = await query
-    setPlayers(data ?? [])
+    const rows = data ?? []
+
+    // ── 레이팅 신뢰도 계산 (4-5) + 정식/잠정 분리 (4-13) ──
+    const gameMode = gameTab === 'singles' ? 'singles' : 'doubles'
+    let historyByPlayer = {}
+    if (rows.length) {
+      const { data: hist } = await supabase
+        .from('mmr_history')
+        .select('player_id, created_at, cert_level, tournament_id, game_mode')
+        .in('player_id', rows.map(p => p.id))
+        .eq('game_mode', gameMode)
+        .order('created_at', { ascending: false })
+        .limit(2000)
+      for (const h of hist ?? []) {
+        (historyByPlayer[h.player_id] ??= []).push(h)
+      }
+    }
+
+    const withReliability = rows.map(p => {
+      const rel = calcReliability({
+        gamesPlayed: p[gamesCol] ?? 0,
+        history: historyByPlayer[p.id] ?? [],
+      })
+      return { ...p, reliability: rel, _games: p[gamesCol] ?? 0 }
+    })
+
+    // 정식 등재(경기 수·신뢰도 충족)만 순위 매김, 나머지는 잠정 섹션
+    const ranked  = withReliability.filter(p => isRanked(p._games, p.reliability.score))
+    const pending = withReliability.filter(p => !isRanked(p._games, p.reliability.score))
+    setPlayers(ranked)
+    setProvisional(pending)
 
     // 내 순위 계산
     if (meProfile) {
@@ -148,7 +181,7 @@ export default function Ranking() {
       <div className="px-4 mt-4 pb-24">
         {loading ? (
           <div className="flex justify-center py-16"><Spinner size={32} /></div>
-        ) : players.length === 0 ? (
+        ) : players.length === 0 && provisional.length === 0 ? (
           <div className="text-center py-16 text-gray-400">
             <p className="text-3xl mb-2">🏸</p>
             <p className="text-sm">랭킹 데이터가 없습니다.<br/>첫 공인 대회에 참가해보세요!</p>
@@ -191,7 +224,10 @@ export default function Ranking() {
                       </p>
                       <GradeChip grade={p[gradeKey]} size="sm" />
                     </div>
-                    <p className="text-xs text-gray-400">{p[gamesKey] ?? 0}경기</p>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-xs text-gray-400">{p[gamesKey] ?? 0}경기</p>
+                      <ReliabilityBadge result={p.reliability} size="sm" />
+                    </div>
                   </div>
 
                   {/* MMR */}
@@ -202,6 +238,51 @@ export default function Ranking() {
                 </div>
               )
             })}
+
+            {/* ── 잠정 (검증 중) 섹션 — 4-13 리더보드 등재 최소 요건 ── */}
+            {provisional.length > 0 && (
+              <div className="pt-4">
+                <div className="flex items-center gap-2 mb-2 px-1">
+                  <span className="text-xs font-bold text-gray-500">잠정 (검증 중)</span>
+                  <span className="text-[10px] text-gray-400">
+                    · 최소 {MIN_RANKED_GAMES}경기 이상, 신뢰도 확보 시 정식 랭킹 등재
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {provisional.map(p => {
+                    const isMe = myProfile?.id === p.id
+                    const gradeInfo = getGradeInfo(p[gradeKey])
+                    return (
+                      <div key={p.id}
+                        className={`rounded-2xl border border-dashed px-4 py-3 flex items-center gap-3
+                          ${isMe ? 'bg-[#C60C30]/5 border-[#C60C30]/30' : 'bg-gray-50/60 border-gray-200'}`}
+                      >
+                        <div className="w-8 text-center shrink-0 text-sm font-black text-gray-300">–</div>
+                        <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-lg shrink-0 opacity-70">
+                          {gradeInfo?.flair ?? '🏸'}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className={`font-bold text-sm truncate ${isMe ? 'text-[#C60C30]' : 'text-gray-600'}`}>
+                              {p.name} {isMe && '(나)'}
+                            </p>
+                            <GradeChip grade={p[gradeKey]} size="sm" />
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-xs text-gray-400">{p[gamesKey] ?? 0}경기</p>
+                            <ReliabilityBadge result={p.reliability} size="sm" />
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="font-black text-gray-400 tabular-nums">{(p[mmrKey] ?? 1000).toLocaleString()}</p>
+                          <p className="text-[10px] text-gray-300">MMR</p>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

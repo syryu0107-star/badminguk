@@ -3,8 +3,10 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { getGradeInfo, getMMRPercentile, GRADES } from '../../lib/grades'
 import { CERT_LEVELS } from '../../lib/mmr'
+import { calcReliability, MIN_RANKED_GAMES, MIN_RANKED_RELIABILITY, isRanked } from '../../lib/reliability'
 import BottomNav from '../../components/BottomNav'
 import GradeChip from '../../components/GradeChip'
+import ReliabilityBadge from '../../components/ReliabilityBadge'
 import Spinner from '../../components/Spinner'
 import { LogOut, Upload, Award, Shield, TrendingUp, TrendingDown } from 'lucide-react'
 
@@ -113,6 +115,11 @@ export default function Profile() {
   const losses      = history.filter(h => h.delta < 0).length
   const winRate     = gamesPlayed > 0 ? Math.round((wins / gamesPlayed) * 100) : 0
 
+  // 레이팅 신뢰도 (4-5) — 복식 기록 기준
+  const doublesHistory = history.filter(h => (h.game_mode ?? 'doubles') === 'doubles')
+  const reliability = calcReliability({ gamesPlayed, history: doublesHistory })
+  const ranked = isRanked(gamesPlayed, reliability.score)
+
   return (
     <div className="safe-bottom">
       {/* 헤더 */}
@@ -199,6 +206,49 @@ export default function Profile() {
       {/* MMR 기록 탭 */}
       {tab === 'mmr' && (
         <section className="px-4 py-4">
+          {/* 레이팅 신뢰도 카드 (4-5) */}
+          <div className="bg-white rounded-2xl border border-gray-100 p-4 mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <p className="font-bold text-sm">레이팅 신뢰도</p>
+                <p className="text-xs text-gray-400">이 MMR이 실력을 얼마나 반영하는지</p>
+              </div>
+              <ReliabilityBadge result={reliability} size="md" />
+            </div>
+            {/* 신뢰도 게이지 */}
+            <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${
+                  reliability.tier.color === 'emerald' ? 'bg-emerald-500'
+                  : reliability.tier.color === 'amber' ? 'bg-amber-400'
+                  : 'bg-gray-300'}`}
+                style={{ width: `${reliability.score}%` }}
+              />
+            </div>
+            {/* 구성 요소 */}
+            <div className="grid grid-cols-4 gap-1 mt-3 text-center">
+              {[
+                { label: '경기량', v: reliability.volume },
+                { label: '최근성', v: reliability.recency },
+                { label: '다양성', v: reliability.diversity },
+                { label: '검증도', v: reliability.verified },
+              ].map(c => (
+                <div key={c.label}>
+                  <p className="text-[10px] text-gray-400">{c.label}</p>
+                  <p className="text-xs font-bold tabular-nums text-gray-600">{Math.round(c.v * 100)}%</p>
+                </div>
+              ))}
+            </div>
+            {!ranked && (
+              <p className="mt-3 text-[11px] text-amber-600 bg-amber-50 rounded-lg px-2.5 py-1.5 leading-relaxed">
+                아직 <strong>잠정</strong> 상태입니다. 최소 {MIN_RANKED_GAMES}경기 이상 + 신뢰도 {MIN_RANKED_RELIABILITY}% 이상이면
+                전국 랭킹에 정식 등재됩니다.
+                {reliability.daysSinceLast != null && reliability.daysSinceLast > 60 &&
+                  ` (마지막 경기 ${reliability.daysSinceLast}일 전 — 최근 경기가 신뢰도를 높입니다)`}
+              </p>
+            )}
+          </div>
+
           {history.length === 0 ? (
             <div className="text-center py-12 text-gray-400 text-sm">
               아직 공인 대회 기록이 없습니다.
