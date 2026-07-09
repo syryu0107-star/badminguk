@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { Monitor, Clock, RefreshCw, Maximize, Minimize, ChevronRight } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import ConnectionStatus from '../../components/ConnectionStatus';
+import { useOnline } from '../../lib/useOnline';
 
 /* ══════════════════════════════════════════════════════════════
    체육관 프로젝터용 코트 현황판 (어두운 배경 · 고대비 · 전체화면)
@@ -280,11 +282,16 @@ export default function CourtView() {
   const [loading, setLoading] = useState(true);
   const [refreshAt, setRefreshAt] = useState(null);
   const [isFull, setIsFull] = useState(false);
+  const [rtState, setRtState] = useState('connecting'); // 실시간 채널 상태 (7-6)
   const [, setTick] = useState(0); // 경과 시간 갱신용
 
   const rootRef = useRef(null);
   const catIdsRef = useRef(new Set());
   const matchIdsRef = useRef(new Set());
+  const hadDropRef = useRef(false); // 실시간 끊김 이력 → 재연결 시 전체 재조회 (7-3)
+
+  // 오프라인→온라인 복귀 시 즉시 전체 재조회
+  const online = useOnline(() => fetchData());
 
   /* ── 조회: matches에 tournament_id가 없으므로 category 경유 ── */
   const fetchData = useCallback(async () => {
@@ -408,7 +415,16 @@ export default function CourtView() {
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        // 실시간 재연결 보강 (7-3): 끊겼다 다시 연결되면 놓친 이벤트를 전체 재조회로 복구
+        if (status === 'SUBSCRIBED') {
+          setRtState('connected');
+          if (hadDropRef.current) { hadDropRef.current = false; fetchData(); }
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          setRtState('connecting');
+          hadDropRef.current = true;
+        }
+      });
     return () => { supabase.removeChannel(channel); };
   }, [tournamentId, fetchData]);
 
@@ -654,7 +670,10 @@ export default function CourtView() {
           color: T.sub,
           flexShrink: 0,
         }}>
-          <span>실시간 연동 중 · 15초마다 자동 새로고침</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <ConnectionStatus online={online} live={online ? rtState === 'connected' : null} dark />
+            <span>15초마다 자동 새로고침</span>
+          </span>
           {refreshAt && (
             <span>
               마지막 갱신: {refreshAt.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}

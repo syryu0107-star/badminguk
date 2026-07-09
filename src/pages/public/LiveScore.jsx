@@ -3,6 +3,8 @@ import { useParams } from 'react-router-dom';
 import { Clock, MapPin, Wifi, Trophy, RefreshCw, ListOrdered } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { calculatePoolStandings } from '../../lib/tournament';
+import ConnectionStatus from '../../components/ConnectionStatus';
+import { useOnline } from '../../lib/useOnline';
 
 /* ── 상수 ──────────────────────────────────────────────── */
 const DONE_STATUSES = ['completed', 'forfeited', 'bye'];
@@ -264,10 +266,15 @@ export default function LiveScore() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(null);
+  const [rtState, setRtState] = useState('connecting'); // 실시간 채널 상태 (7-6)
 
   // 실시간 콜백에서 최신 목록을 참조하기 위한 ref
   const catIdsRef = useRef(new Set());
   const matchIdsRef = useRef(new Set());
+  const hadDropRef = useRef(false); // 실시간 끊김 이력 → 재연결 시 전체 재조회 (7-3)
+
+  // 오프라인→온라인 복귀 시 즉시 전체 재조회
+  const online = useOnline(() => loadData());
 
   const loadData = useCallback(async () => {
     try {
@@ -428,7 +435,16 @@ export default function LiveScore() {
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        // 실시간 재연결 보강 (7-3): 끊겼다 다시 연결되면 그 사이 놓친 이벤트를 전체 재조회로 복구
+        if (status === 'SUBSCRIBED') {
+          setRtState('connected');
+          if (hadDropRef.current) { hadDropRef.current = false; loadData(); }
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          setRtState('connecting');
+          hadDropRef.current = true;
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);
@@ -553,11 +569,10 @@ export default function LiveScore() {
             </button>
           </div>
 
-          {lastRefresh && (
-            <p className="text-white/50 text-xs mt-2">
-              갱신: {lastRefresh.toLocaleTimeString('ko-KR')} · 실시간 + 30초 자동 갱신
-            </p>
-          )}
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            <ConnectionStatus online={online} live={online ? rtState === 'connected' : null} lastSync={lastRefresh} dark />
+            <span className="text-white/50 text-xs">실시간 + 30초 자동 갱신</span>
+          </div>
         </div>
 
         {/* 종목 탭 */}

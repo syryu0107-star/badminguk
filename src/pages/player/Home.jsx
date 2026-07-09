@@ -6,6 +6,7 @@ import BottomNav from '../../components/BottomNav'
 import GradeChip from '../../components/GradeChip'
 import TournamentCard from '../../components/TournamentCard'
 import Spinner from '../../components/Spinner'
+import InstallPrompt from '../../components/InstallPrompt'
 import { Bell, ChevronRight, TrendingUp, TrendingDown, Award } from 'lucide-react'
 
 export default function Home() {
@@ -190,6 +191,7 @@ export default function Home() {
       </section>
 
       <BottomNav mode="player" />
+      <InstallPrompt />
     </div>
   )
 }

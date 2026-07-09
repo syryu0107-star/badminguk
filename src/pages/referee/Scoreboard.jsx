@@ -15,6 +15,8 @@ import {
 } from '../../lib/bwf'
 import { completeMatch } from '../../lib/advance'
 import Spinner from '../../components/Spinner'
+import ConnectionStatus from '../../components/ConnectionStatus'
+import { useOnline } from '../../lib/useOnline'
 import { ChevronLeft, Undo2, Flag, AlertTriangle, Trophy, Play } from 'lucide-react'
 
 const RED = '#C60C30'
@@ -49,6 +51,8 @@ export default function Scoreboard() {
   const [saving, setSaving] = useState(false)
   const [firstServer, setFirstServer] = useState(1) // 경기 시작 전 첫 서브 팀 선택
   const [forfeitInfo, setForfeitInfo] = useState(null) // { team, type, reason }
+
+  const online = useOnline() // 네트워크 상태 상시 표시 (7-6)
 
   const stateRef = useRef(null)
   const eventsRef = useRef([])
@@ -389,6 +393,7 @@ export default function Scoreboard() {
             {state.finished ? '경기 끝' : `${state.gameNo}번째 게임 · ${config.pointsPerGame}점제`}
           </span>
         )}
+        <ConnectionStatus online={online} live={null} dark />
         {syncError && (
           <span className="text-[11px] font-bold px-2 py-1 rounded-full bg-amber-500/20 text-amber-300 flex items-center gap-1">
             <AlertTriangle size={11} /> 저장 실패 있음

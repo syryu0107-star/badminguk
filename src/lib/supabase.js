@@ -13,4 +13,9 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     autoRefreshToken: true,
     detectSessionInUrl: true,
   },
+  // 실시간 신뢰성 보강 (로드맵 7-3): heartbeat 주기를 줄여 백그라운드 태블릿의
+  // 연결 끊김을 더 빨리 감지 → 화면의 재연결 표시·전체 재조회가 빠르게 동작.
+  realtime: {
+    heartbeatIntervalMs: 15000,
+  },
 })
