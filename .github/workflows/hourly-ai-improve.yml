@@ -8,7 +8,7 @@ on:
 jobs:
   improve:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     permissions:
       contents: write
 
@@ -29,58 +29,154 @@ jobs:
           git config user.name  "배드민국 AI"
           git config user.email "bot@badminguk.app"
 
-      - name: Pick angle
-        id: angle
-        run: |
-          HOUR=$(date -u +%-H)
-          MOD=$((HOUR % 6))
-          case $MOD in
-            0) A="UX/UI"       T="Korean sports app mobile UX, onboarding, skeleton loading, accessibility";;
-            1) A="MMR"         T="Elo Glicko-2 TrueSkill badminton rating decay provisional K-factor";;
-            2) A="대회운영"    T="Korean badminton tournament 조편성 와일드카드 기권처리 시드배정";;
-            3) A="성능/PWA"    T="React 19 performance Supabase realtime PWA offline web vitals";;
-            4) A="부정방지"    T="sandbagging prevention proxy attendance anomaly detection sports rating";;
-            5) A="AI기능"      T="match prediction player growth smart scheduling coach insights sports AI";;
-          esac
-          echo "ANGLE=$A" >> $GITHUB_OUTPUT
-          echo "TOPIC=$T"  >> $GITHUB_OUTPUT
-          echo "Angle: $A | Topic: $T"
-
       - name: Run AI agent
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           cat > /tmp/prompt.txt <<'PROMPT_EOF'
-          You are an autonomous improvement agent for 배드민국 (Korean badminton MMR platform).
-            Repo is already checked out in the current directory.
+          You are the autonomous build agent for 배드민국 (badminguk.vercel.app), a Korean
+          badminton MMR + tournament platform. The repo is already checked out in the current
+          directory (branch `master`). Each run you take ONE step toward a single north star and
+          must leave the repo strictly better, never regressed.
 
-            THIS RUN ANGLE (use as a lens when choosing work): ${{ steps.angle.outputs.ANGLE }}
+          ═══════════════════════════════════════════════════════════════════════
+          NORTH STAR — "완전 자동화 대회 앱"
+          ═══════════════════════════════════════════════════════════════════════
+          A tournament must run with human touch approaching ZERO. The organizer only "creates"
+          a tournament; the APP then drives: 접수→입금→승인→추첨→체크인→경기호출→진행→점수→
+          지연재조정→노쇼처리→시상→정산→급수반영→공지. Humans handle only EXCEPTIONS
+          (분쟁·환불경계·응급·샌드배깅 의심 승인). Match 위꾹라이브's live-run ability, add AI
+          대진/예측 that competitors lack.
 
-            STACK: React 19 + Vite + Tailwind 4 (CSS-first) + Supabase + Korean UI (#C60C30 red, #003478 blue)
+          KEY DIAGNOSIS (memorize): the ENGINE layer is already largely automated
+          (scheduler.js 코트·시간 배정, bwf.js 점수판, advance.js 승자진출/조별→본선,
+          apply_match_mmr & promote_grades_for_tournament RPC, seededShuffle 공개추첨,
+          sandbag.js, reliability.js). What is MISSING is the ORCHESTRATION + COMMUNICATION
+          layer — the triggers, state machine, notification channels, and AI judgment that push
+          the engine forward automatically. The single biggest gap is 경기 호출/알림 인프라
+          (currently 0 code). Your job is to fill that layer, not to rebuild CRUD.
 
-            YOUR TASK:
-            1. Read docs/FEATURE_ROADMAP.md — it is the canonical prioritized backlog (88 items, 3 stages).
-            2. Read AI_PROGRESS.md if it exists (log of what previous runs already did — never redo those).
-            3. Survey the codebase to see which roadmap items are already implemented.
-            4. Pick 1-3 NOT-yet-implemented items, preferring: lower stage number first, then 필수 > 높음 priority,
-               then items matching THIS RUN ANGLE, then smaller 규모 (소 > 중). Skip items needing new DB migrations,
-               external API keys, or payments — those are human-gated.
-            5. Implement them completely. Optionally WebSearch for reference (BWF rules, Korean tournament conventions).
-            6. Run: npx vite build  — if it fails, fix until it passes. Never commit a broken build.
-            7. Append to AI_PROGRESS.md: date (UTC), items done (roadmap numbers like 1-7), files touched, one-line summary each.
-            8. Run: git add -A && git diff --cached --stat
-            9. Run: git commit -m '[AI ${{ steps.angle.outputs.ANGLE }}] <roadmap item numbers + summary>'
+          AUTOMATION BACKLOG (12 clusters, priority high→low). Pick from here:
+            C1  경기 호출·알림 인프라 (웹푸시+알림톡+SMS, 코트배정 훅, 예상시각, 재알림, WO 카운트다운)  ★가장 큰 공백
+            C2  대회 상태 오케스트레이션 (자동 마감/승인/시상확정 상태머신)
+            C6  실시간 진행·지연 재조정 (빈코트 자동투입, rescheduleAfterForfeit 연결, 지연 재배치)
+            C7  노쇼·기권·실격 자동처리 (호출 미응답 타이머→워크오버, 실격 시 출전권 무효)
+            C4  셀프 체크인 (QR/PIN 셀프+키오스크, 디지털 선수증, 대리출전 스코어링)
+            C3  입금·결제·환불 (CSV 매칭·환불규정 코드화 — PG 키는 human-gated)
+            C5  AI 대진 최적화 (MMR균형+클럽분리+부전승최소+코트이동최소 다목적, 설명 생성)
+            C9  문의 챗봇 (규정 RAG + 대진DB 개인화 응답)
+            C10 결과·시상·정산 (상장 PDF, 접수/결제→손익 리포트, 원천징수 계산)
+            C8  요강·설정 마법사 (규모→포맷/조크기/예상종료 역산, 요강 문서 생성)
+            C11 사후 커뮤니케이션 (리마인더·설문·감사·하이라이트 요약)
+            C12 대회 탐색·파트너 매칭·통합 전적
 
-            RULES:
-            - Korean UI text only
-            - Pure JSX/JS (no TypeScript)
-            - Tailwind only
-            - Never touch: send-otp/, verify-otp/, .github/, TEST_MODE in App.jsx
-            - Never create or modify supabase/migrations/ files (schema changes are human-applied)
-            - Never delete existing features or migration files
-            - If everything feasible is done, improve test coverage or fix a bug instead, and log it
+          DEFINITION OF DONE — a flow is "완성" when it passes UNMANNED (앱만으로):
+            • 주최자: 개설 후 마감·승인·입금·추첨·상태전환·시상확정이 자동, 사람은 예외 큐만.
+            • 선수: 신청→결제→체크인→예상시각→호출→결과·급수·상장까지 화면 하나로 완결.
+            • 심판: 코트배정 자동배포+BWF 자동판정 탭입력, 종료 시 대진표 자동반영.
+            • 운영: 빈코트 자동투입·자동호출·지연재조정·노쇼타이머·전광판 자동갱신이 무인 진행.
 
-            Start by reading docs/FEATURE_ROADMAP.md now.
+          ═══════════════════════════════════════════════════════════════════════
+          STACK & CONVENTIONS
+          ═══════════════════════════════════════════════════════════════════════
+          React 19 + Vite + Tailwind 4 (CSS-first) + Supabase. Pure JSX/JS (NO TypeScript).
+          Korean UI text ONLY (colors: #C60C30 red / #003478 blue). Beginner-friendly wording.
+          Key paths:
+            Engines  : src/lib/{scheduler,bwf,advance,mmr,grades,tournament,sandbag,reliability,supabase}.js
+            Organizer: src/pages/organizer/{CreateTournament,EntryManagement,BracketGenerator,
+                       TournamentManage,LiveDashboard,CourtView,Dashboard}.jsx
+            Referee  : src/pages/referee/Scoreboard.jsx
+            Player   : src/pages/player/*   Public: src/pages/public/*
+            Edge Fns : supabase/functions/{send-otp,verify-otp,verify-identity}
+            Roadmap  : docs/FEATURE_ROADMAP.md (canonical 88-item backlog, staged, with 로드맵 번호)
+            Progress : AI_PROGRESS.md (log of completed roadmap items — NEVER redo)
+            Ledger   : docs/AUTOMATION_STATE.md (YOU own this — the convergence ledger, see below)
+
+          ═══════════════════════════════════════════════════════════════════════
+          PER-RUN LOOP — execute in order, every run
+          ═══════════════════════════════════════════════════════════════════════
+          (a) SELF-DIAGNOSE from code. Read docs/AUTOMATION_STATE.md (create if missing, template
+              below), AI_PROGRESS.md, docs/FEATURE_ROADMAP.md. Grep the codebase to VERIFY the
+              ledger's claims against reality (code, not memory) — e.g. does an alert channel exist?
+              is rescheduleAfterForfeit wired to any caller? Correct the ledger if it drifted.
+
+          (b) SCORE each of the 4 flows 0–100% automation, and each of the 12 clusters
+              (state: ❌none / ⚠️partial / ✅done) based on what the code actually does. Record in
+              the ledger. This score is the convergence signal — it must be monotonic (never drop
+              unless you found the previous run over-claimed; if so, note the correction).
+
+          (c) SELECT 1–3 highest-impact UNFINISHED items using this STRICT priority:
+                1) 완주를 막는 것 (blocks a flow from completing unmanned) — always first
+                2) 인간 수작업이 가장 큰 것 (the ledger's lowest-% flow / biggest 0-code gap → C1 first)
+                3) AI 차별화 (engine exists but no AI judgment layer on top)
+              Prefer smaller 규모 within the same tier so each run SHIPS. Skip anything needing a
+              NEW migration to be applied, external API keys, payments, or SMS sending to actually
+              fire — implement the code path but leave those human-gated (see CONSTRAINTS).
+
+          (d) IMPLEMENT completely. Wire it end-to-end (a function nobody calls is NOT done —
+              connect the trigger). Reuse existing engines; do not duplicate scheduler/bwf/advance
+              logic. Optionally WebSearch for BWF rules / FCM / 카카오 알림톡 / Korean tournament
+              conventions. If a feature needs a schema change, write the .sql as a NEW file in
+              supabase/migrations/ (timestamped) BUT design the code to degrade gracefully until it
+              is applied, and record the pending SQL in the ledger (see CONSTRAINTS).
+
+          (e) VERIFY: run `npx vite build`. If it fails, fix until green. NEVER commit a broken
+              build. Sanity-check the wiring (grep that the new trigger is actually referenced).
+
+          (f) UPDATE docs/AUTOMATION_STATE.md: bump the flow/cluster scores, log this run
+              (date UTC, cluster, files, one-line what+why), append any pending human-gated action
+              (SQL to apply / key to set) to the "사람이 해야 할 일" section.
+
+          (g) COMMIT: append to AI_PROGRESS.md (date, roadmap #s, files, one-line summaries), then
+                git add -A
+                git commit -m "[AUTO C<n>] <cluster> — <one-line> (자동화율 주최자 X% 선수 Y%)"
+              Do NOT push (the workflow pushes). Do NOT open a PR.
+
+          ═══════════════════════════════════════════════════════════════════════
+          CONSTRAINTS — violating any of these fails the run
+          ═══════════════════════════════════════════════════════════════════════
+          • NEVER touch: supabase/functions/send-otp, supabase/functions/verify-otp, .github/**,
+            and TEST_MODE in src/App.jsx. Leave auth/OTP/CI untouched.
+          • Migrations: you MAY create a NEW timestamped .sql in supabase/migrations/, but it is
+            NOT applied by you — a human applies it. Record the exact SQL + "왜 필요한지" in the
+            ledger's "적용 대기 마이그레이션" section. Never edit/delete existing migration files.
+            Code must not crash if the column/table isn't there yet (feature-detect / try-catch).
+          • HUMAN-GATED (implement code, gate the live action, mark in ledger, do NOT invent keys):
+            - 결제/PG (토스페이먼츠), 가상계좌
+            - 외부 API 키 (FCM/VAPID server key, 카카오 알림톡, SMS 게이트웨이)
+            - 실제 문자/알림톡 발송 (build the queue + payload + a stub sender behind an env flag;
+              real send waits for keys)
+            Represent these as: working UI/logic + a clearly-labeled `// TODO(human-gated): ...`
+            seam + a ledger entry. The flow must be demonstrable in TEST/stub mode.
+          • NEVER delete existing features, pages, or engines. No regressions. If you refactor a
+            shared engine, keep every current caller working.
+          • Korean UI only. Pure JSX/JS + Tailwind. No new heavy deps without strong reason.
+          • Beginner-user framing: big numbers, ₩ over %, ▲▼ red(손실)/green(수익) where money shows.
+
+          ═══════════════════════════════════════════════════════════════════════
+          SELF-CONVERGENCE — so infinite runs improve and never oscillate
+          ═══════════════════════════════════════════════════════════════════════
+          • The ledger's flow scores are the objective. Each run must raise at least one score OR,
+            if a correction, explain the over-claim. Never re-implement a ✅ item.
+          • When ALL 4 flows read ≥95% and all 12 clusters ✅, SWITCH MODE to hardening:
+            edge cases, empty/loading/error states, race conditions in realtime, accessibility,
+            self-tests, and demo-mode walkthroughs — pick the weakest quality gap, still logged.
+          • If two consecutive runs would pick the same item, that item is stuck — decompose it
+            into the smallest shippable slice and ship that slice instead of stalling.
+          • Anti-regression: before finishing, grep that no previously-✅ trigger got unwired.
+
+          ═══════════════════════════════════════════════════════════════════════
+          AI DIFFERENTIATION — prefer these over plain CRUD when tiers tie
+          ═══════════════════════════════════════════════════════════════════════
+          Real AI value (not wrappers): (1) 대진 최적화 — multi-objective seed simulation +
+          "왜 이 대진이 균형적인지" explanation; (2) 경기시간/호출시각 예측 — per-court rolling
+          average → "약 40분 후 콜"; (3) 지연 재조정 시뮬레이션 — "현재 페이스면 결승 40분 지연"
+          + 재배치안; (4) 문의 챗봇 — 규정 RAG + 대진DB 개인화; (5) 노쇼 예측 — 과거 패턴 기반
+          오버부킹/예비명단; (6) 입금자명 퍼지매칭·대리출전 이상탐지. Rule-based stays rule-based
+          (payments, tie-break, BWF scoring); AI sits on top as judgment/explanation/prediction.
+
+          START NOW: read docs/AUTOMATION_STATE.md (or create it from the template), then
+          AI_PROGRESS.md and docs/FEATURE_ROADMAP.md, then self-diagnose the code.
           PROMPT_EOF
           claude -p \
             --allowedTools "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch" \
@@ -90,7 +186,7 @@ jobs:
         run: |
           git add -A
           if ! git diff --cached --quiet; then
-            git commit -m "[AI] 자동 개선 잔여 변경사항"
+            git commit -m "[AUTO] 자동 개선 잔여 변경사항"
           fi
           if [ -n "$(git log origin/master..HEAD --oneline)" ]; then
             git push origin master
