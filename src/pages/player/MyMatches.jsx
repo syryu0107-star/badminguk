@@ -1,9 +1,10 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
+import { subscribeNotifications, fetchRecentCalls, markCallRead } from '../../lib/notify'
 import BottomNav from '../../components/BottomNav'
 import MatchCard from '../../components/MatchCard'
 import Spinner from '../../components/Spinner'
-import { CalendarDays, Mail, Check, X, Clock } from 'lucide-react'
+import { CalendarDays, Mail, Check, X, Clock, Megaphone } from 'lucide-react'
 
 // ── 다음 경기 하이라이트용 상수·헬퍼 ────────────────────────────
 // 이미 끝난 경기 상태 (다음 경기 후보에서 제외)
@@ -135,6 +136,9 @@ export default function MyMatches() {
   const [nextMatch, setNextMatch] = useState(null) // 다음 경기 하이라이트
   const [loading, setLoading]   = useState(true)
   const [acting, setActing]     = useState(null) // 처리 중인 entry id
+  const [call, setCall]         = useState(null) // 수신한 경기 호출 { court, sport, matchId, notificationId }
+  const myEntryIds     = useRef(new Set())        // 내가 속한 엔트리 id (호출 대상 판정용)
+  const myTournamentIds = useRef([])              // 내가 참가한 대회 id (구독 대상)
 
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -157,6 +161,12 @@ export default function MyMatches() {
       .order('created_at', { ascending: false })
 
     setEntries(es ?? [])
+
+    // ── 호출 수신용: 내 엔트리·대회 id 집합 ───────────────────────
+    myEntryIds.current = new Set((es ?? []).map(e => e.id))
+    myTournamentIds.current = [...new Set(
+      (es ?? []).map(e => e.category?.tournament?.id).filter(Boolean),
+    )]
 
     // ── 경기 일정 (기존 로직 유지) ───────────────────────────────
     const entryIds = (es ?? []).map(e => e.id)
@@ -222,6 +232,40 @@ export default function MyMatches() {
 
   useEffect(() => { load() }, [load])
 
+  // ── 경기 호출 수신: 내 대회 채널 구독 + 놓친 호출 복구 (C1) ─────────
+  useEffect(() => {
+    if (!entries.length) return
+
+    // 방송을 놓쳤어도 앱을 다시 열면 최근 미확인 호출을 복구(테이블 있으면).
+    if (userId) {
+      fetchRecentCalls(userId).then(rows => {
+        const hit = rows[0]
+        if (hit) setCall({
+          court: hit.payload?.court ?? null,
+          sport: hit.payload?.sport ?? null,
+          matchId: hit.match_id,
+          notificationId: hit.id,
+        })
+      })
+    }
+
+    const unsub = subscribeNotifications(myTournamentIds.current, payload => {
+      if (payload?.type !== 'match_call') return
+      // 내 경기인지 판정 (엔트리 교집합)
+      const mine = (payload.entryIds ?? []).some(eid => myEntryIds.current.has(eid))
+      if (!mine) return
+      setCall({ court: payload.court, sport: payload.sport, matchId: payload.matchId })
+      // 진동·알림(있으면). 화면을 보고 있지 않아도 감지되도록.
+      try { if (navigator.vibrate) navigator.vibrate([300, 120, 300]) } catch { /* noop */ }
+    })
+    return unsub
+  }, [entries, userId])
+
+  function dismissCall() {
+    if (call?.notificationId) markCallRead(call.notificationId)
+    setCall(null)
+  }
+
   // ── 파트너 초대 수락 / 거절 ─────────────────────────────────────
   async function respondInvite(entryId, accept) {
     setActing(entryId)
@@ -259,6 +303,31 @@ export default function MyMatches() {
 
   return (
     <div className="safe-bottom">
+      {/* ── 경기 호출 배너 (주최자 호출 시 즉시 표시) ─────────────── */}
+      {call && (
+        <div className="fixed inset-x-0 top-0 z-50 px-3 pt-3 fade-up">
+          <div
+            className="rounded-2xl p-4 text-white shadow-xl flex items-center gap-3 animate-pulse"
+            style={{ background: 'linear-gradient(135deg, #C60C30, #003478)' }}
+            role="alert"
+          >
+            <Megaphone size={26} className="shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-bold text-white/80">경기 호출{call.sport ? ` · ${call.sport}` : ''}</p>
+              <p className="text-lg font-black leading-tight">
+                {call.court != null ? `지금 ${call.court}번 코트로 입장하세요!` : '지금 코트로 입장하세요!'}
+              </p>
+            </div>
+            <button
+              onClick={dismissCall}
+              className="shrink-0 bg-white text-[#C60C30] font-black text-sm px-3 py-2 rounded-xl active:opacity-80"
+            >
+              확인
+            </button>
+          </div>
+        </div>
+      )}
+
       <header
         className="px-5 pt-14 pb-4 text-white"
         style={{ background: 'linear-gradient(135deg, #C60C30, #003478)' }}

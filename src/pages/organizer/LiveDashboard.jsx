@@ -4,9 +4,10 @@ import { supabase } from '../../lib/supabase'
 import { resolveMatchMMR, CERT_LEVELS } from '../../lib/mmr'
 import { calculatePoolStandings, prizeLabel } from '../../lib/tournament'
 import { completeMatch, finalizeTournament, scoresToPairs } from '../../lib/advance'
+import { callMatch } from '../../lib/notify'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
-import { Clock, Shield, UserCheck, Flag, CheckCircle, Gavel, Trophy, ListOrdered } from 'lucide-react'
+import { Clock, Shield, UserCheck, Flag, CheckCircle, Gavel, Trophy, ListOrdered, Megaphone } from 'lucide-react'
 
 function fmt(dt) {
   if (!dt) return '--:--'
@@ -53,6 +54,8 @@ export default function LiveDashboard() {
   const [scoring, setScoring]       = useState(null)
   const [viewMode, setViewMode]     = useState('matches') // 'matches' | 'standings' | 'checkin'
   const [finishing, setFinishing]   = useState(false)
+  const [calling, setCalling]       = useState(null) // 호출 처리 중인 match id
+  const [calledIds, setCalledIds]   = useState({})   // { [matchId]: 마지막 호출 시각(ms) }
 
   // 체크인 상태
   const [entries, setEntries]         = useState([])
@@ -221,6 +224,35 @@ export default function LiveDashboard() {
       status: 'in_progress',
       actual_start: new Date().toISOString(),
     }).eq('id', matchId)
+  }
+
+  // ── 선수 호출: 코트로 입장하라는 알림을 3채널로 팬아웃 (C1) ──────────
+  //   인앱 실시간 방송(즉시) + 지속 저장(감사·재알림·푸시 큐) + 외부발송 스텁.
+  //   재호출(미응답 시)도 같은 버튼으로 반복 가능.
+  async function handleCall(m) {
+    if (calling) return
+    setCalling(m.id)
+    const recipients = [
+      m.team1?.player1?.id, m.team1?.player2?.id,
+      m.team2?.player1?.id, m.team2?.player2?.id,
+    ].filter(Boolean)
+    try {
+      const res = await callMatch({
+        match: m,
+        tournamentId: id,
+        court: m.court_number,
+        sport: activeCatObj?.sport_type,
+        recipients,
+      })
+      setCalledIds(prev => ({ ...prev, [m.id]: Date.now() }))
+      if (!res.persist.persisted && res.persist.reason === 'table_missing') {
+        // 인앱 호출은 나갔지만 이력 저장은 아직(013 미적용). 진행은 막지 않음.
+        console.info('[호출] 실시간 방송 완료 — 이력 저장은 013 마이그레이션 적용 후 활성화')
+      }
+    } catch (e) {
+      alert('호출 중 문제가 생겼어요: ' + e.message)
+    }
+    setCalling(null)
   }
 
   // ── MMR 반영은 이제 completeMatch → apply_match_mmr RPC 단일 진입점이 전담.
@@ -482,6 +514,22 @@ export default function LiveDashboard() {
 
                   {m.status === 'scheduled' && (
                     <div className="space-y-2 mt-3">
+                      {/* 선수 호출 — 코트 입장 알림 (미응답 시 재호출 가능) */}
+                      <button onClick={() => handleCall(m)}
+                        disabled={calling === m.id || !(m.team1_entry_id && m.team2_entry_id)}
+                        className={`w-full py-2.5 rounded-xl text-sm font-bold active:opacity-80
+                          flex items-center justify-center gap-1.5 disabled:opacity-40
+                          ${calledIds[m.id] ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                            : 'bg-[#C60C30] text-white'}`}>
+                        <Megaphone size={14} />
+                        {calling === m.id
+                          ? '호출 중…'
+                          : calledIds[m.id]
+                            ? `호출됨 ${fmt(calledIds[m.id])} · 다시 호출`
+                            : m.court_number != null
+                              ? `${m.court_number}번 코트로 선수 호출`
+                              : '선수 호출 (코트 입장 알림)'}
+                      </button>
                       <div className="flex gap-2">
                         <button onClick={() => startMatch(m.id)}
                           className="flex-1 py-2 rounded-xl bg-[#003478] text-white text-xs font-bold active:opacity-80">

@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-09 — [C1] 경기 호출·알림 인프라 (오케스트레이션 레이어 착수)
+
+- **C1 경기 호출(Match Call) end-to-end — 인앱 실시간 도달 (필수/대, 최우선 공백)**
+  - 파일: `src/lib/notify.js`(신규), `supabase/migrations/013_notifications.sql`(신규), `src/pages/organizer/LiveDashboard.jsx`, `src/pages/player/MyMatches.jsx`
+  - 요약: 지금껏 0건이던 알림 채널을 신설. `notify.js` 엔진이 호출을 3채널로 팬아웃한다 — (1) Supabase Realtime broadcast로 인앱 즉시 도달(스키마 불필요), (2) `notifications` 테이블에 지속 저장(감사·미확인 재알림·푸시 큐, 013 미적용 시 try/catch degrade), (3) 웹푸시/카카오 알림톡/SMS 외부발송은 `VITE_ENABLE_PUSH` 플래그+서버키 뒤의 human-gated 스텁(`dispatchExternal`, `// TODO(human-gated)`). 주최자 실시간 진행 화면(LiveDashboard)의 예정 경기에 "N번 코트로 선수 호출" 버튼을 달아 `callMatch`를 트리거(미응답 시 재호출 반복 가능, 호출 시각 표시). 선수 화면(MyMatches)은 자기 참가 대회 채널을 구독해 자기 경기 호출을 받으면 상단 고정 배너("지금 N번 코트로 입장하세요")+진동을 띄우고, 앱을 닫아 방송을 놓쳤어도 재진입 시 `fetchRecentCalls`로 최근 미확인 호출을 복구, 확인 시 `markCallRead`. 엔트리 교집합으로 수신 대상 정확 판정.
+
 ## 2026-07-09 — [MMR] 레이팅 신뢰도 점수 + 리더보드 등재 최소 요건
 
 - **4-5 레이팅 신뢰도 점수 (DUPR Reliability 방식) (높음/중, 3단계)**
