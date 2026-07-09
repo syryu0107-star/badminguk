@@ -4,13 +4,15 @@ import { supabase } from '../../lib/supabase'
 import TopBar from '../../components/TopBar'
 import GradeChip from '../../components/GradeChip'
 import Spinner from '../../components/Spinner'
-import { Check, X, Clock } from 'lucide-react'
+import { assessSandbag, worseLevel, SANDBAG_STYLE } from '../../lib/sandbag'
+import { Check, X, ShieldAlert, Trophy } from 'lucide-react'
 
 export default function EntryManagement() {
   const { id } = useParams()
   const [categories, setCategories] = useState([])
   const [entries, setEntries]       = useState([])
   const [activeCat, setActiveCat]   = useState(null)
+  const [podium, setPodium]         = useState({}) // playerId → { champ, medal }
   const [loading, setLoading]       = useState(true)
 
   useEffect(() => {
@@ -26,14 +28,37 @@ export default function EntryManagement() {
         .from('tournament_entries')
         .select(`
           *,
-          player1:profiles!player1_id(id,name,official_grade,grade_verified,mmr),
-          player2:profiles!player2_id(id,name,official_grade,grade_verified,mmr)
+          player1:profiles!player1_id(id,name,official_grade,grade_verified,mmr,mmr_games_played),
+          player2:profiles!player2_id(id,name,official_grade,grade_verified,mmr,mmr_games_played)
         `)
         .in('category_id', catIds)
         .order('created_at', { ascending: true })
 
+      // 신청자들의 과거 입상 이력(final_rank≤3) 집계 — 급수↔실적 괴리 심사 근거
+      const ids = new Set()
+      es?.forEach(e => { if (e.player1?.id) ids.add(e.player1.id); if (e.player2?.id) ids.add(e.player2.id) })
+      const map = {}
+      if (ids.size) {
+        const list = [...ids].join(',')
+        const { data: hist } = await supabase
+          .from('tournament_entries')
+          .select('player1_id,player2_id,final_rank')
+          .or(`player1_id.in.(${list}),player2_id.in.(${list})`)
+          .not('final_rank', 'is', null)
+          .lte('final_rank', 3)
+        hist?.forEach(h => {
+          ;[h.player1_id, h.player2_id].forEach(pid => {
+            if (!pid || !ids.has(pid)) return
+            const rec = map[pid] ?? (map[pid] = { champ: 0, medal: 0 })
+            rec.medal += 1
+            if (h.final_rank === 1) rec.champ += 1
+          })
+        })
+      }
+
       setCategories(cats ?? [])
       setEntries(es ?? [])
+      setPodium(map)
       setActiveCat(cats?.[0]?.id ?? null)
       setLoading(false)
     }
@@ -50,6 +75,15 @@ export default function EntryManagement() {
   const catEntries = entries.filter(e => e.category_id === activeCat)
   const approved   = catEntries.filter(e => e.entry_status === 'approved').length
   const activeCatInfo = categories.find(c => c.id === activeCat)
+
+  // 종목별 신청자 샌드배깅 위험 판정
+  function entryRisk(e) {
+    const a1 = assessSandbag(e.player1, activeCatInfo)
+    const a2 = e.player2 ? assessSandbag(e.player2, activeCatInfo) : { level: 'none', reasons: [] }
+    const level = worseLevel(a1.level, a2.level)
+    return { level, a1, a2 }
+  }
+  const flaggedCount = catEntries.filter(e => entryRisk(e).level !== 'none').length
 
   return (
     <div className="safe-bottom">
@@ -77,6 +111,15 @@ export default function EntryManagement() {
         <span className="text-blue-500">{catEntries.length}건 신청</span>
       </div>
 
+      {/* 샌드배깅 심사 요약 */}
+      {flaggedCount > 0 && (
+        <div className="px-4 py-2.5 bg-red-50 flex items-center gap-2 text-sm text-red-700">
+          <ShieldAlert size={15} className="shrink-0" />
+          <span className="font-semibold">급수 사기 의심 {flaggedCount}건</span>
+          <span className="text-red-500 text-xs">— 신고 급수보다 실제 MMR이 높은 신청자입니다. 승인 전 확인하세요.</span>
+        </div>
+      )}
+
       {/* 신청 목록 */}
       <div className="px-4 py-4 space-y-3">
         {catEntries.length === 0 ? (
@@ -86,32 +129,46 @@ export default function EntryManagement() {
           </div>
         ) : catEntries.map(e => {
           const status = e.entry_status
+          const risk = entryRisk(e)
+          const riskStyle = SANDBAG_STYLE[risk.level]
+
+          // 선수 한 줄: 급수·인증·입상이력 + MMR 실측 급수·샌드배깅 배지
+          const playerRow = (p, assess) => {
+            if (!p) return null
+            const pod = podium[p.id]
+            const flagged = assess.level !== 'none'
+            return (
+              <div className="mb-1.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-sm">{p.name}</span>
+                  {p.official_grade && <GradeChip grade={p.official_grade} size="sm" />}
+                  {p.grade_verified
+                    ? <span className="text-xs text-emerald-600">✓ 인증</span>
+                    : <span className="text-xs text-gray-400">미인증</span>}
+                  {pod && (
+                    <span className="text-xs text-amber-600 flex items-center gap-0.5">
+                      <Trophy size={10} /> {pod.champ > 0 ? `우승 ${pod.champ}` : `입상 ${pod.medal}`}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  MMR {p.mmr ?? '-'} · 실측 {assess.impliedGrade} 수준
+                  {flagged && (
+                    <span className={`ml-1.5 font-bold px-1.5 py-0.5 rounded ${SANDBAG_STYLE[assess.level].badge}`}>
+                      {SANDBAG_STYLE[assess.level].label}
+                    </span>
+                  )}
+                </p>
+              </div>
+            )
+          }
+
           return (
-            <div key={e.id} className="bg-white rounded-2xl border border-gray-100 p-4">
+            <div key={e.id} className={`bg-white rounded-2xl border p-4 ${risk.level === 'high' ? 'border-red-200' : 'border-gray-100'}`}>
               <div className="flex items-start justify-between gap-2">
                 <div className="flex-1">
-                  {/* 선수1 */}
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-semibold text-sm">{e.player1?.name ?? '미정'}</span>
-                    {e.player1?.official_grade && (
-                      <GradeChip grade={e.player1.official_grade} size="sm" />
-                    )}
-                    {e.player1?.grade_verified && (
-                      <span className="text-xs text-emerald-600">✓ 인증</span>
-                    )}
-                  </div>
-                  {/* 선수2 */}
-                  {e.player2 && (
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-sm">{e.player2.name}</span>
-                      {e.player2.official_grade && (
-                        <GradeChip grade={e.player2.official_grade} size="sm" />
-                      )}
-                    </div>
-                  )}
-                  <p className="text-xs text-gray-400 mt-1">
-                    MMR: {e.player1?.mmr ?? '-'} {e.player2 ? `/ ${e.player2.mmr}` : ''}
-                  </p>
+                  {playerRow(e.player1, risk.a1)}
+                  {playerRow(e.player2, risk.a2)}
                 </div>
 
                 {/* 상태 / 버튼 */}
@@ -158,6 +215,20 @@ export default function EntryManagement() {
                   )}
                 </div>
               </div>
+
+              {/* 샌드배깅 심사 근거 */}
+              {riskStyle && (
+                <div className={`mt-2.5 rounded-xl px-3 py-2 text-xs ${riskStyle.box}`}>
+                  <div className="flex items-center gap-1 font-bold mb-1">
+                    <ShieldAlert size={12} /> {riskStyle.label}
+                  </div>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    {[...new Set([...risk.a1.reasons, ...risk.a2.reasons])].map((r, i) => (
+                      <li key={i}>{r}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               <p className="text-xs text-gray-300 mt-2">
                 신청: {new Date(e.created_at).toLocaleString('ko-KR')}

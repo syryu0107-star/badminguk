@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { GRADES, getGradeIndex, gradeRangeLabel } from '../../lib/grades'
+import { getGradeFromMMR } from '../../lib/sandbag'
 import { CERT_LEVELS } from '../../lib/mmr'
 import TopBar from '../../components/TopBar'
 import GradeChip from '../../components/GradeChip'
@@ -92,9 +93,33 @@ export default function TournamentDetail() {
 
     let p2id = null
     if (partner.trim()) {
-      const { data: pm } = await supabase
-        .from('profiles').select('id').ilike('name', partner.trim()).single()
-      p2id = pm?.id
+      // 파트너를 이름으로 조회 (동명이인·미가입자 방어)
+      const { data: matches } = await supabase
+        .from('profiles')
+        .select('id,name,official_grade,grade_verified,mmr,mmr_games_played')
+        .ilike('name', partner.trim())
+        .limit(5)
+
+      if (!matches?.length) {
+        setEntryError(`'${partner.trim()}' 회원을 찾을 수 없습니다. 파트너가 먼저 가입해야 신청할 수 있습니다.`)
+        setSubmitting(false); return
+      }
+      if (matches.length > 1) {
+        setEntryError('동명이인이 여러 명입니다. 정확한 파트너를 특정할 수 없어 신청할 수 없습니다.')
+        setSubmitting(false); return
+      }
+      const pm = matches[0]
+      if (pm.id === user.id) {
+        setEntryError('본인을 파트너로 지정할 수 없습니다.')
+        setSubmitting(false); return
+      }
+      // 파트너에게도 동일한 급수·MMR 자격 검사 (반샌드배깅 파트너 구멍 봉합)
+      const pElig = checkEligibility(pm, cat)
+      if (!pElig.ok) {
+        setEntryError(`파트너(${pm.name}) 자격 미달: ${pElig.reason}`)
+        setSubmitting(false); return
+      }
+      p2id = pm.id
     }
 
     const { error } = await supabase.from('tournament_entries').insert({
@@ -150,7 +175,18 @@ export default function TournamentDetail() {
             <p className="text-xs text-gray-400">플랫폼 MMR</p>
             <p className="font-black text-gray-800">{(profile.mmr ?? 1000).toLocaleString()}</p>
           </div>
-          <p className="text-xs text-gray-400 ml-auto">신청 자격 확인에 사용됩니다</p>
+          {(() => {
+            const implied = getGradeFromMMR(profile.mmr)
+            const mismatch = getGradeIndex(implied) > getGradeIndex(profile.official_grade)
+            return (
+              <div className="ml-auto text-right">
+                <p className="text-xs text-gray-400">MMR 실측 수준</p>
+                <p className={`text-sm font-bold ${mismatch ? 'text-amber-600' : 'text-gray-700'}`}>
+                  {implied}{mismatch && ' ⚠'}
+                </p>
+              </div>
+            )
+          })()}
         </div>
       )}
 
