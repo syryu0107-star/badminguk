@@ -283,7 +283,7 @@ export default function LiveScore() {
       // 2) 종목 (표시명은 sport_type — name 컬럼 없음)
       const { data: cats, error: catsErr } = await supabase
         .from('tournament_categories')
-        .select('id, sport_type, tournament_format, games_per_match, points_per_game')
+        .select('id, sport_type, tournament_format, games_per_match, points_per_game, tiebreaker_order')
         .eq('tournament_id', id)
         .order('sport_type');
       if (catsErr) throw catsErr;
@@ -477,7 +477,7 @@ export default function LiveScore() {
           .sort((a, b) => a.set_number - b.set_number)
           .map((s) => [s.team1_score, s.team2_score]),
       }));
-    return { pool, standings: calculatePoolStandings(poolEntries, poolMatches) };
+    return { pool, standings: calculatePoolStandings(poolEntries, poolMatches, activeCat?.tiebreaker_order) };
   });
 
   /* ── 렌더 ─────────────────────────────────────────────── */

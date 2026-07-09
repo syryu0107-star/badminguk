@@ -26,6 +26,8 @@ const CourtView = lazy(() => import('./pages/organizer/CourtView'))
 const LiveScore = lazy(() => import('./pages/public/LiveScore'))
 const RefereeScoreboard = lazy(() => import('./pages/referee/Scoreboard'))
 const Results = lazy(() => import('./pages/player/Results'))
+const Terms = lazy(() => import('./pages/public/Terms'))
+const Privacy = lazy(() => import('./pages/public/Privacy'))
 
 // TEST_MODE=true 이면 로그인 없이 모든 페이지 접근 가능
 const TEST_MODE = true
@@ -85,6 +87,8 @@ export default function App() {
 
         <Route path="/live/:id" element={<LiveScore />} />
         <Route path="/referee/:matchId" element={<Req s={session} p={profile}><RefereeScoreboard /></Req>} />
+        <Route path="/terms" element={<Terms />} />
+        <Route path="/privacy" element={<Privacy />} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

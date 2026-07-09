@@ -192,7 +192,8 @@ export async function seedKnockoutFromPools(supabase, categoryId) {
       }))
     const standings = calculatePoolStandings(
       entryIds.map(id => ({ entryId: id, label: id })),
-      shaped
+      shaped,
+      cat.tiebreaker_order
     )
     return { poolIndex: p.pool_index ?? i, poolName: p.pool_name, standings }
   })
@@ -286,6 +287,11 @@ export async function finalizeRanks(supabase, categoryId) {
     }
   } else {
     // 리그전만 있는 경우: 조별 순위 → 최종 순위
+    const { data: rankCat } = await supabase
+      .from('tournament_categories')
+      .select('tiebreaker_order')
+      .eq('id', categoryId)
+      .single()
     const { data: pools } = await supabase
       .from('tournament_pools')
       .select('*')
@@ -321,7 +327,8 @@ export async function finalizeRanks(supabase, categoryId) {
           team2_entry_id: m.team2_entry_id,
           winner_entry_id: m.winner_entry_id,
           scores: scoresToPairs(m.scores),
-        }))
+        })),
+        rankCat?.tiebreaker_order
       )
       combined.push(...standings)
     }

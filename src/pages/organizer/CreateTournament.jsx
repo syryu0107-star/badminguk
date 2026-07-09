@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { GRADES, SPORT_TYPES } from '../../lib/grades'
 import { CERT_LEVELS } from '../../lib/mmr'
+import { TIEBREAKER_PRESETS } from '../../lib/tournament'
 import TopBar from '../../components/TopBar'
 import { Plus, Trash2, Info, ChevronDown, ChevronUp, Settings } from 'lucide-react'
 
@@ -20,6 +21,7 @@ const DEFAULT_CAT = {
   advancement_per_pool: 2,
   wildcard_count: 0,
   wildcard_criteria: 'score_diff',
+  tiebreaker_order: ['h2h', 'game_diff', 'point_diff', 'points_for'],
   games_per_match: 3,
   points_per_game: 21,
   prize_spots: 3,
@@ -144,6 +146,34 @@ function FormatSection({ cat, idx, updateCat }) {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* B-2: 동률 처리 기준 (조가 있는 포맷만) */}
+      {showPool && (
+        <div>
+          <p className="text-xs font-semibold text-gray-500 mb-2">동점(동률)일 때 순위 기준</p>
+          <div className="space-y-2">
+            {TIEBREAKER_PRESETS.map(opt => {
+              const selected = JSON.stringify(cat.tiebreaker_order) === JSON.stringify(opt.order)
+              return (
+                <button
+                  key={opt.key}
+                  onClick={() => updateCat(idx, 'tiebreaker_order', opt.order)}
+                  className={`w-full py-2.5 px-3 rounded-xl border-2 text-left transition
+                    ${selected ? 'border-[#C60C30] bg-red-50' : 'border-gray-100 bg-gray-50'}`}
+                >
+                  <p className={`text-sm font-bold ${selected ? 'text-[#C60C30]' : 'text-gray-700'}`}>
+                    {opt.label}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-0.5">{opt.sub}</p>
+                </button>
+              )
+            })}
+          </div>
+          <p className="text-[11px] text-gray-400 mt-1.5 px-1">
+            승수가 같은 팀의 순위를 어떤 기준으로 가를지 정합니다. 승자승은 두 팀이 동률일 때만 적용됩니다.
+          </p>
         </div>
       )}
 

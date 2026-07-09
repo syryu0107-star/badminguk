@@ -139,7 +139,7 @@ export default function LiveDashboard() {
     if (!activeCat) return
     setStandingsLoading(true)
 
-    const [{ data: pools }, { data: ms }, { data: ents }] = await Promise.all([
+    const [{ data: pools }, { data: ms }, { data: ents }, { data: catRow }] = await Promise.all([
       supabase.from('tournament_pools').select('*').eq('category_id', activeCat).order('pool_index'),
       supabase.from('tournament_matches')
         .select('id, pool_id, match_phase, status, team1_entry_id, team2_entry_id, winner_entry_id, scores:match_scores(*)')
@@ -147,7 +147,12 @@ export default function LiveDashboard() {
       supabase.from('tournament_entries')
         .select('id, final_rank, pool_rank, player1:profiles!player1_id(name), player2:profiles!player2_id(name)')
         .eq('category_id', activeCat),
+      supabase.from('tournament_categories')
+        .select('tiebreaker_order')
+        .eq('id', activeCat)
+        .single(),
     ])
+    const tiebreakers = catRow?.tiebreaker_order
 
     const entryList = ents ?? []
     const labelOf = eid => {
@@ -179,7 +184,8 @@ export default function LiveDashboard() {
           done: gm.length > 0 && gm.every(m => DONE_STATUSES.includes(m.status)),
           rows: calculatePoolStandings(
             entryIds.map(eid => ({ entryId: eid, label: labelOf(eid) })),
-            gm.map(shapeMatch)
+            gm.map(shapeMatch),
+            tiebreakers
           ),
         }
       })
@@ -195,7 +201,8 @@ export default function LiveDashboard() {
         done: poolMatches.every(m => DONE_STATUSES.includes(m.status)),
         rows: calculatePoolStandings(
           [...ids].map(eid => ({ entryId: eid, label: labelOf(eid) })),
-          poolMatches.map(shapeMatch)
+          poolMatches.map(shapeMatch),
+          tiebreakers
         ),
       }]
     }

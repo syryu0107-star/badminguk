@@ -107,7 +107,31 @@ export function generatePools(entries, poolSize, seed, options = {}) {
 
 // ─── 2. calculatePoolStandings ────────────────────────────────────────────────
 
-export function calculatePoolStandings(poolEntries, matches) {
+// 조별 동률 처리 기준 (대회마다 커스터마이징 — tournament_categories.tiebreaker_order)
+export const DEFAULT_TIEBREAKERS = ['h2h', 'game_diff', 'point_diff', 'points_for']
+
+export const TIEBREAKER_PRESETS = [
+  {
+    key: 'standard',
+    label: '표준 (승자승 우선)',
+    sub: '승자승 → 게임 득실 → 점수 득실 → 다득점',
+    order: ['h2h', 'game_diff', 'point_diff', 'points_for'],
+  },
+  {
+    key: 'score_first',
+    label: '득실 우선',
+    sub: '게임 득실 → 점수 득실 → 승자승 → 다득점',
+    order: ['game_diff', 'point_diff', 'h2h', 'points_for'],
+  },
+  {
+    key: 'points_first',
+    label: '다득점 우선',
+    sub: '다득점 → 점수 득실 → 게임 득실 → 승자승',
+    order: ['points_for', 'point_diff', 'game_diff', 'h2h'],
+  },
+]
+
+export function calculatePoolStandings(poolEntries, matches, tiebreakers = DEFAULT_TIEBREAKERS) {
   const stats = {}
   for (const { entryId, label } of poolEntries) {
     stats[entryId] = {
@@ -154,18 +178,29 @@ export function calculatePoolStandings(poolEntries, matches) {
     pointDiff: s.pointsFor - s.pointsAgainst,
   }))
 
-  // 승자승은 정확히 2팀 동률일 때만 적용 (3자 이상 물림은 순환이라 득실차로 — 대회 관행)
+  // 승자승은 정확히 2팀 동률일 때만 적용 (3자 이상 물림은 순환이라 다음 기준으로 — 대회 관행)
   const winCounts = {}
   for (const s of list) winCounts[s.wins] = (winCounts[s.wins] ?? 0) + 1
 
+  const order = Array.isArray(tiebreakers) && tiebreakers.length ? tiebreakers : DEFAULT_TIEBREAKERS
+
   list.sort((a, b) => {
     if (b.wins !== a.wins) return b.wins - a.wins
-    if (winCounts[a.wins] === 2) {
-      const h2h = _h2hResult(a.entryId, b.entryId, relevant)
-      if (h2h !== 0) return h2h
+    for (const tb of order) {
+      if (tb === 'h2h') {
+        if (winCounts[a.wins] === 2) {
+          const h2h = _h2hResult(a.entryId, b.entryId, relevant)
+          if (h2h !== 0) return h2h
+        }
+      } else if (tb === 'game_diff') {
+        if (b.gameDiff !== a.gameDiff) return b.gameDiff - a.gameDiff
+      } else if (tb === 'point_diff') {
+        if (b.pointDiff !== a.pointDiff) return b.pointDiff - a.pointDiff
+      } else if (tb === 'points_for') {
+        if (b.pointsFor !== a.pointsFor) return b.pointsFor - a.pointsFor
+      }
     }
-    if (b.gameDiff !== a.gameDiff) return b.gameDiff - a.gameDiff
-    return b.pointDiff - a.pointDiff
+    return 0
   })
 
   return list.map((entry, i) => ({ ...entry, rank: i + 1 }))

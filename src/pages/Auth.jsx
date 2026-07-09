@@ -275,7 +275,10 @@ export default function Auth() {
             {loading ? '전송 중...' : '인증 코드 받기'}
           </button>
           <p className="text-xs text-gray-400 text-center mt-4 leading-relaxed">
-            가입 시 서비스 이용약관에 동의하게 됩니다.
+            인증 코드를 받으면{' '}
+            <a href="/terms" target="_blank" rel="noreferrer" className="underline text-gray-500">이용약관</a>과{' '}
+            <a href="/privacy" target="_blank" rel="noreferrer" className="underline text-gray-500">개인정보처리방침</a>에
+            동의하는 것으로 봅니다. (만 14세 이상만 가입 가능)
           </p>
         </div>
       )}
