@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import TopBar from '../../components/TopBar'
 import GradeChip from '../../components/GradeChip'
 import Spinner from '../../components/Spinner'
 import { assessSandbag, worseLevel, SANDBAG_STYLE } from '../../lib/sandbag'
-import { Check, X, ShieldAlert, Trophy, Clock } from 'lucide-react'
+import { planAutoApprovals } from '../../lib/stateMachine'
+import { Check, X, ShieldAlert, Trophy, Clock, Sparkles } from 'lucide-react'
 
 // 신청 상태별 표시(라벨·색). 011에서 partner_pending/partner_rejected 추가됨.
 const ENTRY_STATUS_META = {
@@ -35,6 +36,14 @@ export default function EntryManagement() {
   const [activeCat, setActiveCat]   = useState(null)
   const [podium, setPodium]         = useState({}) // playerId → { champ, medal }
   const [loading, setLoading]       = useState(true)
+  const [approving, setApproving]   = useState(false)
+
+  // 무인 자동 승인 스위치 (기본 OFF) — 대회별 기억
+  const autoKey = `bdm.autoapprove.${id}`
+  const [autoApprove, setAutoApprove] = useState(() => {
+    try { return localStorage.getItem(autoKey) === '1' } catch { return false }
+  })
+  const autoRunRef = useRef(false)
 
   useEffect(() => {
     async function load() {
@@ -91,6 +100,55 @@ export default function EntryManagement() {
     setEntries(prev => prev.map(e => e.id === entryId ? { ...e, entry_status: status } : e))
   }
 
+  // 대회 전체 자동 승인 분류 (샌드배깅 의심·입금 미확인·정원 초과·팀 미확정만 사람에게 남김)
+  const catById = useMemo(
+    () => Object.fromEntries(categories.map(c => [c.id, c])),
+    [categories],
+  )
+  const approvedCounts = useMemo(() => {
+    const m = {}
+    for (const e of entries) {
+      if (e.entry_status === 'approved') m[e.category_id] = (m[e.category_id] || 0) + 1
+    }
+    return m
+  }, [entries])
+  const buckets = useMemo(
+    () => planAutoApprovals(entries, catById, { counts: approvedCounts }),
+    [entries, catById, approvedCounts],
+  )
+
+  // 안전한 신청 일괄 자동 승인
+  async function approveSafe(list) {
+    const ids = (list ?? buckets.auto).map(e => e.id)
+    if (!ids.length || approving) return
+    setApproving(true)
+    try {
+      await supabase.from('tournament_entries').update({ entry_status: 'approved' }).in('id', ids)
+      const idSet = new Set(ids)
+      setEntries(prev => prev.map(e => idSet.has(e.id) ? { ...e, entry_status: 'approved' } : e))
+    } catch { /* 무시 — 다음 로드에서 재시도 */ }
+    setApproving(false)
+  }
+
+  function toggleAutoApprove() {
+    setAutoApprove(v => {
+      const next = !v
+      try { localStorage.setItem(autoKey, next ? '1' : '0') } catch { /* 무시 */ }
+      if (!next) autoRunRef.current = false
+      return next
+    })
+  }
+
+  // 자동 승인 ON → 안전한 신청을 한 번 자동 승인 (신규 신청 들어오면 buckets 변해 재실행)
+  useEffect(() => {
+    if (!autoApprove || approving) return
+    if (buckets.auto.length === 0) { autoRunRef.current = false; return }
+    if (autoRunRef.current) return
+    autoRunRef.current = true
+    approveSafe(buckets.auto)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoApprove, buckets.auto.length, approving])
+
   if (loading) return <div className="flex justify-center py-20"><Spinner /></div>
 
   const catEntries = entries.filter(e => e.category_id === activeCat)
@@ -110,6 +168,71 @@ export default function EntryManagement() {
   return (
     <div className="safe-bottom">
       <TopBar title="참가 신청 관리" />
+
+      {/* 무인 자동 승인 (C2) — 대회 전체 기준 */}
+      <div className="px-4 pt-4">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <Sparkles size={18} className="text-[#C60C30] mt-0.5 shrink-0" />
+              <div>
+                <p className="font-bold text-sm">무인 자동 승인</p>
+                <p className="text-xs text-gray-400 leading-relaxed mt-0.5">
+                  의심 없는 정상 신청은 앱이 자동 승인해요. <b>급수 사기 의심·입금 미확인·정원
+                  초과</b>만 아래에서 직접 확인하시면 됩니다.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={toggleAutoApprove}
+              aria-pressed={autoApprove}
+              className={`shrink-0 w-12 h-7 rounded-full transition relative
+                          ${autoApprove ? 'bg-emerald-500' : 'bg-gray-300'}`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 w-6 h-6 rounded-full bg-white shadow transition
+                            ${autoApprove ? 'translate-x-5' : ''}`}
+              />
+            </button>
+          </div>
+
+          {/* 분류 요약 */}
+          <div className="grid grid-cols-4 gap-1.5 mt-3 text-center">
+            {[
+              { n: buckets.auto.length,     label: '자동승인',   cls: 'text-emerald-600' },
+              { n: buckets.review.length,   label: '의심검토',   cls: 'text-red-500' },
+              { n: buckets.payment.length,  label: '입금대기',   cls: 'text-amber-600' },
+              { n: buckets.capacity.length, label: '정원초과',   cls: 'text-gray-500' },
+            ].map(b => (
+              <div key={b.label} className="bg-gray-50 rounded-xl py-2">
+                <p className={`text-lg font-black ${b.cls}`}>{b.n}</p>
+                <p className="text-[11px] text-gray-400">{b.label}</p>
+              </div>
+            ))}
+          </div>
+
+          {buckets.auto.length > 0 && !autoApprove && (
+            <button
+              onClick={() => approveSafe(buckets.auto)}
+              disabled={approving}
+              className="w-full mt-3 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold
+                         active:scale-[.98] transition disabled:opacity-50"
+            >
+              {approving ? '승인 중…' : `안전한 ${buckets.auto.length}건 지금 자동 승인`}
+            </button>
+          )}
+          {autoApprove && (
+            <p className="mt-3 text-xs text-emerald-700 bg-emerald-50 rounded-xl px-3 py-2 flex items-center gap-1">
+              <Check size={13} /> 자동 승인 켜짐 — 정상 신청은 들어오는 대로 승인됩니다.
+            </p>
+          )}
+          {buckets.review.length > 0 && (
+            <p className="mt-2 text-xs text-red-600 flex items-center gap-1">
+              <ShieldAlert size={12} /> 급수 사기 의심 {buckets.review.length}건은 자동 승인에서 제외됐어요 — 아래에서 확인하세요.
+            </p>
+          )}
+        </div>
+      </div>
 
       {/* 종목 탭 */}
       <div className="flex gap-2 px-4 py-3 bg-white border-b border-gray-100 overflow-x-auto">

@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-09 — [C2] 대회 상태 오케스트레이션 — 자동 마감·시작 + 무인 참가 승인
+
+- **C2 자동 마감/시작 상태머신 + 정상 신청 자동 승인 (필수/대, 주최자 완주 최대 공백)**
+  - 파일: `src/lib/stateMachine.js`(신규), `src/pages/organizer/TournamentManage.jsx`, `src/pages/organizer/EntryManagement.jsx`
+  - 요약: 지금껏 주최자가 손으로 눌러야 했던 "접수 마감 / 대회 시작 / 참가 신청 승인"을 앱이 스스로 판정하게 했다(C2 ❌→⚠️, 주최자 자동화 최대 공백). 순수 함수 엔진 `stateMachine.js` 신설 — `planTournamentState`는 실측 데이터로 다음 상태를 판정한다: open→closed(접수 마감 시각 경과 or 전 종목 정원 충족, 무인 안전), closed→in_progress(대회 당일 도래 + 대진표 존재, 무인 안전), in_progress→completed(부전승 제외 실경기 전부 완료 → MMR·급수 반영이 걸려 있어 무인 전환은 안 하고 "한 번 확인" 추천만). 대회 당일인데 대진표가 없으면 blockReason으로 "대진표 먼저 생성" 안내. `planAutoApprovals`는 applied 신청을 auto/review/payment/capacity 4버킷으로 분류 — 샌드배깅 의심(sandbag.js 재사용)·참가비 미입금·정원 초과만 사람 큐로 남기고 나머지 정상 신청은 자동 승인 대상. TournamentManage에 "무인 자동 진행" 스위치(기본 OFF·localStorage 기억)를 달아, 20초 틱으로 now를 갱신해 마감 시각/당일 도래를 감지하고, ON이면 안전 전환을 useEffect에서 1회 자동 적용(autoAppliedRef로 중복 차단), OFF여도 추천 배너 + "지금 전환" 원터치를 제공. EntryManagement에 "무인 자동 승인" 스위치 + 4버킷 분류 요약 카드 + "안전한 N건 지금 자동 승인" 일괄 버튼 추가(ON이면 신규 정상 신청을 들어오는 대로 승인). 스키마 변경 없음 — 기존 registration_end·date·max_teams·entry_fee·payment_status·entry_status만 사용. 엔진 5개 상태 시나리오 + 승인 4버킷 esbuild 번들 자체 검증 통과, `npx vite build` green.
+
 ## 2026-07-09 — [C7] 노쇼(호출 미응답) 타이머 → 미입장 부전승 카운트다운
 
 - **C7 호출 미응답 타이머 → 워크오버 카운트다운 (필수/대, 운영 완주 최대 공백)**

@@ -5,7 +5,7 @@
 ## 플로우 자동화율 (0~100%)
 | 플로우 | 점수 | 완주 막는 잔여 갭 |
 |--------|:---:|------------------|
-| 주최자 | 42% | 입금확인·상태전환·승인 트리거 전부 수동 |
+| 주최자 | 56% | 접수 마감·대회 시작 자동 + 정상 신청 자동 승인 ✅ / 입금 확인(C3)·시상 확정(무인) 미연결 |
 | 선수   | 55% | 셀프 체크인·결제 부재 (경기 호출·사전알림·미입장 경고 인앱 도달 ✅) |
 | 심판   | 70% | 무심판 코트 셀프스코어 부재 |
 | 운영   | 68% | 빈코트 자동투입·자동호출·사전알림·예상시각·노쇼 타이머(미응답 경고 자동발송+카운트다운+부전승 원터치) ✅ / 지연재조정(rescheduleAfterForfeit)·자동 부전승 확정 미연결 |
@@ -14,7 +14,7 @@
 | C | 클러스터 | 상태 | 비고(코드 근거) |
 |---|----------|:---:|----------------|
 | C1 | 경기 호출·알림 인프라 | ⚠️ | notify.js+orchestrator.js — 자동호출·사전알림(곧 호출)·예상 호출시각 end-to-end(LiveDashboard→MyMatches). 웹푸시/알림톡/SMS는 human-gated 스텁, WO카운트다운·재알림 타이머 미구현 |
-| C2 | 대회 상태 오케스트레이션 | ❌ | 마감/승인/시상 전부 수동 버튼 |
+| C2 | 대회 상태 오케스트레이션 | ⚠️ | stateMachine.js 신설 — 순수 판정 엔진. TournamentManage "무인 자동 진행" 스위치: 접수 마감 시각 경과/정원 충족 시 open→closed, 대회 당일+대진표 존재 시 closed→in_progress 자동 전환(추천 배너+원터치). EntryManagement "무인 자동 승인": 정상 신청 자동 승인, 샌드배깅 의심·입금 미확인·정원 초과만 사람 큐. draft→open(개설 공개)·시상 확정(무인)은 아직 수동 |
 | C3 | 입금·결제·환불 | ❌ | payment_status 쓰는 코드 없음 |
 | C4 | 셀프 체크인 | ⚠️ | 운영자 수동 클릭 체크인만 (LiveDashboard) |
 | C5 | AI 대진 최적화 | ⚠️ | seededShuffle 단일 셔플 + MMR 시드만 |
@@ -27,6 +27,16 @@
 | C12 | 대회 탐색·파트너·전적 | ⚠️ | 파트너 초대·랭킹 있음, 추천/매칭 없음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-09 · C2 · `src/lib/stateMachine.js`(신규)·`src/pages/organizer/TournamentManage.jsx`·`src/pages/organizer/EntryManagement.jsx`
+  · 대회 상태 오케스트레이션 착수(C2 ❌→⚠️) — 주최자 최대 수작업이던 "접수 마감·대회 시작·참가 승인"을
+    앱이 스스로 판정. 순수 엔진 `planTournamentState`(open→closed: 마감시각 경과 or 전 종목 정원 충족 /
+    closed→in_progress: 대회 당일+대진표 존재 / in_progress→completed: 실경기 전부 완료는 추천만, 무인 아님)
+    와 `planAutoApprovals`(applied 신청을 auto/review/payment/capacity로 분류 — 샌드배깅 의심·입금 미확인·
+    정원 초과만 사람 큐)를 신설. TournamentManage에 "무인 자동 진행" 스위치(기본 OFF, localStorage) — 20초 틱으로
+    마감시각/당일 도래 감지, ON이면 안전 전환을 1회 자동 적용, OFF여도 추천 배너+"지금 전환" 원터치. EntryManagement에
+    "무인 자동 승인" 스위치+분류 요약(자동승인/의심검토/입금대기/정원초과)+"안전한 N건 자동 승인" 버튼. 엔진 5개
+    시나리오 + 승인 4버킷 자체 검증 통과. 스키마 변경 없음(기존 registration_end·max_teams·entry_fee·payment_status 사용).
+    (자동화율 주최자 42%→56%)
 - 2026-07-09 · C7 · `src/lib/orchestrator.js`(planNoShow 추가)·`src/lib/notify.js`(callWalkoverWarn 추가)·LiveDashboard·MyMatches
   · 노쇼(호출 미응답) 타이머 신설 — 지금껏 호출 후 안 오면 대회가 무한 정지(사람이 손으로 부전승)했던 최대 운영 공백을
     메움. 순수함수 `planNoShow`가 호출 시각(calledIds) 대비 경과로 waiting/warned/overdue 3단계 판정. LiveDashboard가

@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
+import { planTournamentState } from '../../lib/stateMachine'
 import {
   Users, GitBranch, Zap, Monitor, ChevronRight, Trophy,
-  Share2, Copy, Check, Printer, ExternalLink,
+  Share2, Copy, Check, Printer, ExternalLink, Sparkles, AlertTriangle,
 } from 'lucide-react'
 
 // ═══════════════════════════════════════════════════════════════
@@ -251,9 +252,19 @@ export default function TournamentManage() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [tournament, setTournament] = useState(null)
+  const [categories, setCategories] = useState([])
   const [entryCounts, setEntryCounts] = useState({})
+  const [matches, setMatches] = useState([])
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
+  const [now, setNow] = useState(Date.now())
+
+  // 무인 자동 진행 스위치 (기본 OFF, 안전) — 대회별로 기억
+  const autoKey = `bdm.autostate.${id}`
+  const [autoState, setAutoState] = useState(() => {
+    try { return localStorage.getItem(autoKey) === '1' } catch { return false }
+  })
+  const autoAppliedRef = useRef(null)  // 같은 전환 중복 적용 방지
 
   const liveUrl = `${window.location.origin}/live/${id}`
 
@@ -261,7 +272,10 @@ export default function TournamentManage() {
     async function load() {
       const [{ data: t }, { data: cats }] = await Promise.all([
         supabase.from('tournaments').select('*').eq('id', id).single(),
-        supabase.from('tournament_categories').select('id').eq('tournament_id', id),
+        supabase
+          .from('tournament_categories')
+          .select('id, max_teams, min_teams, sport_type')
+          .eq('tournament_id', id),
       ])
 
       const counts = {}
@@ -274,17 +288,60 @@ export default function TournamentManage() {
         counts[cat.id] = count ?? 0
       }
 
+      // 대진표 존재/완료 판정용 경기 상태 (있으면)
+      let ms = []
+      const catIds = (cats ?? []).map(c => c.id)
+      if (catIds.length) {
+        const { data } = await supabase
+          .from('tournament_matches')
+          .select('id, status')
+          .in('category_id', catIds)
+        ms = data ?? []
+      }
+
       setTournament(t)
+      setCategories(cats ?? [])
       setEntryCounts(counts)
+      setMatches(ms)
       setLoading(false)
     }
     load()
   }, [id])
 
+  // 마감 시각·대회 당일 경과를 감지하려면 시계가 흘러야 한다 (20초 틱)
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 20000)
+    return () => clearInterval(t)
+  }, [])
+
+  // 상태 머신 판정 (실측 데이터 기준)
+  const plan = useMemo(
+    () => planTournamentState({ tournament, categories, counts: entryCounts, matches, now }),
+    [tournament, categories, entryCounts, matches, now],
+  )
+
   async function updateStatus(status) {
     await supabase.from('tournaments').update({ status }).eq('id', id)
     setTournament(prev => ({ ...prev, status }))
   }
+
+  function toggleAuto() {
+    setAutoState(v => {
+      const next = !v
+      try { localStorage.setItem(autoKey, next ? '1' : '0') } catch { /* 무시 */ }
+      return next
+    })
+  }
+
+  // 무인 자동 진행 ON + 안전한 자동 전환 조건 충족 → 스스로 상태 전환 (1회)
+  useEffect(() => {
+    if (!autoState || !plan.auto || !plan.changed) return
+    const key = `${plan.current}->${plan.recommended}`
+    if (autoAppliedRef.current === key) return
+    autoAppliedRef.current = key
+    updateStatus(plan.recommended)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoState, plan.auto, plan.changed, plan.current, plan.recommended])
 
   async function copyLiveUrl() {
     try {
@@ -399,6 +456,80 @@ export default function TournamentManage() {
           </button>
         )}
       </div>
+
+      {/* 무인 자동 진행 (C2 상태 오케스트레이션) — draft/completed 제외 */}
+      {action && (
+        <div className="px-4 pt-4">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-start gap-2">
+                <Sparkles size={18} className="text-[#C60C30] mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-bold text-sm">무인 자동 진행</p>
+                  <p className="text-xs text-gray-400 leading-relaxed mt-0.5">
+                    켜두면 <b>접수 마감 시각</b>이 지나거나 <b>정원이 차면</b> 앱이 스스로 접수를
+                    마감하고, 대회 당일 대진표가 준비되면 자동으로 대회를 시작해요.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={toggleAuto}
+                aria-pressed={autoState}
+                className={`shrink-0 w-12 h-7 rounded-full transition relative
+                            ${autoState ? 'bg-emerald-500' : 'bg-gray-300'}`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-6 h-6 rounded-full bg-white shadow transition
+                              ${autoState ? 'translate-x-5' : ''}`}
+                />
+              </button>
+            </div>
+
+            {/* 다음 자동 전환 추천 */}
+            {plan.changed && plan.auto && (
+              <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2.5 text-sm text-emerald-800">
+                <p className="font-bold flex items-center gap-1">
+                  <Check size={14} /> {plan.reason}
+                </p>
+                <div className="flex items-center justify-between mt-1.5">
+                  <span className="text-xs text-emerald-700">
+                    지금 <b>{STATUS_TEXT[plan.recommended]}</b>(으)로 전환할 수 있어요.
+                    {autoState && ' 자동 진행이 켜져 있어 곧 자동 전환됩니다.'}
+                  </span>
+                  {!autoState && (
+                    <button
+                      onClick={() => updateStatus(plan.recommended)}
+                      className="shrink-0 ml-2 text-xs font-bold text-white bg-emerald-600 px-3 py-1.5 rounded-lg active:scale-95"
+                    >
+                      지금 전환
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* 확인이 필요한 추천 (시상 확정 등 무인 전환 안 함) */}
+            {plan.changed && !plan.auto && plan.reason && (
+              <div className="mt-3 rounded-xl bg-blue-50 px-3 py-2.5 text-sm text-blue-800">
+                <p className="font-bold">{plan.reason}</p>
+                <p className="text-xs text-blue-600 mt-1">
+                  {plan.recommended === 'completed'
+                    ? '시상 확정은 MMR·급수에 반영되므로 실시간 진행 화면에서 한 번 확인해 주세요.'
+                    : `${STATUS_TEXT[plan.recommended]}(으)로 전환을 검토하세요.`}
+                </p>
+              </div>
+            )}
+
+            {/* 전환이 막힌 이유 */}
+            {plan.blockReason && (
+              <div className="mt-3 rounded-xl bg-orange-50 px-3 py-2.5 text-sm text-orange-800 flex items-start gap-1.5">
+                <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                <span>{plan.blockReason}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 메뉴 */}
       <div className="px-4 py-4 space-y-3">
