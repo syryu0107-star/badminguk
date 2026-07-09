@@ -223,36 +223,9 @@ export default function LiveDashboard() {
     }).eq('id', matchId)
   }
 
-  // ── MMR 반영 (walkover에는 절대 호출하지 말 것 — 계약) ─────────
-  async function applyMMR(match, winningSide) {
-    if (match.mmr_applied) return
-    const certLevel = tournament?.cert_level ?? 'none'
-    const t1raw = [match.team1?.player1, match.team1?.player2].filter(Boolean)
-    const t2raw = [match.team2?.player1, match.team2?.player2].filter(Boolean)
-    if (t1raw.length !== 2 || t2raw.length !== 2) return
-
-    const team1 = t1raw.map(p => ({ id: p.id, mmr: p.mmr, gamesPlayed: p.mmr_games_played }))
-    const team2 = t2raw.map(p => ({ id: p.id, mmr: p.mmr, gamesPlayed: p.mmr_games_played }))
-    const results = resolveMatchMMR({ team1, team2, winner: winningSide, certLevel })
-
-    for (const r of results) {
-      const orig = [...t1raw, ...t2raw].find(p => p.id === r.id)
-      await supabase.from('profiles')
-        .update({ mmr: r.after, mmr_games_played: (orig?.mmr_games_played ?? 0) + 1 })
-        .eq('id', r.id)
-      await supabase.from('mmr_history').insert({
-        player_id:   r.id,
-        tournament_id: id,
-        match_id:    match.id,
-        mmr_before:  r.before,
-        mmr_after:   r.after,
-        delta:       r.delta,
-        cert_level:  certLevel,
-        partner_adj: r.partnerAdj ?? 0,
-      })
-    }
-    await supabase.from('tournament_matches').update({ mmr_applied: true }).eq('id', match.id)
-  }
+  // ── MMR 반영은 이제 completeMatch → apply_match_mmr RPC 단일 진입점이 전담.
+  //    (주최자 세션에서 남의 profiles 직접 update 는 RLS(본인만 수정)에 막혀
+  //     무성공이었다 → SECURITY DEFINER RPC 로 이관. 인라인 applyMMR 은 삭제.)
 
   async function saveScore(matchId, sets, winningSide) {
     const match = matches.find(m => m.id === matchId)
@@ -266,14 +239,16 @@ export default function LiveDashboard() {
     const winnerEntryId = winningSide === 1 ? match.team1_entry_id : match.team2_entry_id
 
     try {
-      // 결과 저장 + 승자 자동 진출 + 조별리그 완료 시 본선 시딩
-      await completeMatch(supabase, matchId, {
+      // 결과 저장 + 승자 자동 진출 + MMR 반영(RPC) + 조별리그 완료 시 본선 시딩
+      const res = await completeMatch(supabase, matchId, {
         winnerEntryId,
         gamesWonT1: g1,
         gamesWonT2: g2,
         games: sets.map(s => [Number(s.a), Number(s.b)]),
       })
-      await applyMMR(match, winningSide)
+      if (res?.mmrError) {
+        alert('경기는 저장됐지만 MMR 반영에 실패했어요.\n주최자 계정으로 로그인돼 있는지 확인한 뒤 다시 시도해주세요.')
+      }
     } catch (e) {
       alert('저장 중 문제가 생겼어요: ' + e.message)
     }
@@ -296,15 +271,16 @@ export default function LiveDashboard() {
     const winnerEntryId = winningSide === 1 ? match.team1_entry_id : match.team2_entry_id
 
     try {
-      await completeMatch(supabase, match.id, {
+      // 계약(RPC 내부 처리): walkover → MMR 미반영, retired → 반영.
+      // 호출부는 분기하지 않고 completeMatch 만 부른다.
+      const res = await completeMatch(supabase, match.id, {
         winnerEntryId,
         resultType,
         forfeitTeam,
         forfeitReason: reason || (resultType === 'retired' ? '경기 중 기권' : '불참'),
       })
-      // 계약: walkover는 MMR 반영 안 함, retired는 반영
-      if (resultType === 'retired') {
-        await applyMMR(match, winningSide)
+      if (res?.mmrError) {
+        alert('처리는 됐지만 MMR 반영에 실패했어요.\n주최자 계정으로 로그인돼 있는지 확인한 뒤 다시 시도해주세요.')
       }
     } catch (e) {
       alert('기권 처리 중 문제가 생겼어요: ' + e.message)

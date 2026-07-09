@@ -30,10 +30,10 @@ const DEFAULT_CAT = {
 }
 
 const CERT_OPTIONS = [
-  { key: 'none', label: '비공인', icon: '🤝', desc: 'MMR 변동 없음 · 친선전' },
-  { key: 'c',    label: '공인 C', icon: '⭐', desc: 'K=32 · 일반 동호회' },
-  { key: 'b',    label: '공인 B', icon: '⭐⭐', desc: 'K=48 · 인증 주최자' },
-  { key: 'a',    label: '공인 A', icon: '⭐⭐⭐', desc: 'K=64 · 협회 연계' },
+  { key: 'none', label: '비공인 (친선전)', icon: '🤝',     mmr: 'MMR 반영: 없음',     desc: '전국 랭킹에 반영 안 됨' },
+  { key: 'c',    label: '공인 C',          icon: '⭐',      mmr: 'MMR 반영: 보통',     desc: '일반 동호회 대회' },
+  { key: 'b',    label: '공인 B',          icon: '⭐⭐',    mmr: 'MMR 반영: 큼',       desc: '인증 주최자 대회' },
+  { key: 'a',    label: '공인 A',          icon: '⭐⭐⭐',  mmr: 'MMR 반영: 매우 큼',  desc: '협회 연계 대회' },
 ]
 
 const FORMAT_OPTIONS = [
@@ -385,36 +385,44 @@ export default function CreateTournament() {
           </div>
         </section>
 
-        {/* 공인 등급 */}
+        {/* 공인 등급 = 전국 랭킹(MMR) 반영 여부 */}
         <section>
-          <h2 className="font-bold mb-1 text-gray-700">공인 등급</h2>
+          <h2 className="font-bold mb-1 text-gray-700">이 대회 결과를 전국 랭킹(MMR)에 반영할까요?</h2>
           <p className="text-xs text-gray-400 mb-3">
-            등급이 높을수록 MMR 변동 폭이 커집니다.
+            공인 등급이 높을수록 경기 뒤 선수들의 MMR이 더 크게 오르내려요. 연습·친목 대회라면 '비공인'을 고르세요.
           </p>
           <div className="grid grid-cols-2 gap-2">
-            {CERT_OPTIONS.map(opt => (
-              <button
-                key={opt.key}
-                onClick={() => update('cert_level', opt.key)}
-                className={`p-3 rounded-2xl border-2 text-left transition
-                            ${form.cert_level === opt.key
-                              ? 'border-[#C60C30] bg-red-50'
-                              : 'border-gray-100 bg-white'}`}
-              >
-                <p className="text-base mb-0.5">{opt.icon}</p>
-                <p className="font-bold text-sm">{opt.label}</p>
-                <p className="text-xs text-gray-400 mt-0.5">{opt.desc}</p>
-              </button>
-            ))}
+            {CERT_OPTIONS.map(opt => {
+              const active = form.cert_level === opt.key
+              return (
+                <button
+                  key={opt.key}
+                  onClick={() => update('cert_level', opt.key)}
+                  className={`p-3 rounded-2xl border-2 text-left transition
+                              ${active ? 'border-[#C60C30] bg-red-50' : 'border-gray-100 bg-white'}`}
+                >
+                  <p className="text-base mb-0.5">{opt.icon}</p>
+                  <p className="font-bold text-sm">{opt.label}</p>
+                  <p className={`text-xs font-bold mt-1 ${opt.key === 'none' ? 'text-gray-400' : 'text-[#C60C30]'}`}>
+                    {opt.mmr}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-0.5">{opt.desc}</p>
+                </button>
+              )
+            })}
           </div>
-          {form.cert_level !== 'none' && (
-            <div className="mt-2 flex items-start gap-2 bg-blue-50 rounded-xl px-3 py-2">
-              <Info size={14} className="text-blue-500 shrink-0 mt-0.5" />
+          <div className="mt-2 flex items-start gap-2 bg-blue-50 rounded-xl px-3 py-2">
+            <Info size={14} className="text-blue-500 shrink-0 mt-0.5" />
+            {form.cert_level === 'none' ? (
               <p className="text-xs text-blue-700">
-                공인 대회는 향후 배드민국에서 심사 후 승인됩니다. 현재는 테스트 목적으로 즉시 적용됩니다.
+                지금은 <b>친선전</b>이에요. 경기를 치러도 선수들의 MMR(전국 랭킹)은 변하지 않아요.
               </p>
-            </div>
-          )}
+            ) : (
+              <p className="text-xs text-blue-700">
+                공인 대회는 경기 결과가 전국 랭킹(MMR)에 반영돼요. 향후 배드민국 심사 후 승인 예정이며, 현재는 테스트 목적으로 즉시 적용됩니다.
+              </p>
+            )}
+          </div>
         </section>
 
         {/* 일정 */}

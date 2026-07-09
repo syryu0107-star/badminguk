@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { seededShuffle, makeSeed, scheduleMatches, buildRoundRobin } from '../../lib/scheduler'
-import { generatePools, generateKnockoutBracket } from '../../lib/tournament'
+import { generatePools, generateKnockoutBracket, knockoutSkeletonSize } from '../../lib/tournament'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
 import { Shuffle, RotateCcw, Check, Copy, Trophy } from 'lucide-react'
@@ -15,12 +15,6 @@ function uuid() {
     const r = (Math.random() * 16) | 0
     return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16)
   })
-}
-
-function nextPow2(n) {
-  let p = 1
-  while (p < n) p *= 2
-  return p
 }
 
 // 라운드 라벨: 1=1라운드 … 마지막=결승 (round_number 기준, DB round_type용)
@@ -344,12 +338,17 @@ export default function BracketGenerator() {
         })
 
         // 4) 본선 스켈레톤 (pool_knockout): 참가자 미정(null) 자리 예약 + 진출 링크
-        //    조별리그가 끝나면 advancement.js#seedKnockoutFromPools가 1라운드를 채운다
+        //    조별리그가 끝나면 advancement.js#seedKnockoutFromPools가 1라운드를 채운다.
+        //    ⚠️ 스켈레톤 크기는 계획값(조수×진출+와일드카드)이 아니라 "실제 진출 가능 수"로
+        //    잡아야 한다. 조가 진출 인원보다 작으면 실제 진출이 더 적어(seedKnockoutFromPools가
+        //    산출하는 값), 계획값으로 만들면 팀이 안 채워지는 빈 경기가 영구 잔존해 대회 종료가
+        //    막힌다(M3). 조 팀 수 기반으로 seed 시점과 동일하게 계산한다.
         if (plan.format === 'pool_knockout') {
-          const advancing =
-            plan.pools.length * (cat?.advancement_per_pool ?? 2) + (cat?.wildcard_count ?? 0)
-          if (advancing >= 2) {
-            const size = nextPow2(advancing)
+          const poolSizes = plan.pools.map(p => p.entries.length)
+          const size = knockoutSkeletonSize(
+            poolSizes, cat?.advancement_per_pool ?? 2, cat?.wildcard_count ?? 0
+          )
+          if (size >= 2) {
             const { rows } = buildKnockoutRows({
               catId: activeCat, seed: plan.seed, size, round1Teams: null, startMatchNo: matchNo,
             })
@@ -405,9 +404,10 @@ export default function BracketGenerator() {
     }
     const poolMatches = plan.pools.reduce((s, p) => s + (p.entries.length * (p.entries.length - 1)) / 2, 0)
     if (plan.format === 'pool_knockout') {
-      const advancing =
-        plan.pools.length * (activeCategory?.advancement_per_pool ?? 2) + (activeCategory?.wildcard_count ?? 0)
-      const size = advancing >= 2 ? nextPow2(advancing) : 0
+      const poolSizes = plan.pools.map(p => p.entries.length)
+      const size = knockoutSkeletonSize(
+        poolSizes, activeCategory?.advancement_per_pool ?? 2, activeCategory?.wildcard_count ?? 0
+      )
       return `조별 ${poolMatches}경기 + 본선 ${size}강 자리 예약`
     }
     return `총 ${poolMatches}경기`

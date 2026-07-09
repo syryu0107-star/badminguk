@@ -271,6 +271,47 @@ function _wildcardComparator(criteria) {
   }
 }
 
+// ─── 3.5 진출 팀 수 / 본선 스켈레톤 크기 (불균형 풀 대응) ───────────────────────
+
+/**
+ * 불균형 풀을 고려한 "실제 본선 진출 가능 팀 수".
+ *
+ * 조가 진출 인원(advancementPerPool)보다 작으면 그 조에서 진출 가능한 팀은
+ * 조 팀 수만큼뿐이다. 와일드카드도 실제 후보(진출선 밖 잔여 팀) 수를 넘을 수 없다.
+ * 계획값(pools×advancementPerPool + wildcard)이 아니라 이 실제값으로 본선
+ * 스켈레톤을 만들어야, 조별리그 종료 후 seedKnockoutFromPools가 산출하는
+ * 진출 수(determineAdvancements→generateKnockoutBracket)와 정확히 일치해
+ * 빈 경기(팀 미배정 잔존)가 생기지 않는다.
+ *
+ * @param {number[]} poolTeamCounts 각 조의 팀(엔트리) 수
+ * @param {number} advancementPerPool 조당 직행 진출 수
+ * @param {number} wildcardCount 와일드카드 수
+ * @returns {number} 실제 진출 가능 팀 수
+ */
+export function countActualAdvancers(poolTeamCounts, advancementPerPool, wildcardCount = 0) {
+  const counts = (Array.isArray(poolTeamCounts) ? poolTeamCounts : [])
+    .map(n => Math.max(0, Math.floor(Number(n) || 0)))
+  const adv = Math.max(0, Math.floor(Number(advancementPerPool) || 0))
+  const wc = Math.max(0, Math.floor(Number(wildcardCount) || 0))
+
+  const direct = counts.reduce((s, n) => s + Math.min(n, adv), 0)
+  const candidates = counts.reduce((s, n) => s + Math.max(0, n - adv), 0)
+  const wildcards = Math.min(wc, candidates)
+  return direct + wildcards
+}
+
+/**
+ * 본선(녹아웃) 스켈레톤 크기 = 실제 진출 팀 수의 nextPow2.
+ * 진출 팀이 2 미만이면 0(본선 없음). 진출 수가 2의 거듭제곱이 아니면
+ * 남는 슬롯은 부전승으로 채워진다(generateKnockoutBracket / seedKnockoutFromPools).
+ *
+ * @returns {number} 스켈레톤에 만들 1라운드 슬롯 총합(=size), 없으면 0
+ */
+export function knockoutSkeletonSize(poolTeamCounts, advancementPerPool, wildcardCount = 0) {
+  const advancing = countActualAdvancers(poolTeamCounts, advancementPerPool, wildcardCount)
+  return advancing >= 2 ? _nextPow2(advancing) : 0
+}
+
 // ─── 4. generateKnockoutBracket ───────────────────────────────────────────────
 
 export function generateKnockoutBracket(advancements, seed) {

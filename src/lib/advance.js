@@ -9,8 +9,10 @@
  *  - finalizeTournament(supabase, tournamentId, categoryIds): 전 종목 시상 확정 + 대회 completed
  *
  * DB 규약: 상태값은 전부 소문자. stage 구분은 match_phase('pool'|'knockout').
- * MMR 반영은 호출부(LiveDashboard 등) 책임 — walkover(불참 부전승)는 MMR 미반영,
- * retired(경기 중 기권)는 반영이 계약이다. 이 파일은 MMR을 건드리지 않는다.
+ * MMR 반영은 completeMatch 안에서 apply_match_mmr(match_id) RPC(SECURITY DEFINER)를
+ * 단일 진입점으로 호출한다 — 심판 점수판·주최자 인라인 어느 경로든 여기로 통합된다.
+ * walkover 제외/retired 포함/none·bye·멱등 판정은 전부 RPC 내부가 전담하므로,
+ * 호출부는 result_type을 분기하지 말고 그냥 completeMatch만 부르면 된다.
  */
 
 import {
@@ -18,6 +20,7 @@ import {
   determineAdvancements,
   generateKnockoutBracket,
 } from './tournament.js'
+import { scheduleMatches } from './scheduler.js'
 
 const DONE_STATUSES = ['completed', 'forfeited', 'bye']
 
@@ -84,7 +87,7 @@ export async function completeMatch(supabase, matchId, {
     if (scoreErr) throw new Error('점수 저장 실패: ' + scoreErr.message)
   }
 
-  // 2) 경기 상태 확정
+  // 2) 경기 상태 확정 + 라이브 캐시 정리(L2: 완료 경기의 live_* 잔존값 리셋)
   const isForfeit = resultType === 'walkover' || resultType === 'retired' || resultType === 'disqualified'
   const { error: updErr } = await supabase.from('tournament_matches').update({
     status: isForfeit ? 'forfeited' : 'completed',
@@ -94,6 +97,9 @@ export async function completeMatch(supabase, matchId, {
     result_type: resultType,
     forfeit_team: isForfeit ? forfeitTeam : null,
     forfeit_reason: isForfeit ? forfeitReason : null,
+    live_score_t1: 0,
+    live_score_t2: 0,
+    live_server_team: null,
   }).eq('id', matchId)
   if (updErr) throw new Error('경기 결과 저장 실패: ' + updErr.message)
 
@@ -102,7 +108,21 @@ export async function completeMatch(supabase, matchId, {
     await advanceWinner(supabase, match, winnerEntryId)
   }
 
-  // 4) 풀 경기면 조별리그 전체 완료 검사 → 본선 시딩
+  // 4) MMR 반영 — 단일 진입점 (C1/S3/M4/M5).
+  //    walkover 제외·retired 포함·none/bye/멱등은 전부 RPC 내부가 판정한다 →
+  //    호출부는 result_type 분기 없이 무조건 호출. profiles/mmr_history 직접 write 금지.
+  //    실패해도 점수·진출은 이미 확정됐으므로 되돌리지 않고, 경고를 반환값에 담아 전달.
+  //    (RPC는 mmr_applied 가드로 멱등 → 나중에 재확정해도 중복 반영 없음)
+  let mmrError = null
+  {
+    const { error: rpcErr } = await supabase.rpc('apply_match_mmr', { p_match_id: matchId })
+    if (rpcErr) {
+      mmrError = rpcErr.message || String(rpcErr)
+      console.error('[completeMatch] MMR 반영 실패:', rpcErr)
+    }
+  }
+
+  // 5) 풀 경기면 조별리그 전체 완료 검사 → 본선 시딩
   let poolStageCompleted = false
   if (match.match_phase === 'pool') {
     poolStageCompleted = await checkPoolStageComplete(supabase, match.category_id)
@@ -112,6 +132,7 @@ export async function completeMatch(supabase, matchId, {
     categoryId: match.category_id,
     advancedToMatchId: match.next_match_id ?? null,
     poolStageCompleted,
+    mmrError,
   }
 }
 
@@ -218,25 +239,60 @@ export async function seedKnockoutFromPools(supabase, categoryId) {
   const bracket = generateKnockoutBracket(advancements, seed)
   const round1 = bracket.filter(b => b.round === 1).sort((a, b) => a.slot - b.slot)
 
-  for (let i = 0; i < koRound1.length; i++) {
-    const sk = koRound1[i]
+  // 스켈레톤별 팀 배정 계산 (아직 DB 반영 전)
+  const assignments = koRound1.map((sk, i) => {
     const b = round1[i]
-    if (!b) continue
-
+    if (!b) return null
     const t1 = b.team1EntryId ?? null
     const t2 = b.team2EntryId ?? null
     const isBye = (t1 === null) !== (t2 === null) // 한쪽만 비면 부전승
-    const byeWinner = t1 ?? t2
+    return { sk, t1, t2, isBye, byeWinner: t1 ?? t2 }
+  }).filter(Boolean)
 
-    await supabase.from('tournament_matches').update({
-      team1_entry_id: t1,
-      team2_entry_id: t2,
-      ...(isBye ? { status: 'bye', winner_entry_id: byeWinner } : {}),
-    }).eq('id', sk.id)
+  // ── M2: 본선 1라운드 코트·시간 배정 ──────────────────────────────
+  // 스켈레톤은 court_number/scheduled_time = null 로 생성됐다(BracketGenerator).
+  // 조별 경기에 쓰던 코트를 재사용하고, 조별 경기가 끝난 시각 뒤로 이어 배정한다.
+  // 실제 대결(양팀 배정) 경기만 코트를 잡고, 부전승/미충원 경기는 코트 없음.
+  const poolCourts = [...new Set(poolMatches.map(m => m.court_number).filter(Boolean))]
+    .sort((a, b) => a - b)
+  const courts = poolCourts.length ? poolCourts : [1, 2, 3, 4]
+  const poolTimes = poolMatches
+    .map(m => m.scheduled_time).filter(Boolean).map(t => new Date(t).getTime())
+  const matchMinutes = cat?.match_duration_min ?? 30
+  const koStart = poolTimes.length
+    ? new Date(Math.max(...poolTimes) + matchMinutes * 60000)
+    : new Date()
+
+  const playable = assignments.filter(a => !a.isBye && a.t1 && a.t2)
+  const scheduled = scheduleMatches({
+    matches: playable.map(a => ({ entryA: { id: a.t1 }, entryB: { id: a.t2 } })),
+    courts, startTime: koStart, matchMinutes, breakMinutes: 5,
+  })
+  const schedBySk = new Map()
+  playable.forEach((a, k) => {
+    schedBySk.set(a.sk.id, {
+      court_number: scheduled[k]?.court ?? null,
+      scheduled_time: scheduled[k]?.scheduledTime?.toISOString() ?? null,
+    })
+  })
+
+  for (const a of assignments) {
+    const patch = {
+      team1_entry_id: a.t1,
+      team2_entry_id: a.t2,
+      ...(a.isBye ? { status: 'bye', winner_entry_id: a.byeWinner } : {}),
+    }
+    // 코트/시간이 비어 있을 때만 채운다 (이미 배정돼 있으면 존중)
+    const sched = schedBySk.get(a.sk.id)
+    if (sched && a.sk.court_number == null && a.sk.scheduled_time == null) {
+      if (sched.court_number != null) patch.court_number = sched.court_number
+      if (sched.scheduled_time != null) patch.scheduled_time = sched.scheduled_time
+    }
+    await supabase.from('tournament_matches').update(patch).eq('id', a.sk.id)
 
     // 부전승 팀은 즉시 다음 라운드로 (MMR 반영 없음)
-    if (isBye && byeWinner) {
-      await advanceWinner(supabase, sk, byeWinner)
+    if (a.isBye && a.byeWinner) {
+      await advanceWinner(supabase, a.sk, a.byeWinner)
     }
   }
 
