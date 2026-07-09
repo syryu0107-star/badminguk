@@ -69,7 +69,9 @@ export default function Profile() {
             category:tournament_categories(
               sport_type, grade_min, grade_max,
               tournament:tournaments(id, title, date, cert_level, status)
-            )
+            ),
+            p1:profiles!player1_id(id, name),
+            p2:profiles!player2_id(id, name)
           `)
           .or(`player1_id.eq.${user.id},player2_id.eq.${user.id}`)
           .order('created_at', { ascending: false })
@@ -308,6 +310,10 @@ export default function Profile() {
                 const t = entry.category?.tournament
                 const certLevel = t?.cert_level ?? 'none'
                 const certInfo = CERT_LEVELS[certLevel]
+                const partnerName = entry.player1_id === profile?.id
+                  ? entry.p2?.name
+                  : entry.p1?.name
+                const iAmPartner = entry.player2_id === profile?.id
                 return (
                   <div key={i} className="bg-white rounded-2xl border border-gray-100 p-4">
                     <div className="flex items-start justify-between mb-1">
@@ -333,14 +339,29 @@ export default function Profile() {
                         </>
                       )}
                     </div>
+                    {/* 파트너 표시 */}
+                    <div className="mt-2 text-xs text-gray-500">
+                      {partnerName ? (
+                        <>🤝 파트너: <strong className="text-gray-700">{partnerName}</strong>
+                          {iAmPartner && <span className="text-gray-400"> (내가 파트너)</span>}</>
+                      ) : (
+                        <span className="text-gray-400">개인 신청</span>
+                      )}
+                    </div>
                     <div className="mt-2">
                       <span className={`text-xs font-semibold px-2 py-0.5 rounded-full
                         ${entry.entry_status === 'approved' ? 'bg-emerald-100 text-emerald-700'
                         : entry.entry_status === 'rejected' ? 'bg-red-100 text-red-600'
+                        : entry.entry_status === 'partner_rejected' ? 'bg-red-100 text-red-600'
+                        : entry.entry_status === 'partner_pending' ? 'bg-amber-100 text-amber-700'
+                        : entry.entry_status === 'applied' ? 'bg-blue-100 text-blue-700'
                         : 'bg-amber-100 text-amber-700'}`}
                       >
-                        {entry.entry_status === 'approved' ? '✅ 승인'
-                        : entry.entry_status === 'rejected' ? '❌ 거절'
+                        {entry.entry_status === 'approved' ? '✅ 참가 확정'
+                        : entry.entry_status === 'rejected' ? '❌ 주최자 반려'
+                        : entry.entry_status === 'partner_rejected' ? '❌ 파트너 거절'
+                        : entry.entry_status === 'partner_pending' ? '⏳ 파트너 수락 대기'
+                        : entry.entry_status === 'applied' ? '📮 접수 완료 (승인 대기)'
                         : '⏳ 검토 중'}
                       </span>
                     </div>

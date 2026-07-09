@@ -5,7 +5,28 @@ import TopBar from '../../components/TopBar'
 import GradeChip from '../../components/GradeChip'
 import Spinner from '../../components/Spinner'
 import { assessSandbag, worseLevel, SANDBAG_STYLE } from '../../lib/sandbag'
-import { Check, X, ShieldAlert, Trophy } from 'lucide-react'
+import { Check, X, ShieldAlert, Trophy, Clock } from 'lucide-react'
+
+// 신청 상태별 표시(라벨·색). 011에서 partner_pending/partner_rejected 추가됨.
+const ENTRY_STATUS_META = {
+  approved:         { label: '승인됨',            cls: 'text-emerald-600 bg-emerald-50' },
+  rejected:         { label: '거절됨',            cls: 'text-red-500 bg-red-50' },
+  applied:          { label: '승인 대기중',       cls: 'text-amber-600 bg-amber-50' },
+  waitlisted:       { label: '대기순번',          cls: 'text-blue-600 bg-blue-50' },
+  withdrawn:        { label: '신청 철회',          cls: 'text-gray-400 bg-gray-100' },
+  partner_pending:  { label: '⏳ 파트너 수락 대기', cls: 'text-orange-600 bg-orange-50' },
+  partner_rejected: { label: '❌ 파트너 거절',     cls: 'text-gray-500 bg-gray-100' },
+}
+
+// 입금 상태(001: pending/confirmed/refunded)
+const PAY_META = {
+  pending:   { label: '입금 대기', cls: 'text-gray-500 bg-gray-100' },
+  confirmed: { label: '입금 완료', cls: 'text-emerald-600 bg-emerald-50' },
+  refunded:  { label: '환불됨',   cls: 'text-gray-400 bg-gray-100' },
+}
+
+// 파트너가 아직 수락 안 함/거절 → 팀 미확정 → 대진 편성 대상 제외
+const isPartnerBlocked = s => s === 'partner_pending' || s === 'partner_rejected'
 
 export default function EntryManagement() {
   const { id } = useParams()
@@ -74,6 +95,7 @@ export default function EntryManagement() {
 
   const catEntries = entries.filter(e => e.category_id === activeCat)
   const approved   = catEntries.filter(e => e.entry_status === 'approved').length
+  const pendingPartnerCount = catEntries.filter(e => isPartnerBlocked(e.entry_status)).length
   const activeCatInfo = categories.find(c => c.id === activeCat)
 
   // 종목별 신청자 샌드배깅 위험 판정
@@ -111,6 +133,15 @@ export default function EntryManagement() {
         <span className="text-blue-500">{catEntries.length}건 신청</span>
       </div>
 
+      {/* 파트너 미확정 안내 — 대진 편성 제외 대상 */}
+      {pendingPartnerCount > 0 && (
+        <div className="px-4 py-2.5 bg-orange-50 flex items-center gap-2 text-sm text-orange-700">
+          <Clock size={15} className="shrink-0" />
+          <span className="font-semibold">파트너 미확정 {pendingPartnerCount}건</span>
+          <span className="text-orange-500 text-xs">— 파트너가 아직 수락하지 않아 대진 편성에서 제외됩니다.</span>
+        </div>
+      )}
+
       {/* 샌드배깅 심사 요약 */}
       {flaggedCount > 0 && (
         <div className="px-4 py-2.5 bg-red-50 flex items-center gap-2 text-sm text-red-700">
@@ -131,9 +162,14 @@ export default function EntryManagement() {
           const status = e.entry_status
           const risk = entryRisk(e)
           const riskStyle = SANDBAG_STYLE[risk.level]
+          const blocked = isPartnerBlocked(status)          // 대진 편성 제외 대상
+          const isDoubles = ['남복', '여복', '혼복'].includes(activeCatInfo?.sport_type)
+          const statusMeta = ENTRY_STATUS_META[status] ?? { label: status, cls: 'text-gray-500 bg-gray-100' }
+          const payMeta = PAY_META[e.payment_status]
 
           // 선수 한 줄: 급수·인증·입상이력 + MMR 실측 급수·샌드배깅 배지
-          const playerRow = (p, assess) => {
+          //   roleNote: 파트너(player2)가 아직 수락 안 한 경우 등 상태 꼬리표
+          const playerRow = (p, assess, roleNote) => {
             if (!p) return null
             const pod = podium[p.id]
             const flagged = assess.level !== 'none'
@@ -141,6 +177,11 @@ export default function EntryManagement() {
               <div className="mb-1.5">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-semibold text-sm">{p.name}</span>
+                  {roleNote && (
+                    <span className="text-xs font-semibold text-orange-500 bg-orange-50 px-1.5 py-0.5 rounded">
+                      {roleNote}
+                    </span>
+                  )}
                   {p.official_grade && <GradeChip grade={p.official_grade} size="sm" />}
                   {p.grade_verified
                     ? <span className="text-xs text-emerald-600">✓ 인증</span>
@@ -164,26 +205,37 @@ export default function EntryManagement() {
           }
 
           return (
-            <div key={e.id} className={`bg-white rounded-2xl border p-4 ${risk.level === 'high' ? 'border-red-200' : 'border-gray-100'}`}>
+            <div
+              key={e.id}
+              className={`bg-white rounded-2xl border p-4 transition
+                          ${blocked ? 'opacity-60 border-dashed border-gray-300' : risk.level === 'high' ? 'border-red-200' : 'border-gray-100'}`}
+            >
+              {/* 파트너 미확정 → 대진 편성 제외 안내 리본 */}
+              {blocked && (
+                <div className="-mt-1 mb-2 flex items-center gap-1 text-xs font-semibold text-orange-600">
+                  <Clock size={12} className="shrink-0" />
+                  대진 편성 제외 — 팀 미확정
+                </div>
+              )}
+
               <div className="flex items-start justify-between gap-2">
                 <div className="flex-1">
                   {playerRow(e.player1, risk.a1)}
-                  {playerRow(e.player2, risk.a2)}
+                  {playerRow(e.player2, risk.a2, status === 'partner_pending' ? '수락 대기' : null)}
+                  {/* 복식인데 파트너 미지정 상태(비정상 데이터 방어) */}
+                  {isDoubles && !e.player2 && (
+                    <p className="text-xs text-orange-500 font-semibold">파트너 미지정</p>
+                  )}
                 </div>
 
-                {/* 상태 / 버튼 */}
+                {/* 상태 / 입금 / 버튼 */}
                 <div className="flex flex-col items-end gap-1.5">
-                  {status === 'approved' ? (
-                    <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
-                      승인됨
-                    </span>
-                  ) : status === 'rejected' ? (
-                    <span className="text-xs font-bold text-red-500 bg-red-50 px-2 py-0.5 rounded-full">
-                      거절됨
-                    </span>
-                  ) : (
-                    <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
-                      대기중
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap ${statusMeta.cls}`}>
+                    {statusMeta.label}
+                  </span>
+                  {payMeta && (
+                    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap ${payMeta.cls}`}>
+                      {payMeta.label}
                     </span>
                   )}
 

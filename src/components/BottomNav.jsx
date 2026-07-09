@@ -5,7 +5,7 @@ const playerNav = [
   { to: '/home',        icon: Home,        label: '홈' },
   { to: '/tournaments', icon: Trophy,       label: '대회' },
   { to: '/ranking',     icon: Medal,        label: '랭킹' },
-  { to: '/my-matches',  icon: CalendarDays, label: '내 경기' },
+  { to: '/my-matches',  icon: CalendarDays, label: '내 신청' },
   { to: '/profile',     icon: User,         label: '프로필' },
 ]
 
