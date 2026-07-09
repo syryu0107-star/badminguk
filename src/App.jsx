@@ -24,6 +24,8 @@ const LiveDashboard = lazy(() => import('./pages/organizer/LiveDashboard'))
 const CourtView = lazy(() => import('./pages/organizer/CourtView'))
 
 const LiveScore = lazy(() => import('./pages/public/LiveScore'))
+const RefereeScoreboard = lazy(() => import('./pages/referee/Scoreboard'))
+const Results = lazy(() => import('./pages/player/Results'))
 
 // TEST_MODE=true 이면 로그인 없이 모든 페이지 접근 가능
 const TEST_MODE = true
@@ -68,6 +70,7 @@ export default function App() {
         <Route path="/home"            element={<Req s={session} p={profile}><PlayerHome /></Req>} />
         <Route path="/tournaments"     element={<Req s={session} p={profile}><Tournaments /></Req>} />
         <Route path="/tournaments/:id" element={<Req s={session} p={profile}><TournamentDetail /></Req>} />
+        <Route path="/tournaments/:id/results" element={<Req s={session} p={profile}><Results /></Req>} />
         <Route path="/my-matches"      element={<Req s={session} p={profile}><MyMatches /></Req>} />
         <Route path="/ranking"         element={<Req s={session} p={profile}><Ranking /></Req>} />
         <Route path="/profile"         element={<Req s={session} p={profile}><Profile /></Req>} />
@@ -81,6 +84,7 @@ export default function App() {
         <Route path="/organizer/:id/courts" element={<Req s={session} p={profile}><CourtView /></Req>} />
 
         <Route path="/live/:id" element={<LiveScore />} />
+        <Route path="/referee/:matchId" element={<Req s={session} p={profile}><RefereeScoreboard /></Req>} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
