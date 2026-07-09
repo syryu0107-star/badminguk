@@ -33,9 +33,7 @@
 - 2026-07-10 · 초기화 · 이 원장 생성 (마스터 프롬프트 도입과 함께)
 
 ## 적용 대기 마이그레이션 (사람이 실행)
-- [ ] `supabase/migrations/013_notifications.sql` — 알림 지속 레이어(호출 이력·미확인 재알림·푸시 큐).
-      왜: 인앱 방송은 휘발성이라 앱을 닫은 선수는 호출을 놓침. 이 테이블이 이력·복구·외부발송 큐의 근거.
-      미적용 상태에서도 앱은 안 깨짐(엔진이 try/catch degrade, 인앱 방송은 계속 도달).
+- [x] `supabase/migrations/013_notifications.sql` — ✅ 2026-07-10 적용 완료 (notifications 테이블 + RLS 3정책 확인)
 
 ## 사람이 해야 할 일 (human-gated)
 - [ ] 솔라피 잔액 충전 확인 → 문자 OTP 실발송 (키·발신번호는 Supabase 시크릿에 등록됨)
