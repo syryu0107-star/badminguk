@@ -47,6 +47,71 @@ export function gradeRangeLabel(min, max) {
   return `${min} ~ ${max}`
 }
 
+// 참가 가능 조 화이트리스트(allowed_grades) 라벨. 빈 배열/NULL = 제한 없음.
+export function allowedGradesLabel(arr) {
+  return arr?.length ? arr.join('·') : '급수 제한 없음'
+}
+
+// ══════════════════════════════════════════════════════════════════
+// 급수 3축 체계 (단위 × 종목 × 조)   — DB 정본: 014_grade_system.sql
+//
+// 실제 배드민턴 급수는 "어느 단위 대회에서 인정받았는가"로 갈린다.
+// 같은 사람이 구 대회에선 C조, 시 대회에선 D조, 전국에선 초심일 수 있다.
+//   · 단위(unit) : gu(구)/si(시)/nat(전국)         ← 대회가 소속 단위를 가진다.
+//   · 종목(mode) : doubles(복식)/singles(단식)     ← sport_type에서 파생.
+//   · 조(grade)  : 왕초심~자강조 8단계 (위 GRADES).
+// 한 선수는 최대 6개 급수 트랙(단위 3 × 종목 2)을 가진다. 각 트랙 값은 조 또는 NULL(미보유).
+//
+// MMR 반영 강도 K는 단위로 결정: 구→32 / 시→48 / 전국→64.
+// unit→cert_level(gu→c/si→b/nat→a) 매핑으로 010 MMR RPC·mmr.js CERT_LEVELS와 연결.
+// ══════════════════════════════════════════════════════════════════
+
+export const UNITS = [
+  { key: 'gu',  label: '구',   cert: 'c', k: 32 },
+  { key: 'si',  label: '시',   cert: 'b', k: 48 },
+  { key: 'nat', label: '전국', cert: 'a', k: 64 },
+]
+export const UNIT_KEYS = UNITS.map(u => u.key)
+
+export const MODES = [
+  { key: 'doubles', label: '복식' },
+  { key: 'singles', label: '단식' },
+]
+
+// 6트랙 컬럼명 매핑 (DB bmg_grade_column과 1:1)
+const GRADE_COLS = {
+  'gu:doubles': 'grade_gu_dbl', 'si:doubles': 'grade_si_dbl', 'nat:doubles': 'grade_nat_dbl',
+  'gu:singles': 'grade_gu_sgl', 'si:singles': 'grade_si_sgl', 'nat:singles': 'grade_nat_sgl',
+}
+// (unit, mode) → profiles 급수 트랙 컬럼명. 알 수 없으면 null.
+export function gradeColumn(unit, mode) {
+  return GRADE_COLS[`${unit}:${mode}`] ?? null
+}
+
+// sport_type → 'singles'|'doubles' (남단/여단=단식, 그 외=복식)
+export function modeForSport(sportType) {
+  return SINGLES_SPORT_TYPES.includes(sportType) ? 'singles' : 'doubles'
+}
+
+export function unitInfo(unit) { return UNITS.find(u => u.key === unit) ?? UNITS[0] }
+export function unitToCert(unit) { return unitInfo(unit).cert }   // gu→c, si→b, nat→a
+export function unitToK(unit)    { return unitInfo(unit).k }      // gu→32, si→48, nat→64
+export function unitLabel(unit)  { return unitInfo(unit).label }  // gu→구, si→시, nat→전국
+
+// mode('doubles'|'singles') → 표시 라벨('복식'|'단식')
+export function modeLabel(mode) {
+  return MODES.find(m => m.key === mode)?.label ?? (mode === 'singles' ? '단식' : '복식')
+}
+
+// 선수의 (unit, mode) 트랙 급수. NULL(미보유)이면 null 반환(표시는 호출측이 '미보유'로).
+export function trackGrade(profile, unit, mode) {
+  return profile?.[gradeColumn(unit, mode)] ?? null
+}
+// 승급/자격 계산용 baseline (미보유→왕초심 idx0).
+export function trackGradeOrBase(profile, unit, mode) {
+  return trackGrade(profile, unit, mode) ?? GRADES[0].key
+}
+
 // ══════════════════════════════════════════════════════════════════
 // 급수 자동 승급 심사 (D · 감사 4-2)
 //
@@ -176,11 +241,11 @@ export function promotionProgress(currentGrade, awards, opts = {}) {
   }
 }
 
-// "우승 N회 정도면 승급" 같은 쉬운 안내(공인C 우승=winPoints 기준 근사)
+// "우승 N회 정도면 승급" 같은 쉬운 안내(구 대회 우승=winPoints 기준 근사)
 export function promotionHint(remaining, config = PROMOTION_CONFIG) {
   const r = Number(remaining)
-  if (!Number.isFinite(r) || r <= 0) return '승급 조건 충족! 다음 공인대회 종료 시 반영돼요'
-  const perWin = config.winPoints * (config.certMult.c ?? 1) // 공인C 우승 1회 점수
+  if (!Number.isFinite(r) || r <= 0) return '승급 조건 충족! 다음 대회 종료 시 반영돼요'
+  const perWin = config.winPoints * (config.certMult.c ?? 1) // 구 대회(cert c) 우승 1회 점수
   const wins = Math.max(1, Math.ceil(r / perWin))
-  return `공인 대회 우승 ${wins}회 정도면 승급`
+  return `대회 우승 ${wins}회 정도면 승급`
 }

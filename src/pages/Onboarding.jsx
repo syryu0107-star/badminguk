@@ -109,7 +109,7 @@ export default function Onboarding() {
             </p>
           ) : (
             <p className="text-gray-500 mb-4 text-sm">
-              스포넷 기준 공인 급수를 선택하세요.<br/>
+              내 급수를 선택하세요.<br/>
               처음이라면 <strong>왕초심</strong>을 선택하세요.
             </p>
           )}

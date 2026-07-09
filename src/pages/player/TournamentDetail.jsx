@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
-import { GRADES, getGradeIndex, gradeRangeLabel } from '../../lib/grades'
+import {
+  getGradeIndex, gradeRangeLabel, allowedGradesLabel,
+  trackGrade, trackGradeOrBase, modeForSport, modeLabel, unitLabel,
+} from '../../lib/grades'
 import { getGradeFromMMR } from '../../lib/sandbag'
-import { CERT_LEVELS } from '../../lib/mmr'
 import TopBar from '../../components/TopBar'
 import GradeChip from '../../components/GradeChip'
 import Spinner from '../../components/Spinner'
@@ -15,33 +17,36 @@ function isDoubles(cat) {
   return DOUBLES_TYPES.includes(cat?.sport_type)
 }
 
-// 급수+MMR 자격 검사
-function checkEligibility(profile, cat) {
+// 급수+MMR 자격 검사 (급수 3축: 대회 단위 × 종목의 선수 트랙 급수를 대조)
+function checkEligibility(profile, cat, tournament) {
   if (!profile) return { ok: false, reason: '로그인 필요' }
-  const userIdx = getGradeIndex(profile.official_grade)
+  const unit = tournament?.unit ?? 'gu'
+  const mode = modeForSport(cat.sport_type)
+  const myGrade = trackGradeOrBase(profile, unit, mode)   // 미보유 → 왕초심
 
-  if (cat.grade_min) {
-    const minIdx = getGradeIndex(cat.grade_min)
-    if (userIdx < minIdx) return { ok: false, reason: `${cat.grade_min} 이상만 참가 가능` }
+  // 1) 신규 화이트리스트(allowed_grades) 우선
+  const allowed = cat.allowed_grades ?? []
+  if (allowed.length && !allowed.includes(myGrade)) {
+    return { ok: false, reason: `${unitLabel(unit)} ${modeLabel(mode)} ${allowed.join('·')}만 참가 가능` }
   }
-  if (cat.grade_max) {
-    const maxIdx = getGradeIndex(cat.grade_max)
-    if (userIdx > maxIdx) return { ok: false, reason: `${cat.grade_max} 이하만 참가 가능 (반샌드배깅)` }
+  // 2) 레거시 grade_min/max 폴백 (allowed 비었을 때만)
+  if (!allowed.length) {
+    const gi = getGradeIndex(myGrade)
+    if (cat.grade_min && gi < getGradeIndex(cat.grade_min)) return { ok: false, reason: `${cat.grade_min} 이상만 참가 가능` }
+    if (cat.grade_max && gi > getGradeIndex(cat.grade_max)) return { ok: false, reason: `${cat.grade_max} 이하만 참가 가능` }
   }
-  if (cat.min_mmr && profile.mmr < cat.min_mmr) {
-    return { ok: false, reason: `MMR ${cat.min_mmr} 이상 필요 (현재 ${profile.mmr})` }
-  }
-  if (cat.max_mmr && profile.mmr > cat.max_mmr) {
-    return { ok: false, reason: `MMR ${cat.max_mmr} 이하만 참가 가능 (현재 ${profile.mmr})` }
-  }
+  // 3) MMR 게이트 (단위 무관, 종목별 MMR 컬럼 사용)
+  const mmr = mode === 'singles' ? (profile.singles_mmr ?? 1000) : (profile.mmr ?? 1000)
+  if (cat.min_mmr && mmr < cat.min_mmr) return { ok: false, reason: `MMR ${cat.min_mmr} 이상 필요 (현재 ${mmr})` }
+  if (cat.max_mmr && mmr > cat.max_mmr) return { ok: false, reason: `MMR ${cat.max_mmr} 이하만 참가 가능 (현재 ${mmr})` }
   return { ok: true }
 }
 
-const CERT_BADGE = {
-  none: 'bg-gray-100 text-gray-500',
-  c:    'bg-blue-100 text-blue-700',
-  b:    'bg-purple-100 text-purple-700',
-  a:    'bg-red-100 text-red-700',
+// 대회 단위(구/시/전국) 배지 색
+const UNIT_BADGE = {
+  gu:  'bg-blue-100 text-blue-700',
+  si:  'bg-purple-100 text-purple-700',
+  nat: 'bg-red-100 text-red-700',
 }
 
 export default function TournamentDetail() {
@@ -129,7 +134,8 @@ export default function TournamentDetail() {
     setSelectedPartner(null)
 
     const digits = q.replace(/\D/g, '')
-    const cols = 'id,name,phone,official_grade,grade_verified,mmr,mmr_games_played'
+    const cols = 'id,name,phone,official_grade,grade_verified,mmr,singles_mmr,mmr_games_played,'
+      + 'grade_gu_dbl,grade_si_dbl,grade_nat_dbl,grade_gu_sgl,grade_si_sgl,grade_nat_sgl'
     let rows = []
 
     if (digits.length >= 10) {
@@ -180,7 +186,7 @@ export default function TournamentDetail() {
   async function submitEntry() {
     if (!selectedCat) return
     const cat = categories.find(c => c.id === selectedCat)
-    const elig = checkEligibility(profile, cat)
+    const elig = checkEligibility(profile, cat, tournament)
     if (!elig.ok) { setEntryError(elig.reason); return }
 
     const doubles = isDoubles(cat)
@@ -199,7 +205,7 @@ export default function TournamentDetail() {
         setSubmitting(false); return
       }
       // 파트너에게도 동일 급수·MMR 자격 검사 (반샌드배깅 파트너 구멍 봉합, M1)
-      const pElig = checkEligibility(pm, cat)
+      const pElig = checkEligibility(pm, cat, tournament)
       if (!pElig.ok) {
         setEntryError(`파트너(${pm.name || '상대'}) 자격 미달: ${pElig.reason}`)
         setSubmitting(false); return
@@ -225,9 +231,10 @@ export default function TournamentDetail() {
   if (loading) return <div className="flex justify-center py-20"><Spinner size={36} /></div>
   if (!tournament) return <div className="text-center py-20 text-gray-400">대회를 찾을 수 없습니다.</div>
 
-  const certLevel = tournament.cert_level ?? 'none'
-  const certInfo  = CERT_LEVELS[certLevel]
+  const unit      = tournament.unit ?? 'gu'
   const canApply  = tournament.status === 'open'
+  // 대회 단위 복식 트랙을 대표 급수로 표시(대부분 종목이 복식). null=미보유
+  const myUnitDblGrade = trackGrade(profile, unit, 'doubles')
 
   return (
     <div className="safe-bottom">
@@ -238,11 +245,10 @@ export default function TournamentDetail() {
         className="h-44 flex flex-col justify-end px-5 pb-5"
         style={{ background: 'linear-gradient(135deg, #C60C30, #003478)' }}
       >
-        {/* 공인 등급 배지 */}
+        {/* 대회 단위 배지 (구/시/전국) */}
         <div className="mb-2">
-          <span className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-full ${CERT_BADGE[certLevel]}`}>
-            <Shield size={11} /> {certInfo?.label}
-            {certLevel !== 'none' && <span className="ml-1">{certInfo?.desc}</span>}
+          <span className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-full ${UNIT_BADGE[unit] ?? UNIT_BADGE.gu}`}>
+            <Shield size={11} /> {unitLabel(unit)} 대회
           </span>
         </div>
         <h1 className="text-xl font-black text-white">{tournament.title}</h1>
@@ -256,8 +262,10 @@ export default function TournamentDetail() {
       {profile && (
         <div className="mx-4 mt-4 bg-gray-50 rounded-2xl px-4 py-3 flex items-center gap-3">
           <div>
-            <p className="text-xs text-gray-400">내 공인 급수</p>
-            <GradeChip grade={profile.official_grade} size="sm" />
+            <p className="text-xs text-gray-400">내 급수 ({unitLabel(unit)} 복식)</p>
+            {myUnitDblGrade
+              ? <GradeChip grade={myUnitDblGrade} size="sm" />
+              : <span className="text-sm font-semibold text-gray-400">미보유</span>}
           </div>
           <div className="w-px h-8 bg-gray-200" />
           <div>
@@ -293,11 +301,15 @@ export default function TournamentDetail() {
           <div className="space-y-3">
             {categories.map(cat => {
               const alreadyApplied = myEntries.some(e => e.category_id === cat.id)
-              const elig = checkEligibility(profile, cat)
-              const gradeLabel = gradeRangeLabel(cat.grade_min, cat.grade_max)
+              const elig = checkEligibility(profile, cat, tournament)
+              const catMode = modeForSport(cat.sport_type)
+              // allowed_grades 우선, 없으면 레거시 grade_min/max 라벨로 폴백
+              const gradeLabel = (cat.allowed_grades?.length)
+                ? allowedGradesLabel(cat.allowed_grades)
+                : gradeRangeLabel(cat.grade_min, cat.grade_max)
               const hasMMRGate = cat.min_mmr || cat.max_mmr
               const doubles = isDoubles(cat)
-              const partnerElig = selectedPartner ? checkEligibility(selectedPartner, cat) : null
+              const partnerElig = selectedPartner ? checkEligibility(selectedPartner, cat, tournament) : null
 
               return (
                 <div key={cat.id} className={`bg-white rounded-2xl p-4 border transition
@@ -309,7 +321,9 @@ export default function TournamentDetail() {
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-bold">{cat.sport_type}</span>
-                        {cat.grade_max && <GradeChip grade={cat.grade_max} size="sm" />}
+                        <span className="text-[11px] font-semibold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-full">
+                          {unitLabel(unit)} · {modeLabel(catMode)}
+                        </span>
                         {gradeLabel !== '급수 제한 없음' && (
                           <span className="text-xs text-gray-400">{gradeLabel}</span>
                         )}

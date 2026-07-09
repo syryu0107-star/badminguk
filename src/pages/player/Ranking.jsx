@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
-import { getGradeInfo } from '../../lib/grades'
+import { getGradeInfo, UNITS, gradeColumn, trackGrade, unitLabel } from '../../lib/grades'
 import { calcReliability, isRanked, MIN_RANKED_GAMES } from '../../lib/reliability'
 import BottomNav from '../../components/BottomNav'
 import GradeChip from '../../components/GradeChip'
@@ -10,11 +10,31 @@ import { TrendingUp, Medal } from 'lucide-react'
 
 const GRADE_FILTERS = ['전체', 'A조', 'B조', 'C조', 'D조', '왕초심']
 
+// 프로필에서 읽어올 6개 급수 트랙 컬럼(단위 × 종목)
+const TRACK_COLS = [
+  'grade_gu_dbl', 'grade_si_dbl', 'grade_nat_dbl',
+  'grade_gu_sgl', 'grade_si_sgl', 'grade_nat_sgl',
+]
+
 const RANK_COLORS = [
   'text-yellow-500',  // 1
   'text-gray-400',    // 2
   'text-amber-600',   // 3
 ]
+
+// 선택한 단위의 트랙 급수 칩. 미보유(null)면 회색 "미보유"로 표시.
+function TrackGradeChip({ profile, unit, mode }) {
+  const g = trackGrade(profile, unit, mode)
+  if (!g) {
+    return (
+      <span className="inline-flex items-center rounded-full font-semibold whitespace-nowrap
+                       text-xs px-2 py-0.5 bg-gray-100 text-gray-400">
+        미보유
+      </span>
+    )
+  }
+  return <GradeChip grade={g} size="sm" />
+}
 
 export default function Ranking() {
   const [players, setPlayers]   = useState([])
@@ -23,7 +43,8 @@ export default function Ranking() {
   const [myProfile, setMyProfile] = useState(null)
   const [loading, setLoading]   = useState(true)
   const [filter, setFilter]     = useState('전체')
-  const [tab, setTab]           = useState('doubles') // 'doubles' | 'singles'
+  const [tab, setTab]           = useState('doubles') // 'doubles' | 'singles' (=종목/mode)
+  const [unit, setUnit]         = useState('si')       // 'gu' | 'si' | 'nat' (=단위, 급수 트랙 축)
 
   useEffect(() => {
     async function load() {
@@ -37,27 +58,29 @@ export default function Ranking() {
         setMyProfile(me)
       }
 
-      await fetchRanking(filter, tab, me)
+      await fetchRanking(filter, tab, unit, me)
       setLoading(false)
     }
     load()
   }, [])
 
-  async function fetchRanking(gradeFilter, gameTab, meProfile) {
+  async function fetchRanking(gradeFilter, gameTab, unitKey, meProfile) {
     setLoading(true)
+    // MMR·경기수는 단위 무관(단식/복식 2트랙만). 급수만 선택한 단위의 트랙을 사용.
     const mmrCol   = gameTab === 'singles' ? 'singles_mmr'   : 'mmr'
     const gamesCol = gameTab === 'singles' ? 'singles_games_played' : 'mmr_games_played'
-    const gradeCol = gameTab === 'singles' ? 'singles_grade'  : 'official_grade'
+    const gradeCol = gradeColumn(unitKey, gameTab)   // 예: grade_si_dbl
 
     let query = supabase
       .from('profiles')
-      .select(`id, name, official_grade, mmr, mmr_games_played, singles_grade, singles_mmr, singles_games_played`)
+      .select(`id, name, mmr, mmr_games_played, singles_mmr, singles_games_played, ${TRACK_COLS.join(', ')}`)
       .gt(mmrCol, 0)
       .gt(gamesCol, 0)
       .order(mmrCol, { ascending: false })
       .limit(100)
 
-    if (gradeFilter !== '전체') {
+    // 급수 필터는 선택한 단위의 트랙 컬럼 기준
+    if (gradeFilter !== '전체' && gradeCol) {
       query = query.eq(gradeCol, gradeFilter)
     }
 
@@ -94,7 +117,7 @@ export default function Ranking() {
     setPlayers(ranked)
     setProvisional(pending)
 
-    // 내 순위 계산
+    // 내 순위 계산(단위 무관 · MMR 기준)
     if (meProfile) {
       const { count } = await supabase
         .from('profiles')
@@ -109,17 +132,22 @@ export default function Ranking() {
 
   function changeFilter(f) {
     setFilter(f)
-    fetchRanking(f, tab, myProfile)
+    fetchRanking(f, tab, unit, myProfile)
   }
 
   function changeTab(t) {
     setTab(t)
-    fetchRanking(filter, t, myProfile)
+    fetchRanking(filter, t, unit, myProfile)
+  }
+
+  function changeUnit(u) {
+    setUnit(u)
+    fetchRanking(filter, tab, u, myProfile)
   }
 
   const mmrKey   = tab === 'singles' ? 'singles_mmr'          : 'mmr'
   const gamesKey = tab === 'singles' ? 'singles_games_played' : 'mmr_games_played'
-  const gradeKey = tab === 'singles' ? 'singles_grade'        : 'official_grade'
+  const modeLabel = tab === 'singles' ? '단식' : '복식'
 
   return (
     <div className="safe-bottom">
@@ -132,7 +160,7 @@ export default function Ranking() {
           <Medal size={18} />
           <h1 className="text-xl font-black">전국 랭킹</h1>
         </div>
-        <p className="text-white/60 text-xs">MMR 기반 실시간 순위</p>
+        <p className="text-white/60 text-xs">MMR 기반 실시간 순위 · 급수는 단위별로 표시</p>
 
         {/* 내 순위 */}
         {myProfile && (
@@ -147,14 +175,14 @@ export default function Ranking() {
               </p>
             </div>
             <div className="text-right">
-              <p className="text-white/70 text-xs">{tab === 'singles' ? '단식' : '복식'} MMR</p>
+              <p className="text-white/70 text-xs">{modeLabel} MMR</p>
               <p className="font-black">{(myProfile[mmrKey] ?? 1000).toLocaleString()}</p>
             </div>
           </div>
         )}
       </header>
 
-      {/* 단식/복식 탭 */}
+      {/* 단식/복식 탭 (종목) */}
       <div className="flex mx-4 mt-4 bg-gray-100 rounded-xl p-1 gap-1">
         {[
           { key: 'doubles', label: '🏸 복식' },
@@ -167,7 +195,17 @@ export default function Ranking() {
         ))}
       </div>
 
-      {/* 급수 필터 */}
+      {/* 단위(구/시/전국) 탭 — 표시할 급수 트랙 선택 */}
+      <div className="flex mx-4 mt-2 bg-gray-100 rounded-xl p-1 gap-1">
+        {UNITS.map(u => (
+          <button key={u.key} onClick={() => changeUnit(u.key)}
+            className={`flex-1 py-2 rounded-lg text-sm font-bold transition
+              ${unit === u.key ? 'bg-white text-[#003478] shadow-sm' : 'text-gray-500'}`}
+          >{u.label}</button>
+        ))}
+      </div>
+
+      {/* 급수 필터 (선택한 단위 트랙 기준) */}
       <div className="flex gap-2 px-4 mt-3 overflow-x-auto pb-1">
         {GRADE_FILTERS.map(g => (
           <button key={g} onClick={() => changeFilter(g)}
@@ -184,14 +222,19 @@ export default function Ranking() {
         ) : players.length === 0 && provisional.length === 0 ? (
           <div className="text-center py-16 text-gray-400">
             <p className="text-3xl mb-2">🏸</p>
-            <p className="text-sm">랭킹 데이터가 없습니다.<br/>첫 공인 대회에 참가해보세요!</p>
+            <p className="text-sm">
+              {filter === '전체'
+                ? <>랭킹 데이터가 없습니다.<br/>첫 대회에 참가해보세요!</>
+                : <>{unitLabel(unit)} {modeLabel} {filter} 선수가 아직 없어요.</>}
+            </p>
           </div>
         ) : (
           <div className="space-y-2">
             {players.map((p, i) => {
               const rank = i + 1
               const isMe = myProfile?.id === p.id
-              const gradeInfo = getGradeInfo(p[gradeKey])
+              const g = trackGrade(p, unit, tab)
+              const gradeInfo = getGradeInfo(g)
 
               return (
                 <div key={p.id}
@@ -211,9 +254,9 @@ export default function Ranking() {
                     )}
                   </div>
 
-                  {/* 급수 아이콘 */}
+                  {/* 급수 아이콘 (선택 단위 트랙) */}
                   <div className="w-9 h-9 rounded-full bg-gray-50 flex items-center justify-center text-lg shrink-0">
-                    {gradeInfo?.flair ?? '🏸'}
+                    {g ? (gradeInfo?.flair ?? '🏸') : '🏸'}
                   </div>
 
                   {/* 이름 + 급수 */}
@@ -222,7 +265,7 @@ export default function Ranking() {
                       <p className={`font-bold text-sm truncate ${isMe ? 'text-[#C60C30]' : ''}`}>
                         {p.name} {isMe && '(나)'}
                       </p>
-                      <GradeChip grade={p[gradeKey]} size="sm" />
+                      <TrackGradeChip profile={p} unit={unit} mode={tab} />
                     </div>
                     <div className="flex items-center gap-1.5">
                       <p className="text-xs text-gray-400">{p[gamesKey] ?? 0}경기</p>
@@ -251,7 +294,8 @@ export default function Ranking() {
                 <div className="space-y-2">
                   {provisional.map(p => {
                     const isMe = myProfile?.id === p.id
-                    const gradeInfo = getGradeInfo(p[gradeKey])
+                    const g = trackGrade(p, unit, tab)
+                    const gradeInfo = getGradeInfo(g)
                     return (
                       <div key={p.id}
                         className={`rounded-2xl border border-dashed px-4 py-3 flex items-center gap-3
@@ -259,14 +303,14 @@ export default function Ranking() {
                       >
                         <div className="w-8 text-center shrink-0 text-sm font-black text-gray-300">–</div>
                         <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-lg shrink-0 opacity-70">
-                          {gradeInfo?.flair ?? '🏸'}
+                          {g ? (gradeInfo?.flair ?? '🏸') : '🏸'}
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <p className={`font-bold text-sm truncate ${isMe ? 'text-[#C60C30]' : 'text-gray-600'}`}>
                               {p.name} {isMe && '(나)'}
                             </p>
-                            <GradeChip grade={p[gradeKey]} size="sm" />
+                            <TrackGradeChip profile={p} unit={unit} mode={tab} />
                           </div>
                           <div className="flex items-center gap-1.5">
                             <p className="text-xs text-gray-400">{p[gamesKey] ?? 0}경기</p>

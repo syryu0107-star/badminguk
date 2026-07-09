@@ -1,13 +1,16 @@
-// ── 공인 등급별 K 팩터 ──────────────────────────────────────────
-// none: 비공인(친선전) → MMR 변동 없음
-// c: 공인C 일반 동호회 대회
-// b: 공인B 배드민국 인증 주최자
-// a: 공인A 협회 연계 대회
+// ── 대회 단위별 K 팩터 ──────────────────────────────────────────
+// 대회 단위(구/시/전국)가 MMR 반영 강도 K를 결정한다. 전부 반영(비반영 없음).
+//   c: 구 대회   (K=32)   ← tournaments.unit 'gu'
+//   b: 시 대회   (K=48)   ← tournaments.unit 'si'
+//   a: 전국 대회 (K=64)   ← tournaments.unit 'nat'
+// ⚠️ 키(none/c/b/a)와 K 값은 010 apply_match_mmr RPC와의 계약이므로 유지.
+//    UI에 보이는 label/desc 문자열만 단위 표현으로 교체(로직 불변).
+//    none은 레거시 호환용(MMR 변동 없음 행 표시). 신규 대회는 항상 c/b/a.
 export const CERT_LEVELS = {
-  none: { label: '비공인',  k: 0,  color: 'gray',  desc: 'MMR 변동 없음 (친선전)' },
-  c:    { label: '공인 C',  k: 32, color: 'blue',  desc: 'K=32 · 일반 동호회 대회' },
-  b:    { label: '공인 B',  k: 48, color: 'purple', desc: 'K=48 · 배드민국 인증 주최자' },
-  a:    { label: '공인 A',  k: 64, color: 'red',   desc: 'K=64 · 협회 연계 공인 대회' },
+  none: { label: '미반영',   k: 0,  color: 'gray',   desc: 'MMR 변동 없음' },
+  c:    { label: '구 대회',  k: 32, color: 'blue',   desc: 'K=32 · 구 단위 대회' },
+  b:    { label: '시 대회',  k: 48, color: 'purple', desc: 'K=48 · 시 단위 대회' },
+  a:    { label: '전국 대회', k: 64, color: 'red',    desc: 'K=64 · 전국 단위 대회' },
 }
 
 // 신규 플레이어(10경기 미만) K 보정: 1.5배

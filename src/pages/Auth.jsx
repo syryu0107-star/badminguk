@@ -186,7 +186,7 @@ export default function Auth() {
           🏸
         </div>
         <h1 className="text-xl font-black tracking-tight">배드민국</h1>
-        <p className="text-xs text-gray-400 mt-0.5">대한민국 배드민턴 공인 MMR</p>
+        <p className="text-xs text-gray-400 mt-0.5">대한민국 배드민턴 실력 MMR</p>
       </div>
 
       {/* 진행 단계 표시 */}

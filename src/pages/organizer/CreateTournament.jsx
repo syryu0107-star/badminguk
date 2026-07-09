@@ -1,16 +1,14 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
-import { GRADES, SPORT_TYPES } from '../../lib/grades'
-import { CERT_LEVELS } from '../../lib/mmr'
+import { GRADES, SPORT_TYPES, UNITS } from '../../lib/grades'
 import { TIEBREAKER_PRESETS } from '../../lib/tournament'
 import TopBar from '../../components/TopBar'
 import { Plus, Trash2, Info, ChevronDown, ChevronUp, Settings } from 'lucide-react'
 
 const DEFAULT_CAT = {
   sport_type: '남복',
-  grade_min: '',
-  grade_max: '',
+  allowed_grades: [],   // 참가 가능 조 화이트리스트(빈 배열=제한 없음). grade_min/max는 레거시 폴백.
   min_mmr: '',
   max_mmr: '',
   max_teams: 16,
@@ -28,13 +26,6 @@ const DEFAULT_CAT = {
   min_teams: 4,
   seeding_enabled: false,
 }
-
-const CERT_OPTIONS = [
-  { key: 'none', label: '비공인 (친선전)', icon: '🤝',     mmr: 'MMR 반영: 없음',     desc: '전국 랭킹에 반영 안 됨' },
-  { key: 'c',    label: '공인 C',          icon: '⭐',      mmr: 'MMR 반영: 보통',     desc: '일반 동호회 대회' },
-  { key: 'b',    label: '공인 B',          icon: '⭐⭐',    mmr: 'MMR 반영: 큼',       desc: '인증 주최자 대회' },
-  { key: 'a',    label: '공인 A',          icon: '⭐⭐⭐',  mmr: 'MMR 반영: 매우 큼',  desc: '협회 연계 대회' },
-]
 
 const FORMAT_OPTIONS = [
   { key: 'pool_knockout', label: '조별+토너먼트', sub: '풀리그 후 토너먼트' },
@@ -287,7 +278,7 @@ export default function CreateTournament() {
     court_count: 4,
     registration_end: '',
     description: '',
-    cert_level: 'c',
+    unit: 'gu',   // 대회 단위(구/시/전국). 저장 시 DB 트리거가 cert_level·K를 자동 세팅.
   })
   const [categories, setCategories] = useState([{ ...DEFAULT_CAT }])
   const [expandedCats, setExpandedCats] = useState({})
@@ -385,6 +376,29 @@ export default function CreateTournament() {
           </div>
         </section>
 
+        {/* 대회 단위 (구/시/전국) — 저장 시 DB 트리거가 cert_level·K를 자동 세팅 */}
+        <section>
+          <h2 className="font-bold mb-3 text-gray-700">대회 단위</h2>
+          <div className="grid grid-cols-3 gap-2">
+            {UNITS.map(u => (
+              <button
+                key={u.key}
+                onClick={() => update('unit', u.key)}
+                className={`py-3 rounded-xl border-2 text-center transition
+                  ${form.unit === u.key ? 'border-[#C60C30] bg-red-50' : 'border-gray-100 bg-gray-50'}`}
+              >
+                <p className={`text-sm font-bold ${form.unit === u.key ? 'text-[#C60C30]' : 'text-gray-700'}`}>
+                  {u.label} 대회
+                </p>
+                <p className="text-xs text-gray-400 mt-0.5">MMR 반영 K{u.k}</p>
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] text-gray-400 mt-2 px-1 leading-relaxed">
+            단위가 클수록 MMR 반영과 급수 승급 가중이 커집니다 (구 &lt; 시 &lt; 전국). 승급도 이 단위의 급수 트랙에 반영돼요.
+          </p>
+        </section>
+
         {/* 모든 대회는 전국 랭킹(MMR)에 반영 */}
         <section>
           <div className="flex items-start gap-2.5 bg-blue-50 rounded-2xl px-4 py-3.5">
@@ -466,26 +480,33 @@ export default function CreateTournament() {
                 </div>
 
                 <div className="space-y-2.5">
-                  {/* 급수 제한 */}
-                  <div className="flex items-center gap-2">
-                    <label className="text-xs text-gray-500 w-16 shrink-0">급수 하한</label>
-                    <select
-                      value={cat.grade_min}
-                      onChange={e => updateCat(i, 'grade_min', e.target.value)}
-                      className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-1.5 outline-none"
-                    >
-                      <option value="">제한 없음</option>
-                      {GRADES.map(g => <option key={g.key} value={g.key}>{g.label}</option>)}
-                    </select>
-                    <label className="text-xs text-gray-500 w-16 shrink-0">급수 상한</label>
-                    <select
-                      value={cat.grade_max}
-                      onChange={e => updateCat(i, 'grade_max', e.target.value)}
-                      className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-1.5 outline-none"
-                    >
-                      <option value="">제한 없음</option>
-                      {GRADES.map(g => <option key={g.key} value={g.key}>{g.label}</option>)}
-                    </select>
+                  {/* 참가 가능 급수 (allowed_grades 화이트리스트) */}
+                  <div>
+                    <label className="text-xs text-gray-500 block mb-1.5">참가 가능 급수</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {GRADES.map(g => {
+                        const on = (cat.allowed_grades ?? []).includes(g.key)
+                        return (
+                          <button
+                            key={g.key}
+                            onClick={() => {
+                              const cur = cat.allowed_grades ?? []
+                              updateCat(i, 'allowed_grades',
+                                on ? cur.filter(k => k !== g.key) : [...cur, g.key])
+                            }}
+                            className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition
+                              ${on
+                                ? 'bg-[#C60C30] text-white border-[#C60C30]'
+                                : 'bg-gray-50 text-gray-500 border-gray-200'}`}
+                          >
+                            {g.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <p className="text-[11px] text-gray-400 mt-1.5 leading-relaxed">
+                      선택 안 하면 급수 제한 없음. {UNITS.find(u => u.key === form.unit)?.label} 대회의 해당 급수 트랙만 대조돼요.
+                    </p>
                   </div>
 
                   {/* MMR 범위 (선택) */}

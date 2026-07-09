@@ -143,13 +143,13 @@ export default function Home() {
           <div className="bg-white/15 backdrop-blur rounded-2xl p-3.5">
             <div className="flex items-center gap-1 mb-1.5">
               <Award size={12} className="text-white/60" />
-              <p className="text-white/60 text-xs">공인 급수</p>
+              <p className="text-white/60 text-xs">내 급수</p>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-2xl">{gradeInfo?.flair}</span>
               <p className="text-xl font-black">{grade}</p>
             </div>
-            <p className="text-white/50 text-xs mt-1">스포넷 기준 · 하락 없음</p>
+            <p className="text-white/50 text-xs mt-1">하락 없음</p>
           </div>
 
           {/* 플랫폼 MMR — 매 경기 변동 */}
@@ -240,7 +240,7 @@ export default function Home() {
           <span className="text-xl">⚠️</span>
           <div className="flex-1 text-sm">
             <p className="font-semibold text-amber-800">급수 미인증</p>
-            <p className="text-amber-600 text-xs">스포넷 캡처 업로드 시 인증 뱃지가 부여됩니다.</p>
+            <p className="text-amber-600 text-xs">급수 증빙 업로드 시 인증 뱃지가 부여됩니다.</p>
           </div>
           <button onClick={() => navigate('/profile')} className="text-xs font-bold text-amber-700 shrink-0">
             인증하기
@@ -253,7 +253,7 @@ export default function Home() {
         <div className="mx-4 mt-4 bg-blue-50 rounded-2xl p-4 border border-blue-100">
           <p className="text-sm font-bold text-blue-800 mb-1">🏸 배드민국 MMR이란?</p>
           <p className="text-xs text-blue-600 leading-relaxed">
-            <strong>공인 급수</strong>는 스포넷 기준 자격 등급으로 절대 내려가지 않습니다.<br/>
+            <strong>내 급수</strong>는 대회에서 인정받은 자격 등급으로 절대 내려가지 않습니다.<br/>
             <strong>플랫폼 MMR</strong>은 매 경기 Elo 공식으로 자동 계산되는 실력 점수입니다.<br/>
             강한 상대를 이기면 더 많이 올라가고, 약한 상대에게 지면 더 많이 떨어집니다.
           </p>
@@ -292,7 +292,7 @@ export default function Home() {
           <span className="text-3xl">🏟️</span>
           <div className="flex-1">
             <p className="font-bold">대회 주최자이신가요?</p>
-            <p className="text-white/70 text-xs">AI 대진표 + 공인 MMR 자동 반영</p>
+            <p className="text-white/70 text-xs">AI 대진표 + MMR 자동 반영</p>
           </div>
           <ChevronRight size={18} className="text-white/50" />
         </button>

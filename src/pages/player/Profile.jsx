@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
-import { getGradeInfo, getMMRPercentile, GRADES, promotionHint } from '../../lib/grades'
+import { getGradeInfo, getMMRPercentile, GRADES, promotionHint, UNITS, MODES, trackGrade, unitLabel } from '../../lib/grades'
 import { CERT_LEVELS } from '../../lib/mmr'
 import { calcReliability, MIN_RANKED_GAMES, MIN_RANKED_RELIABILITY, isRanked } from '../../lib/reliability'
 import BottomNav from '../../components/BottomNav'
@@ -81,7 +81,7 @@ function PromoProgressCard({ prog, modeLabel }) {
             {promotionHint(Number(prog.remaining))}
           </p>
           <p className="mt-1 text-[11px] text-gray-400 leading-relaxed">
-            공인 대회 입상(우승 3점 · 준우승 2점 · 3위 1점 × 공인등급 배수)이 쌓이면 자동 승급돼요.
+            대회 입상(우승 3점 · 준우승 2점 · 3위 1점 × 단위 배수)이 쌓이면 자동 승급돼요.
             급수는 절대 떨어지지 않아요.
           </p>
         </>
@@ -95,7 +95,7 @@ function GradeTimeline({ items }) {
   if (!items?.length) {
     return (
       <p className="text-xs text-gray-400 text-center py-6">
-        아직 승급 이력이 없어요.<br/>공인 대회 입상으로 급수를 올려보세요!
+        아직 승급 이력이 없어요.<br/>대회 입상으로 급수를 올려보세요!
       </p>
     )
   }
@@ -108,7 +108,7 @@ function GradeTimeline({ items }) {
             <p className="text-sm font-bold text-gray-800">
               {g.from_grade} → <span className="text-[#C60C30]">{g.to_grade}</span>
               <span className="ml-1.5 text-[11px] font-normal text-gray-400">
-                {g.game_mode === 'singles' ? '단식' : '복식'}
+                {unitLabel(g.unit ?? 'si')} · {g.game_mode === 'singles' ? '단식' : '복식'}
               </span>
             </p>
             <p className="text-[11px] text-gray-400">
@@ -135,8 +135,7 @@ export default function Profile() {
   const [history, setHistory]     = useState([])
   const [tourneys, setTourneys]   = useState([])
   const [gradeHistory, setGradeHistory] = useState([])   // 승급 이력 (grade_history)
-  const [promoDoubles, setPromoDoubles] = useState(null)  // 복식 승급 진행 (RPC)
-  const [promoSingles, setPromoSingles] = useState(null)  // 단식 승급 진행 (RPC)
+  const [promos, setPromos] = useState({})               // 트랙별 승급 진행 (v2 RPC): { 'si:doubles': {...} }
   const [loading, setLoading]     = useState(true)
   const [uploading, setUploading] = useState(false)
   const [tab, setTab]             = useState('mmr')  // 'mmr' | 'career'
@@ -147,9 +146,13 @@ export default function Profile() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { setLoading(false); return }
 
+      // 6개 급수 트랙(단위 × 종목)별 승급 진행 프리뷰 (014 v2 RPC)
+      const promoTracks = []
+      for (const u of UNITS) for (const m of MODES) promoTracks.push({ unit: u.key, mode: m.key })
+
       const [
-        { data: p }, { data: h }, { data: entries },
-        { data: gh }, { data: progD }, { data: progS },
+        { data: p }, { data: h }, { data: entries }, { data: gh },
+        ...promoResults
       ] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', user.id).single(),
         supabase.from('mmr_history')
@@ -162,7 +165,7 @@ export default function Profile() {
             *,
             category:tournament_categories(
               sport_type, grade_min, grade_max,
-              tournament:tournaments(id, title, date, cert_level, status)
+              tournament:tournaments(id, title, date, unit, cert_level, status)
             ),
             p1:profiles!player1_id(id, name),
             p2:profiles!player2_id(id, name)
@@ -170,22 +173,26 @@ export default function Profile() {
           .or(`player1_id.eq.${user.id},player2_id.eq.${user.id}`)
           .order('created_at', { ascending: false })
           .limit(20),
-        // 급수 승급 이력 + 진행 프리뷰 (012)
+        // 급수 승급 이력 (grade_history, 단위 태그 포함)
         supabase.from('grade_history')
           .select('*')
           .eq('player_id', user.id)
           .order('created_at', { ascending: false })
           .limit(20),
-        supabase.rpc('grade_promotion_progress', { p_player: user.id, p_mode: 'doubles' }),
-        supabase.rpc('grade_promotion_progress', { p_player: user.id, p_mode: 'singles' }),
+        // 트랙별 승급 프리뷰 (grade_promotion_progress_v2)
+        ...promoTracks.map(t =>
+          supabase.rpc('grade_promotion_progress_v2', { p_player: user.id, p_mode: t.mode, p_unit: t.unit })
+        ),
       ])
+
+      const promoMap = {}
+      promoTracks.forEach((t, i) => { promoMap[`${t.unit}:${t.mode}`] = promoResults[i]?.data ?? null })
 
       setProfile(p)
       setHistory(h ?? [])
       setTourneys(entries ?? [])
       setGradeHistory(gh ?? [])
-      setPromoDoubles(progD ?? null)
-      setPromoSingles(progS ?? null)
+      setPromos(promoMap)
       setLoading(false)
     }
     load()
@@ -229,6 +236,16 @@ export default function Profile() {
   const reliability = calcReliability({ gamesPlayed, history: doublesHistory })
   const ranked = isRanked(gamesPlayed, reliability.score)
 
+  // 트랙 키('si:doubles') → "시 복식" 라벨
+  const trackTitle = (key) => {
+    const [u, m] = key.split(':')
+    const ml = MODES.find(x => x.key === m)?.label ?? m
+    return `${unitLabel(u)} ${ml}`
+  }
+  // 승급 점수가 쌓였거나 급수를 이미 가진 트랙만 프리뷰로 노출(빈 카드 6개 방지)
+  const activePromos = Object.entries(promos)
+    .filter(([, p]) => p && (p.at_auto_cap || Number(p.points) > 0 || p.current_grade !== '왕초심'))
+
   return (
     <div className="safe-bottom">
       {/* 헤더 */}
@@ -246,7 +263,7 @@ export default function Profile() {
               <GradeChip grade={grade} size="md" />
               {profile?.grade_verified && (
                 <span className="text-xs bg-emerald-400/30 text-emerald-200 px-2 py-0.5 rounded-full font-semibold">
-                  ✓ 공인
+                  ✓ 인증
                 </span>
               )}
               {recentlyPromoted && (
@@ -262,10 +279,10 @@ export default function Profile() {
         <div className="grid grid-cols-2 gap-2 mb-3">
           <div className="bg-white/10 rounded-2xl p-3">
             <p className="text-white/60 text-xs flex items-center gap-1 mb-1">
-              <Award size={11}/> 공인 급수 <span className="text-white/40">(하락 없음)</span>
+              <Award size={11}/> 내 급수 <span className="text-white/40">(하락 없음)</span>
             </p>
             <p className="font-black text-xl">{grade}</p>
-            <p className="text-white/50 text-xs">스포넷 기준 인증</p>
+            <p className="text-white/50 text-xs">대회 인정 급수</p>
           </div>
           <div className="bg-white/10 rounded-2xl p-3">
             <p className="text-white/60 text-xs flex items-center gap-1 mb-1">
@@ -365,7 +382,7 @@ export default function Profile() {
 
           {history.length === 0 ? (
             <div className="text-center py-12 text-gray-400 text-sm">
-              아직 공인 대회 기록이 없습니다.
+              아직 대회 기록이 없습니다.
             </div>
           ) : (
             <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
@@ -420,8 +437,7 @@ export default function Profile() {
             <div className="space-y-3">
               {tourneys.map((entry, i) => {
                 const t = entry.category?.tournament
-                const certLevel = t?.cert_level ?? 'none'
-                const certInfo = CERT_LEVELS[certLevel]
+                const tUnit = t?.unit ?? 'si'
                 const partnerName = entry.player1_id === profile?.id
                   ? entry.p2?.name
                   : entry.p1?.name
@@ -431,12 +447,11 @@ export default function Profile() {
                     <div className="flex items-start justify-between mb-1">
                       <p className="font-bold text-sm">{t?.title ?? '대회'}</p>
                       <span className={`text-xs font-bold px-2 py-0.5 rounded-full flex items-center gap-0.5
-                        ${certLevel === 'a' ? 'bg-red-100 text-red-700'
-                        : certLevel === 'b' ? 'bg-purple-100 text-purple-700'
-                        : certLevel === 'c' ? 'bg-blue-100 text-blue-700'
-                        : 'bg-gray-100 text-gray-500'}`}
+                        ${tUnit === 'nat' ? 'bg-red-100 text-red-700'
+                        : tUnit === 'si' ? 'bg-purple-100 text-purple-700'
+                        : 'bg-blue-100 text-blue-700'}`}
                       >
-                        <Shield size={9}/> {certInfo?.label}
+                        <Shield size={9}/> {unitLabel(tUnit)} 대회
                       </span>
                     </div>
                     <div className="flex items-center gap-2 text-xs text-gray-400">
@@ -488,9 +503,58 @@ export default function Profile() {
       {/* 급수 인증 탭 */}
       {tab === 'cert' && (
         <section className="px-4 py-4">
-          {/* 승급 진행 (D · 감사 4-2) */}
-          <PromoProgressCard prog={promoDoubles} modeLabel="복식" />
-          <PromoProgressCard prog={promoSingles} modeLabel="단식" />
+          {/* 내 급수 — 단위(구/시/전국) × 종목(복식/단식) 6트랙 표 */}
+          <div className="bg-white rounded-2xl border border-gray-100 p-4 mb-4">
+            <div className="flex items-center gap-2 mb-1">
+              <Award size={16} className="text-[#003478]" />
+              <h3 className="font-bold text-sm">내 급수</h3>
+            </div>
+            <p className="text-xs text-gray-400 mb-3 leading-relaxed">
+              대회 단위(구·시·전국)마다 급수가 따로 있어요. 그 단위 대회에서 입상해야 올라가요.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs text-gray-400">
+                    <th className="text-left font-medium pb-2 pl-1">단위</th>
+                    {MODES.map(m => (
+                      <th key={m.key} className="font-medium pb-2 text-center">{m.label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {UNITS.map(u => (
+                    <tr key={u.key} className="border-t border-gray-50">
+                      <td className="py-2.5 pl-1 font-bold text-gray-700">{u.label}</td>
+                      {MODES.map(m => {
+                        const g = trackGrade(profile, u.key, m.key)
+                        return (
+                          <td key={m.key} className="py-2.5 text-center">
+                            {g
+                              ? <GradeChip grade={g} size="xs" />
+                              : <span className="text-xs text-gray-300">미보유</span>}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* 승급 진행 프리뷰 — 트랙별(어느 단위·종목인지 표시) */}
+          {activePromos.length > 0 ? (
+            activePromos.map(([key, prog]) => (
+              <PromoProgressCard key={key} prog={prog} modeLabel={trackTitle(key)} />
+            ))
+          ) : (
+            <div className="bg-white rounded-2xl border border-gray-100 p-4 mb-4">
+              <p className="text-xs text-gray-400 text-center py-2 leading-relaxed">
+                아직 승급 점수가 없어요.<br/>대회에 참가해 입상하면 그 단위 급수가 올라가요.
+              </p>
+            </div>
+          )}
 
           {/* 승급 이력 타임라인 */}
           <div className="bg-white rounded-2xl border border-gray-100 p-4 mb-4">
@@ -504,12 +568,12 @@ export default function Profile() {
           <div className="bg-white rounded-2xl p-4 border border-gray-100 mb-4">
             <div className="flex items-center gap-2 mb-3">
               <Award size={18} className="text-amber-500" />
-              <h2 className="font-bold">스포넷 급수 인증</h2>
+              <h2 className="font-bold">급수 인증</h2>
             </div>
             <p className="text-xs text-gray-500 mb-3 leading-relaxed">
-              스포넷 앱에서 내 급수 확인 화면을 캡처해 업로드하세요.<br/>
-              인증 완료 시 <strong>공인 급수 뱃지</strong>가 부여됩니다.<br/>
-              ※ 공인 급수는 절대 하락하지 않습니다.
+              대회 상장·급수 확인 화면을 캡처해 업로드하세요.<br/>
+              인증 완료 시 <strong>인증 뱃지</strong>가 부여됩니다.<br/>
+              ※ 급수는 절대 하락하지 않습니다.
             </p>
             {profile?.grade_proof_url && (
               <img

@@ -14,7 +14,7 @@ export default function RoleLanding() {
           🏸
         </div>
         <h1 className="text-2xl font-black tracking-tight">배드민국</h1>
-        <p className="text-sm text-gray-400 mt-1">대한민국 배드민턴 공인 MMR</p>
+        <p className="text-sm text-gray-400 mt-1">대한민국 배드민턴 실력 MMR</p>
       </div>
 
       {/* 역할 선택 */}

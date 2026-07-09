@@ -10,10 +10,10 @@ import { useOnline } from '../../lib/useOnline';
 const DONE_STATUSES = ['completed', 'forfeited', 'bye'];
 
 const CERT_BADGE = {
-  none: { label: '비공인', bg: '#6B7280' },
-  c: { label: '공인 C', bg: '#2563eb' },
-  b: { label: '공인 B', bg: '#7c3aed' },
-  a: { label: '공인 A', bg: '#C60C30' },
+  none: { label: '미반영', bg: '#6B7280' },
+  c: { label: '구 대회', bg: '#2563eb' },
+  b: { label: '시 대회', bg: '#7c3aed' },
+  a: { label: '전국 대회', bg: '#C60C30' },
 };
 
 const FORMAT_LABEL = {

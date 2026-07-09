@@ -447,7 +447,7 @@ export async function finalizeTournament(supabase, tournamentId, categoryIds) {
       .single()
     if (t?.cert_level && t.cert_level !== 'none') {
       const { data, error: promoErr } = await supabase
-        .rpc('promote_grades_for_tournament', { p_tournament: tournamentId })
+        .rpc('promote_grades_v2', { p_tournament: tournamentId })
       if (promoErr) {
         promoError = promoErr.message || String(promoErr)
         console.error('[finalizeTournament] 급수 승급 심사 실패:', promoErr)
