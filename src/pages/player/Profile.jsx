@@ -1,14 +1,14 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
-import { getGradeInfo, getMMRPercentile, GRADES } from '../../lib/grades'
+import { getGradeInfo, getMMRPercentile, GRADES, promotionHint } from '../../lib/grades'
 import { CERT_LEVELS } from '../../lib/mmr'
 import { calcReliability, MIN_RANKED_GAMES, MIN_RANKED_RELIABILITY, isRanked } from '../../lib/reliability'
 import BottomNav from '../../components/BottomNav'
 import GradeChip from '../../components/GradeChip'
 import ReliabilityBadge from '../../components/ReliabilityBadge'
 import Spinner from '../../components/Spinner'
-import { LogOut, Upload, Award, Shield, TrendingUp, TrendingDown } from 'lucide-react'
+import { LogOut, Upload, Award, Shield, TrendingUp, TrendingDown, ChevronsUp, PartyPopper } from 'lucide-react'
 
 // 미니 MMR 추이 차트 (SVG)
 function MiniChart({ history }) {
@@ -41,11 +41,102 @@ function MiniChart({ history }) {
   )
 }
 
+// 승급 진행 카드 — grade_promotion_progress(RPC) 결과 렌더
+function PromoProgressCard({ prog, modeLabel }) {
+  if (!prog) return null
+  const atCap = prog.at_auto_cap
+  const pts   = Number(prog.points ?? 0)
+  const need  = Number(prog.points_needed ?? 0)
+  const ratio = need > 0 ? Math.min(100, Math.round((pts / need) * 100)) : 0
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 p-4 mb-4">
+      <div className="flex items-center gap-2 mb-3">
+        <ChevronsUp size={16} className="text-[#003478]" />
+        <h3 className="font-bold text-sm">{modeLabel} 승급까지</h3>
+      </div>
+
+      {atCap ? (
+        <p className="text-xs text-gray-500 leading-relaxed">
+          자동 승급 상한 <strong className="text-gray-700">A조</strong>에 도달했어요.
+          준자강·자강조는 전국대회 입상·선수 경력 기반 <strong>수동 심사</strong>로만 올라갑니다.
+        </p>
+      ) : (
+        <>
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-1.5">
+              <GradeChip grade={prog.current_grade} size="xs" />
+              <span className="text-gray-300 text-xs">→</span>
+              <GradeChip grade={prog.next_grade} size="xs" />
+            </div>
+            <span className="text-xs text-gray-400 tabular-nums">{pts} / {need}점</span>
+          </div>
+          <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all"
+              style={{ width: `${ratio}%`, background: 'linear-gradient(90deg, #C60C30, #003478)' }}
+            />
+          </div>
+          <p className="mt-2.5 text-xs text-[#C60C30] font-bold">
+            {promotionHint(Number(prog.remaining))}
+          </p>
+          <p className="mt-1 text-[11px] text-gray-400 leading-relaxed">
+            공인 대회 입상(우승 3점 · 준우승 2점 · 3위 1점 × 공인등급 배수)이 쌓이면 자동 승급돼요.
+            급수는 절대 떨어지지 않아요.
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
+// 승급 이력 타임라인 — grade_history 조회 결과
+function GradeTimeline({ items }) {
+  if (!items?.length) {
+    return (
+      <p className="text-xs text-gray-400 text-center py-6">
+        아직 승급 이력이 없어요.<br/>공인 대회 입상으로 급수를 올려보세요!
+      </p>
+    )
+  }
+  return (
+    <div className="space-y-2">
+      {items.map(g => (
+        <div key={g.id} className="flex items-center gap-3 bg-gray-50 rounded-xl px-3 py-2.5">
+          <span className="text-lg shrink-0">🎉</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-gray-800">
+              {g.from_grade} → <span className="text-[#C60C30]">{g.to_grade}</span>
+              <span className="ml-1.5 text-[11px] font-normal text-gray-400">
+                {g.game_mode === 'singles' ? '단식' : '복식'}
+              </span>
+            </p>
+            <p className="text-[11px] text-gray-400">
+              {new Date(g.created_at).toLocaleDateString('ko-KR')}
+              {' · '}
+              {g.reason === '입상 누적 승급' ? '입상 누적' : (g.reason || '조정')}
+            </p>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// 최근(유예기간 내) 자동 승급 여부 — 축하 배지 기준
+function isRecentPromotion(ts) {
+  if (!ts) return false
+  return Date.now() - new Date(ts).getTime() < 30 * 24 * 60 * 60 * 1000
+}
+
 export default function Profile() {
   const navigate = useNavigate()
   const [profile, setProfile]     = useState(null)
   const [history, setHistory]     = useState([])
   const [tourneys, setTourneys]   = useState([])
+  const [gradeHistory, setGradeHistory] = useState([])   // 승급 이력 (grade_history)
+  const [promoDoubles, setPromoDoubles] = useState(null)  // 복식 승급 진행 (RPC)
+  const [promoSingles, setPromoSingles] = useState(null)  // 단식 승급 진행 (RPC)
   const [loading, setLoading]     = useState(true)
   const [uploading, setUploading] = useState(false)
   const [tab, setTab]             = useState('mmr')  // 'mmr' | 'career'
@@ -56,7 +147,10 @@ export default function Profile() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { setLoading(false); return }
 
-      const [{ data: p }, { data: h }, { data: entries }] = await Promise.all([
+      const [
+        { data: p }, { data: h }, { data: entries },
+        { data: gh }, { data: progD }, { data: progS },
+      ] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', user.id).single(),
         supabase.from('mmr_history')
           .select('*')
@@ -76,11 +170,22 @@ export default function Profile() {
           .or(`player1_id.eq.${user.id},player2_id.eq.${user.id}`)
           .order('created_at', { ascending: false })
           .limit(20),
+        // 급수 승급 이력 + 진행 프리뷰 (012)
+        supabase.from('grade_history')
+          .select('*')
+          .eq('player_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(20),
+        supabase.rpc('grade_promotion_progress', { p_player: user.id, p_mode: 'doubles' }),
+        supabase.rpc('grade_promotion_progress', { p_player: user.id, p_mode: 'singles' }),
       ])
 
       setProfile(p)
       setHistory(h ?? [])
       setTourneys(entries ?? [])
+      setGradeHistory(gh ?? [])
+      setPromoDoubles(progD ?? null)
+      setPromoSingles(progS ?? null)
       setLoading(false)
     }
     load()
@@ -110,6 +215,8 @@ export default function Profile() {
 
   const mmr         = profile?.mmr ?? 1000
   const grade       = profile?.official_grade ?? '왕초심'
+  const recentlyPromoted = isRecentPromotion(profile?.grade_promoted_at)
+                        || isRecentPromotion(profile?.singles_grade_promoted_at)
   const gradeInfo   = getGradeInfo(grade)
   const pct         = getMMRPercentile(mmr)
   const gamesPlayed = profile?.mmr_games_played ?? 0
@@ -140,6 +247,11 @@ export default function Profile() {
               {profile?.grade_verified && (
                 <span className="text-xs bg-emerald-400/30 text-emerald-200 px-2 py-0.5 rounded-full font-semibold">
                   ✓ 공인
+                </span>
+              )}
+              {recentlyPromoted && (
+                <span className="text-xs bg-amber-300/30 text-amber-100 px-2 py-0.5 rounded-full font-bold flex items-center gap-0.5">
+                  <PartyPopper size={11} /> 승급!
                 </span>
               )}
             </div>
@@ -376,6 +488,19 @@ export default function Profile() {
       {/* 급수 인증 탭 */}
       {tab === 'cert' && (
         <section className="px-4 py-4">
+          {/* 승급 진행 (D · 감사 4-2) */}
+          <PromoProgressCard prog={promoDoubles} modeLabel="복식" />
+          <PromoProgressCard prog={promoSingles} modeLabel="단식" />
+
+          {/* 승급 이력 타임라인 */}
+          <div className="bg-white rounded-2xl border border-gray-100 p-4 mb-4">
+            <div className="flex items-center gap-2 mb-3">
+              <PartyPopper size={16} className="text-[#C60C30]" />
+              <h3 className="font-bold text-sm">승급 이력</h3>
+            </div>
+            <GradeTimeline items={gradeHistory} />
+          </div>
+
           <div className="bg-white rounded-2xl p-4 border border-gray-100 mb-4">
             <div className="flex items-center gap-2 mb-3">
               <Award size={18} className="text-amber-500" />

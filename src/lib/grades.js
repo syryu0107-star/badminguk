@@ -46,3 +46,141 @@ export function gradeRangeLabel(min, max) {
   if (min === max) return min
   return `${min} ~ ${max}`
 }
+
+// ══════════════════════════════════════════════════════════════════
+// 급수 자동 승급 심사 (D · 감사 4-2)
+//
+// DB 정본: supabase/migrations/012_grade_promotion.sql
+//   · promote_grades_for_tournament(p_tournament) — 대회 종료 시 일괄 심사(권위 계산)
+//   · grade_promotion_progress(p_player, p_mode)   — "승급까지 X점" 프리뷰
+// 아래 순수 함수는 그 규칙을 프론트에서 1:1 재현한다(프리뷰·표시·테스트용).
+// ⚠️ 수치를 바꾸면 012 grade_promotion_config 기본값도 함께 조정할 것(어긋나면 표시≠실제).
+//
+// 도메인 원칙: 공인 급수는 원칙적으로 "안 떨어진다" → 강등 없음.
+//   판정은 언제나 target > current 일 때만 상향, 아니면 no-op(절대 하향 안 함).
+// ══════════════════════════════════════════════════════════════════
+
+// 승급 규칙 수치(012 grade_promotion_config 기본값과 동일)
+export const PROMOTION_CONFIG = {
+  winPoints: 3,        // 우승(final_rank=1)
+  runnerupPoints: 2,   // 준우승(2)
+  semiPoints: 1,       // 3위(3)
+  // 공인등급 가중치. 비공인(none)은 0 → 승급 불인정.
+  certMult: { a: 2.0, b: 1.5, c: 1.0, none: 0 },
+  // 한 단계 승급 필요점수 = base + step × (현재 급수 index) → 높을수록 어려워짐
+  thresholdBase: 3.0,
+  thresholdStep: 1.5,
+  // 자동 승급 상한 index. 5=A조. 준자강(6)·자강조(7)은 수동 심사 전용.
+  maxAutoGradeIdx: 5,
+  // 승급 유예(일). 승급 후 이 기간은 축하배지/이전 급수 출전 허용 기준.
+  graceDays: 30,
+}
+
+// 단식 종목 → singles(singles_grade), 그 외(복식) → doubles(official_grade)
+export const SINGLES_SPORT_TYPES = ['남단', '여단']
+export function gameModeForSport(sportType) {
+  return SINGLES_SPORT_TYPES.includes(sportType) ? 'singles' : 'doubles'
+}
+
+function round2(n) {
+  return Math.round((Number(n) || 0) * 100) / 100
+}
+
+// 입상 1건 점수 = 순위점 × 공인배수. (prize_spots 밖/비공인은 호출측이 걸러 넣거나 0점)
+export function awardPoints(finalRank, certLevel, config = PROMOTION_CONFIG) {
+  const base =
+    finalRank === 1 ? config.winPoints
+    : finalRank === 2 ? config.runnerupPoints
+    : finalRank === 3 ? config.semiPoints
+    : 0
+  const mult = config.certMult[certLevel] ?? 0
+  return base * mult
+}
+
+// awards: [{ finalRank, certLevel }] — 이미 입상(1~3)·공인·prize_spots 필터된 목록
+export function earnedPromoPoints(awards = [], config = PROMOTION_CONFIG) {
+  return (awards ?? []).reduce(
+    (sum, a) => sum + awardPoints(a.finalRank, a.certLevel, config), 0)
+}
+
+// 급수 idx에서 한 단계 승급에 필요한 누적 점수
+export function promotionThreshold(gradeIdx, config = PROMOTION_CONFIG) {
+  return config.thresholdBase + config.thresholdStep * gradeIdx
+}
+
+/**
+ * 승급 심사(012 bmg_eval_promotion 순수 재현). DB RPC와 동일 결과(멱등).
+ * @param {string} currentGrade 현재 급수 key
+ * @param {Array}  awards       [{ finalRank, certLevel, gameMode? }] 입상 목록
+ * @param {string} gameMode     'singles'|'doubles' — awards에 gameMode가 있으면 이 값으로 필터
+ * @param {object} [opts]       { autoPromotions=0 (멱등 anchor 보정), config }
+ * @returns {string|null}       승급 대상 급수 key, 없으면 null (절대 강등 안 함)
+ */
+export function checkPromotion(currentGrade, awards, gameMode, opts = {}) {
+  const config = opts.config ?? PROMOTION_CONFIG
+  const autoPromotions = opts.autoPromotions ?? 0
+  const curIdx = getGradeIndex(currentGrade)
+  if (curIdx < 0) return null
+
+  // awards가 모드 태그를 가지면 해당 모드만 사용(안 가지면 호출측이 이미 필터한 것으로 간주)
+  const list = gameMode
+    ? (awards ?? []).filter(a => a.gameMode == null || a.gameMode === gameMode)
+    : (awards ?? [])
+
+  // anchor_idx = 현재급수 index − 이미 반영된 자동승급 수 (재실행해도 불변 → 멱등)
+  const anchor = Math.max(0, curIdx - autoPromotions)
+  let pts = earnedPromoPoints(list, config)
+
+  // anchor에서 그리디 상승 (자동 상한 maxAutoGradeIdx 까지만)
+  let idx = anchor
+  while (idx < config.maxAutoGradeIdx) {
+    const thresh = promotionThreshold(idx, config)
+    if (pts < thresh) break
+    pts -= thresh
+    idx += 1
+  }
+
+  if (idx <= curIdx) return null              // 승급 없음(그리고 절대 강등 안 함)
+  return GRADES[idx]?.key ?? null
+}
+
+/**
+ * 승급 진행 프리뷰(012 grade_promotion_progress 순수 재현).
+ * @returns {{ currentGrade, atAutoCap, nextGrade, points, pointsNeeded, remaining }|null}
+ */
+export function promotionProgress(currentGrade, awards, opts = {}) {
+  const config = opts.config ?? PROMOTION_CONFIG
+  const autoPromotions = opts.autoPromotions ?? 0
+  const curIdx = getGradeIndex(currentGrade)
+  if (curIdx < 0) return null
+
+  const anchor = Math.max(0, curIdx - autoPromotions)
+  let pts = earnedPromoPoints(awards, config)
+  // 현재 급수까지 이미 소진된 임계값을 제거 → 현재 급수 이후 잔여 점수
+  for (let i = anchor; i < curIdx; i++) pts -= promotionThreshold(i, config)
+  pts = Math.max(0, pts)
+
+  const atAutoCap = curIdx >= config.maxAutoGradeIdx
+  if (atAutoCap) {
+    return { currentGrade, atAutoCap: true, nextGrade: null,
+      points: round2(pts), pointsNeeded: null, remaining: null }
+  }
+  const needed = promotionThreshold(curIdx, config)
+  return {
+    currentGrade,
+    atAutoCap: false,
+    nextGrade: GRADES[curIdx + 1]?.key ?? null,
+    points: round2(pts),
+    pointsNeeded: round2(needed),
+    remaining: round2(Math.max(0, needed - pts)),
+  }
+}
+
+// "우승 N회 정도면 승급" 같은 쉬운 안내(공인C 우승=winPoints 기준 근사)
+export function promotionHint(remaining, config = PROMOTION_CONFIG) {
+  const r = Number(remaining)
+  if (!Number.isFinite(r) || r <= 0) return '승급 조건 충족! 다음 공인대회 종료 시 반영돼요'
+  const perWin = config.winPoints * (config.certMult.c ?? 1) // 공인C 우승 1회 점수
+  const wins = Math.max(1, Math.ceil(r / perWin))
+  return `공인 대회 우승 ${wins}회 정도면 승급`
+}

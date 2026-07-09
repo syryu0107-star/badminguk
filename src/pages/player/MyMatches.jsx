@@ -5,6 +5,111 @@ import MatchCard from '../../components/MatchCard'
 import Spinner from '../../components/Spinner'
 import { CalendarDays, Mail, Check, X, Clock } from 'lucide-react'
 
+// ── 다음 경기 하이라이트용 상수·헬퍼 ────────────────────────────
+// 이미 끝난 경기 상태 (다음 경기 후보에서 제외)
+const DONE_STATUSES = ['completed', 'forfeited', 'bye']
+
+// 경기 정렬 기준: 예정시각 → 라운드 → 경기번호 (null 은 맨 뒤)
+function cmpMatches(a, b) {
+  const ta = a.scheduled_time ? new Date(a.scheduled_time).getTime() : Infinity
+  const tb = b.scheduled_time ? new Date(b.scheduled_time).getTime() : Infinity
+  if (ta !== tb) return ta - tb
+  const ra = a.round_number ?? Infinity, rb = b.round_number ?? Infinity
+  if (ra !== rb) return ra - rb
+  return (a.match_number ?? Infinity) - (b.match_number ?? Infinity)
+}
+
+// 내 다음 경기 판정: 진행중 우선 → 없으면 가장 이른 예정 경기
+function pickNextMatch(list) {
+  const live = list.find(m => m.status === 'in_progress')
+  if (live) return { match: live, live: true }
+  const scheduled = list.filter(m => m.status === 'scheduled').sort(cmpMatches)
+  if (!scheduled.length) return null
+  return { match: scheduled[0], live: false }
+}
+
+function fmtTime(ms) {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+// 내 관점에서 상대 팀 이름
+function opponentOf(m) {
+  const iAmTeam1 = m.team1_entry_id === m.myTeamEntryId
+  return (iAmTeam1 ? m.team2Name : m.team1Name) || '상대 팀 미정'
+}
+
+// 다음 경기 강조 카드 (브랜드 그라데이션)
+function NextMatchHighlight({ info }) {
+  if (!info) return null
+  const m = info.match
+  const opp = opponentOf(m)
+  const est = info.estimate
+
+  return (
+    <section>
+      <div
+        className="rounded-2xl p-5 text-white shadow-md"
+        style={{ background: 'linear-gradient(135deg, #C60C30, #003478)' }}
+      >
+        <div className="flex items-center gap-2 mb-3">
+          {info.live ? (
+            <span className="flex items-center gap-1 bg-white text-[#C60C30] text-xs font-black px-2 py-0.5 rounded-full">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#C60C30] animate-pulse" /> LIVE
+            </span>
+          ) : (
+            <span className="bg-white/20 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+              다음 경기
+            </span>
+          )}
+          <span className="text-white/80 text-xs font-semibold">
+            {info.live ? '지금 경기 중이에요' : '곧 시작해요'}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-4">
+          {/* 코트 배지 */}
+          <div className="shrink-0 w-16 h-16 rounded-2xl bg-white/15 flex flex-col items-center justify-center leading-none">
+            {m.court_number != null ? (
+              <>
+                <span className="text-2xl font-black">{m.court_number}</span>
+                <span className="text-[10px] text-white/70 mt-1">번 코트</span>
+              </>
+            ) : (
+              <span className="text-[10px] text-white/70 text-center px-1">코트<br />배정중</span>
+            )}
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <p className="text-white/60 text-xs">상대 팀</p>
+            <p className="text-lg font-black truncate">{opp}</p>
+            {info.live ? (
+              <p className="text-sm font-bold mt-1 tabular-nums">
+                현재 {m.live_score_t1} : {m.live_score_t2}
+              </p>
+            ) : (
+              <p className="text-sm text-white/80 mt-1">
+                {est?.at ? (
+                  <>
+                    예상 시작 <strong className="font-black">약 {fmtTime(est.at)}쯤</strong>
+                    {typeof est.ahead === 'number' && est.ahead > 0 && (
+                      <> · 앞에 {est.ahead}경기</>
+                    )}
+                  </>
+                ) : m.scheduled_time ? (
+                  <>예상 시작 <strong className="font-black">약 {fmtTime(new Date(m.scheduled_time).getTime())}쯤</strong></>
+                ) : (
+                  '시작 시각 미정 · 코트에서 대기'
+                )}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 // 신청 상태 뱃지 표시 (entry_status)
 const STATUS_BADGE = {
   partner_pending:  { label: '⏳ 파트너 수락 대기', cls: 'bg-amber-100 text-amber-700' },
@@ -27,6 +132,7 @@ export default function MyMatches() {
   const [userId, setUserId]     = useState(null)
   const [entries, setEntries]   = useState([])   // 내가 신청자(A) 또는 파트너(B)인 모든 신청
   const [matches, setMatches]   = useState([])   // 경기 일정
+  const [nextMatch, setNextMatch] = useState(null) // 다음 경기 하이라이트
   const [loading, setLoading]   = useState(true)
   const [acting, setActing]     = useState(null) // 처리 중인 entry id
 
@@ -59,6 +165,7 @@ export default function MyMatches() {
         .from('tournament_matches')
         .select(`
           *,
+          category:tournament_categories(match_duration_min),
           team1:tournament_entries!team1_entry_id(id,player1:profiles!player1_id(name),player2:profiles!player2_id(name)),
           team2:tournament_entries!team2_entry_id(id,player1:profiles!player1_id(name),player2:profiles!player2_id(name)),
           scores:match_scores(*)
@@ -75,8 +182,39 @@ export default function MyMatches() {
         myTeamEntryId: entryIds.find(id => id === m.team1_entry_id) ? m.team1_entry_id : m.team2_entry_id,
       }))
       setMatches(formatted)
+
+      // ── 다음 경기 하이라이트 계산 ─────────────────────────────
+      const nm = pickNextMatch(formatted)
+      if (nm && !nm.live) {
+        const m = nm.match
+        const now = Date.now()
+        const sched = m.scheduled_time ? new Date(m.scheduled_time).getTime() : null
+        if (sched && sched > now) {
+          // ② 주최자가 지정한 예정시각이 미래면 그대로 사용
+          nm.estimate = { at: sched, ahead: null }
+        } else if (m.court_number != null) {
+          // ③ 코트 큐 기반 추정 (보조 쿼리 1건)
+          const { data: queue } = await supabase
+            .from('tournament_matches')
+            .select('id,court_number,scheduled_time,match_number,round_number,status,actual_start')
+            .eq('category_id', m.category_id)
+            .eq('court_number', m.court_number)
+          const perMatch = (m.category?.match_duration_min ?? 30) * 60000
+          const running = (queue ?? []).find(q => q.status === 'in_progress')
+          const base = running?.actual_start ? new Date(running.actual_start).getTime() : now
+          const ahead = (queue ?? []).filter(q => {
+            if (q.id === m.id) return false
+            if (DONE_STATUSES.includes(q.status)) return false
+            if (q.status === 'in_progress') return true      // 진행중 경기는 항상 앞선 것으로
+            return cmpMatches(q, m) < 0
+          }).length
+          nm.estimate = { at: base + ahead * perMatch, ahead }
+        }
+      }
+      setNextMatch(nm)
     } else {
       setMatches([])
+      setNextMatch(null)
     }
 
     setLoading(false)
@@ -136,6 +274,9 @@ export default function MyMatches() {
           <div className="flex justify-center py-16"><Spinner size={32} /></div>
         ) : (
           <>
+            {/* ── 다음 경기 하이라이트 ─────────────────────────── */}
+            <NextMatchHighlight info={nextMatch} />
+
             {/* ── 받은 파트너 초대 ─────────────────────────────── */}
             {invites.length > 0 && (
               <section>

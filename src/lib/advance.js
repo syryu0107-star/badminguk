@@ -407,9 +407,20 @@ export async function finalizeRanks(supabase, categoryId) {
 // ── 5. finalizeTournament ────────────────────────────────────────
 
 /**
- * 전 종목 시상 확정 + 대회 status='completed'.
+ * 전 종목 시상 확정 + 대회 status='completed' + 급수 자동 승급 심사(D).
  * 종목별 finalizeRanks 실행 — 하나라도 미완료 경기가 있으면 에러를 던진다.
- * @returns {{ [categoryId]: [{entryId, rank}] }}
+ *
+ * 급수 승급(D, 감사 4-2): finalizeRanks 루프가 끝나 **모든 종목 final_rank가 확정된 뒤**
+ * promote_grades_for_tournament RPC(012)를 1회 호출한다(승급 판정이 final_rank를 읽으므로
+ * 순서 필수). 공인대회(cert_level≠none)만 심사한다. RPC는 멱등이라 재확정에도 중복 승급 없음.
+ * 실패해도 시상은 이미 확정 → 되돌리지 않고 promoError만 담아 반환(경고).
+ *
+ * @returns {{ byCategory: { [categoryId]: [{entryId, rank}] },
+ *             promotions: [{ player_id, mode, to_grade }],
+ *             promoError: string|null }}
+ *   ⚠️ 반환 형태 변경: 기존엔 byCategory 맵을 직접 반환했으나, 승급 결과를 함께 싣기 위해
+ *      { byCategory, promotions, promoError } 로 감쌌다. UI(LiveDashboard)는 promotions로
+ *      "🎉 승급!" 축하 배너를 띄운다.
  */
 export async function finalizeTournament(supabase, tournamentId, categoryIds) {
   const byCategory = {}
@@ -421,5 +432,33 @@ export async function finalizeTournament(supabase, tournamentId, categoryIds) {
     .update({ status: 'completed' })
     .eq('id', tournamentId)
   if (error) throw new Error('대회 상태 변경 실패: ' + error.message)
-  return byCategory
+
+  // ── 급수 자동 승급 심사 (D) ──────────────────────────────────────
+  // 모든 final_rank 확정 후 1회. 공인대회(cert_level≠none)만.
+  // 승급 반영/이력 기록/권한 검증은 전부 RPC(SECURITY DEFINER) 내부가 전담 →
+  // 호출부는 RPC만 부르고, 실패는 삼켜 경고로 반환(시상은 이미 확정이므로 롤백 안 함).
+  let promotions = []
+  let promoError = null
+  try {
+    const { data: t } = await supabase
+      .from('tournaments')
+      .select('cert_level')
+      .eq('id', tournamentId)
+      .single()
+    if (t?.cert_level && t.cert_level !== 'none') {
+      const { data, error: promoErr } = await supabase
+        .rpc('promote_grades_for_tournament', { p_tournament: tournamentId })
+      if (promoErr) {
+        promoError = promoErr.message || String(promoErr)
+        console.error('[finalizeTournament] 급수 승급 심사 실패:', promoErr)
+      } else {
+        promotions = Array.isArray(data) ? data : []
+      }
+    }
+  } catch (e) {
+    promoError = e?.message || String(e)
+    console.error('[finalizeTournament] 급수 승급 심사 예외:', e)
+  }
+
+  return { byCategory, promotions, promoError }
 }

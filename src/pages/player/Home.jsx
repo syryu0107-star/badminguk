@@ -9,11 +9,43 @@ import Spinner from '../../components/Spinner'
 import InstallPrompt from '../../components/InstallPrompt'
 import { Bell, ChevronRight, TrendingUp, TrendingDown, Award } from 'lucide-react'
 
+// ── 다음 경기 위젯용 헬퍼 ───────────────────────────────────────
+const DONE_STATUSES = ['completed', 'forfeited', 'bye']
+
+function cmpMatches(a, b) {
+  const ta = a.scheduled_time ? new Date(a.scheduled_time).getTime() : Infinity
+  const tb = b.scheduled_time ? new Date(b.scheduled_time).getTime() : Infinity
+  if (ta !== tb) return ta - tb
+  const ra = a.round_number ?? Infinity, rb = b.round_number ?? Infinity
+  if (ra !== rb) return ra - rb
+  return (a.match_number ?? Infinity) - (b.match_number ?? Infinity)
+}
+
+// 진행중 우선 → 없으면 가장 이른 예정 경기
+function pickNextMatch(list) {
+  const live = list.find(m => m.status === 'in_progress')
+  if (live) return { match: live, live: true }
+  const scheduled = list.filter(m => m.status === 'scheduled').sort(cmpMatches)
+  if (!scheduled.length) return null
+  return { match: scheduled[0], live: false }
+}
+
+function fmtTime(ms) {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function opponentOf(m) {
+  const iAmTeam1 = m.team1_entry_id === m.myTeamEntryId
+  return (iAmTeam1 ? m.team2Name : m.team1Name) || '상대 팀 미정'
+}
+
 export default function Home() {
   const navigate = useNavigate()
   const [profile, setProfile]       = useState(null)
   const [upcoming, setUpcoming]     = useState([])
   const [mmrHistory, setMmrHistory] = useState([])
+  const [nextMatch, setNextMatch]   = useState(null)
   const [loading, setLoading]       = useState(true)
 
   useEffect(() => {
@@ -38,6 +70,35 @@ export default function Home() {
       setProfile(p)
       setUpcoming(t ?? [])
       setMmrHistory(h ?? [])
+
+      // ── 내 다음 경기 (홈 위젯: scheduled_time 기반 간단 표시) ──
+      const { data: myEntries } = await supabase
+        .from('tournament_entries')
+        .select('id')
+        .or(`player1_id.eq.${user.id},player2_id.eq.${user.id}`)
+      const entryIds = (myEntries ?? []).map(e => e.id)
+      if (entryIds.length) {
+        const { data: ms } = await supabase
+          .from('tournament_matches')
+          .select(`
+            id,status,scheduled_time,court_number,round_number,match_number,
+            live_score_t1,live_score_t2,team1_entry_id,team2_entry_id,
+            team1:tournament_entries!team1_entry_id(player1:profiles!player1_id(name),player2:profiles!player2_id(name)),
+            team2:tournament_entries!team2_entry_id(player1:profiles!player1_id(name),player2:profiles!player2_id(name))
+          `)
+          .or(`team1_entry_id.in.(${entryIds.join(',')}),team2_entry_id.in.(${entryIds.join(',')})`)
+          .order('scheduled_time', { ascending: true })
+        const fmt = (ms ?? []).map(m => ({
+          ...m,
+          team1Name: [m.team1?.player1?.name, m.team1?.player2?.name].filter(Boolean).join(' / '),
+          team2Name: [m.team2?.player1?.name, m.team2?.player2?.name].filter(Boolean).join(' / '),
+          myTeamEntryId: entryIds.includes(m.team1_entry_id) ? m.team1_entry_id : m.team2_entry_id,
+        }))
+        setNextMatch(pickNextMatch(fmt))
+      } else {
+        setNextMatch(null)
+      }
+
       setLoading(false)
     }
     load()
@@ -125,6 +186,53 @@ export default function Home() {
           </div>
         )}
       </header>
+
+      {/* 다음 경기 위젯 */}
+      {nextMatch && (
+        <section className="px-4 mt-4">
+          <button
+            onClick={() => navigate('/my-matches')}
+            className="w-full rounded-2xl p-4 text-left text-white flex items-center gap-3
+                       active:scale-[.98] transition-transform"
+            style={{ background: 'linear-gradient(135deg, #C60C30, #003478)' }}
+          >
+            {/* 코트 배지 */}
+            <div className="shrink-0 w-14 h-14 rounded-xl bg-white/15 flex flex-col items-center justify-center leading-none">
+              {nextMatch.match.court_number != null ? (
+                <>
+                  <span className="text-xl font-black">{nextMatch.match.court_number}</span>
+                  <span className="text-[9px] text-white/70 mt-1">번 코트</span>
+                </>
+              ) : (
+                <span className="text-[9px] text-white/70 text-center">코트<br />대기</span>
+              )}
+            </div>
+
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 mb-0.5">
+                {nextMatch.live ? (
+                  <span className="flex items-center gap-1 bg-white text-[#C60C30] text-[10px] font-black px-1.5 py-0.5 rounded-full">
+                    <span className="w-1 h-1 rounded-full bg-[#C60C30] animate-pulse" /> LIVE
+                  </span>
+                ) : (
+                  <span className="bg-white/20 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                    다음 경기
+                  </span>
+                )}
+              </div>
+              <p className="font-black truncate">{opponentOf(nextMatch.match)}</p>
+              <p className="text-white/80 text-xs mt-0.5">
+                {nextMatch.live
+                  ? `현재 ${nextMatch.match.live_score_t1} : ${nextMatch.match.live_score_t2}`
+                  : nextMatch.match.scheduled_time
+                    ? `예상 시작 약 ${fmtTime(new Date(nextMatch.match.scheduled_time).getTime())}쯤`
+                    : '코트에서 대기 중'}
+              </p>
+            </div>
+            <ChevronRight size={18} className="text-white/50" />
+          </button>
+        </section>
+      )}
 
       {/* 급수 미인증 안내 */}
       {profile && !profile.grade_verified && (
