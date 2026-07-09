@@ -137,6 +137,7 @@ export default function MyMatches() {
   const [loading, setLoading]   = useState(true)
   const [acting, setActing]     = useState(null) // 처리 중인 entry id
   const [call, setCall]         = useState(null) // 수신한 경기 호출 { court, sport, matchId, notificationId }
+  const [soon, setSoon]         = useState(null) // 사전 알림 { court, sport, aheadCount }
   const myEntryIds     = useRef(new Set())        // 내가 속한 엔트리 id (호출 대상 판정용)
   const myTournamentIds = useRef([])              // 내가 참가한 대회 id (구독 대상)
 
@@ -250,11 +251,17 @@ export default function MyMatches() {
     }
 
     const unsub = subscribeNotifications(myTournamentIds.current, payload => {
-      if (payload?.type !== 'match_call') return
-      // 내 경기인지 판정 (엔트리 교집합)
-      const mine = (payload.entryIds ?? []).some(eid => myEntryIds.current.has(eid))
+      const mine = (payload?.entryIds ?? []).some(eid => myEntryIds.current.has(eid))
       if (!mine) return
+      // 사전 알림(곧 호출) — 가벼운 준비 안내. 실제 호출이 오면 아래에서 덮어씀.
+      if (payload.type === 'match_soon') {
+        setSoon({ court: payload.court, sport: payload.sport, aheadCount: payload.aheadCount ?? null })
+        try { if (navigator.vibrate) navigator.vibrate(120) } catch { /* noop */ }
+        return
+      }
+      if (payload.type !== 'match_call') return
       setCall({ court: payload.court, sport: payload.sport, matchId: payload.matchId })
+      setSoon(null) // 진짜 호출이 왔으니 사전 알림은 내림
       // 진동·알림(있으면). 화면을 보고 있지 않아도 감지되도록.
       try { if (navigator.vibrate) navigator.vibrate([300, 120, 300]) } catch { /* noop */ }
     })
@@ -321,6 +328,31 @@ export default function MyMatches() {
             <button
               onClick={dismissCall}
               className="shrink-0 bg-white text-[#C60C30] font-black text-sm px-3 py-2 rounded-xl active:opacity-80"
+            >
+              확인
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── 곧 호출 사전 알림 (자동 진행 시 미리 도착) ─────────────── */}
+      {!call && soon && (
+        <div className="fixed inset-x-0 top-0 z-40 px-3 pt-3 fade-up">
+          <div className="rounded-2xl p-3.5 bg-[#003478] text-white shadow-lg flex items-center gap-3" role="status">
+            <Clock size={22} className="shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-bold text-white/80">곧 경기 호출{soon.sport ? ` · ${soon.sport}` : ''}</p>
+              <p className="text-sm font-black leading-tight">
+                {soon.court != null ? `곧 ${soon.court}번 코트로 호출돼요` : '곧 호출될 예정이에요'}
+                {typeof soon.aheadCount === 'number' && soon.aheadCount > 0 && (
+                  <span className="font-semibold text-white/80"> · 앞에 {soon.aheadCount}경기</span>
+                )}
+              </p>
+              <p className="text-[11px] text-white/70">코트 근처에서 준비해주세요!</p>
+            </div>
+            <button
+              onClick={() => setSoon(null)}
+              className="shrink-0 bg-white/20 text-white font-bold text-xs px-2.5 py-1.5 rounded-lg active:opacity-80"
             >
               확인
             </button>

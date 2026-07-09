@@ -49,6 +49,26 @@ export function buildMatchCall({ match, tournamentId, court, sport }) {
   }
 }
 
+// 사전 알림(곧 호출 예정) 페이로드 — 앞 경기가 진행 중이라 곧 코트가 비는 팀에게.
+export function buildMatchSoon({ match, tournamentId, court, sport, aheadCount }) {
+  const c = court ?? match?.court_number ?? null
+  const ahead = typeof aheadCount === 'number' ? aheadCount : null
+  return {
+    type: NOTIFY.MATCH_SOON,
+    tournamentId,
+    matchId: match?.id ?? null,
+    court: c,
+    sport: sport ?? null,
+    entryIds: [match?.team1_entry_id, match?.team2_entry_id].filter(Boolean),
+    aheadCount: ahead,
+    title: '⏳ 곧 경기 호출',
+    body: c != null
+      ? `곧 ${c}번 코트로 호출돼요. 코트 근처에서 준비해주세요!`
+      : '곧 호출될 예정이에요. 코트 근처에서 준비해주세요!',
+    createdAt: new Date().toISOString(),
+  }
+}
+
 // ── 채널 1: 인앱 실시간 방송 (스키마 불필요) ───────────────────────────
 async function broadcast(payload) {
   if (!payload?.tournamentId) return { sent: false }
@@ -112,6 +132,16 @@ function dispatchExternal(payload, recipients = []) {
 // 코트 배정 직후/호출 버튼에서 부른다. 3채널로 동시에 팬아웃.
 export async function callMatch({ match, tournamentId, court, sport, recipients = [] }) {
   const payload = buildMatchCall({ match, tournamentId, court, sport })
+  const bc = await broadcast(payload)
+  const ps = await persist(payload, recipients)
+  const ex = dispatchExternal(payload, recipients)
+  return { payload, broadcast: bc, persist: ps, external: ex }
+}
+
+// ── 고수준 진입점: 사전 알림(곧 호출) ──────────────────────────────────
+// 빈 코트 자동 투입 오케스트레이터가, 다음 차례 팀에게 미리 "곧 호출" 을 보낸다.
+export async function callMatchSoon({ match, tournamentId, court, sport, aheadCount, recipients = [] }) {
+  const payload = buildMatchSoon({ match, tournamentId, court, sport, aheadCount })
   const bc = await broadcast(payload)
   const ps = await persist(payload, recipients)
   const ex = dispatchExternal(payload, recipients)

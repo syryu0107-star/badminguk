@@ -1,13 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { resolveMatchMMR, CERT_LEVELS } from '../../lib/mmr'
 import { calculatePoolStandings, prizeLabel } from '../../lib/tournament'
 import { completeMatch, finalizeTournament, scoresToPairs } from '../../lib/advance'
-import { callMatch } from '../../lib/notify'
+import { callMatch, callMatchSoon } from '../../lib/notify'
+import { planAutoAdvance } from '../../lib/orchestrator'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
-import { Clock, Shield, UserCheck, Flag, CheckCircle, Gavel, Trophy, ListOrdered, Megaphone } from 'lucide-react'
+import { Clock, Shield, UserCheck, Flag, CheckCircle, Gavel, Trophy, ListOrdered, Megaphone, Zap, Timer } from 'lucide-react'
 
 function fmt(dt) {
   if (!dt) return '--:--'
@@ -57,6 +58,13 @@ export default function LiveDashboard() {
   const [calling, setCalling]       = useState(null) // 호출 처리 중인 match id
   const [calledIds, setCalledIds]   = useState({})   // { [matchId]: 마지막 호출 시각(ms) }
 
+  // ── 무인 자동 진행 (빈 코트 자동 투입) 상태 ─────────────────────────
+  const [autoRun, setAutoRun]       = useState(false) // 자동 진행 on/off (기본 꺼짐 — 안전)
+  const [estimates, setEstimates]   = useState({})    // { [matchId]: { at, ahead } } 예상 호출 시각
+  const [autoLog, setAutoLog]       = useState([])    // 최근 자동 조치 로그(투명성)
+  const soonSentRef   = useRef({})   // { [matchId]: ts } 사전알림 중복 방지
+  const orchestrating = useRef(false)
+
   // 체크인 상태
   const [entries, setEntries]         = useState([])
   const [checkins, setCheckins]       = useState([])
@@ -94,6 +102,21 @@ export default function LiveDashboard() {
     if (viewMode === 'checkin') loadCheckins()
     if (viewMode === 'standings') loadStandings()
   }, [viewMode, activeCat])
+
+  // ── 예상 호출 시각은 항상 갱신(표시용). 자동 진행이 켜져 있으면 실제 호출까지. ──
+  useEffect(() => {
+    const mm = categories.find(c => c.id === activeCat)?.match_duration_min ?? 30
+    const localBusy = new Set(
+      matches.filter(m => m.status === 'in_progress' && m.court_number != null).map(m => m.court_number)
+    )
+    const plan = planAutoAdvance(matches, {
+      busyCourts: localBusy, calledAt: calledIds, soonSentAt: soonSentRef.current, matchMinutes: mm,
+    })
+    setEstimates(plan.estimates)
+    if (autoRun) runOrchestrator(matches)
+    // calledIds 변경만으로는 재실행 안 함(무한 루프 방지) — 실시간 matches 갱신이 트리거.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matches, autoRun, activeCat])
 
   async function loadMatches() {
     const { data } = await supabase
@@ -226,23 +249,38 @@ export default function LiveDashboard() {
     }).eq('id', matchId)
   }
 
+  // 호출 대상(선수 id)·팀 이름·종목 헬퍼 (수동/자동 호출이 공유)
+  function recipientsOf(m) {
+    return [
+      m.team1?.player1?.id, m.team1?.player2?.id,
+      m.team2?.player1?.id, m.team2?.player2?.id,
+    ].filter(Boolean)
+  }
+  function teamNamesOf(m) {
+    const a = [m.team1?.player1?.name, m.team1?.player2?.name].filter(Boolean).join('/') || '팀A'
+    const b = [m.team2?.player1?.name, m.team2?.player2?.name].filter(Boolean).join('/') || '팀B'
+    return `${a} vs ${b}`
+  }
+  function sportOf(m) {
+    return categories.find(c => c.id === m.category_id)?.sport_type ?? null
+  }
+  function pushAutoLog(msg) {
+    setAutoLog(prev => [{ t: Date.now(), msg }, ...prev].slice(0, 6))
+  }
+
   // ── 선수 호출: 코트로 입장하라는 알림을 3채널로 팬아웃 (C1) ──────────
   //   인앱 실시간 방송(즉시) + 지속 저장(감사·재알림·푸시 큐) + 외부발송 스텁.
   //   재호출(미응답 시)도 같은 버튼으로 반복 가능.
   async function handleCall(m) {
     if (calling) return
     setCalling(m.id)
-    const recipients = [
-      m.team1?.player1?.id, m.team1?.player2?.id,
-      m.team2?.player1?.id, m.team2?.player2?.id,
-    ].filter(Boolean)
     try {
       const res = await callMatch({
         match: m,
         tournamentId: id,
         court: m.court_number,
-        sport: activeCatObj?.sport_type,
-        recipients,
+        sport: sportOf(m),
+        recipients: recipientsOf(m),
       })
       setCalledIds(prev => ({ ...prev, [m.id]: Date.now() }))
       if (!res.persist.persisted && res.persist.reason === 'table_missing') {
@@ -253,6 +291,58 @@ export default function LiveDashboard() {
       alert('호출 중 문제가 생겼어요: ' + e.message)
     }
     setCalling(null)
+  }
+
+  // ── 무인 자동 진행: 빈 코트 → 다음 경기 자동 호출 + 사전 알림 (C6·C1) ──
+  //   실시간으로 경기 상태가 바뀔 때마다(코트가 비면) 오케스트레이터가
+  //   "지금 호출할 경기 / 곧 호출 예고할 경기 / 예상 호출 시각" 을 계산한다.
+  //   중복 호출은 calledIds·soonSentRef 로 막고, 실제 발송은 notify.js 가 담당.
+  async function runOrchestrator(curMatches) {
+    if (orchestrating.current) return
+    orchestrating.current = true
+    try {
+      const catIds = categories.map(c => c.id)
+      // 다른 종목이 진행 중인 코트 = 비어있지 않음 → 자동 투입 금지 (중복 예약 방지)
+      const busy = new Set()
+      if (catIds.length > 1) {
+        const { data: running } = await supabase
+          .from('tournament_matches')
+          .select('court_number, category_id')
+          .in('category_id', catIds)
+          .eq('status', 'in_progress')
+        ;(running ?? []).forEach(r => {
+          if (r.court_number != null && r.category_id !== activeCat) busy.add(r.court_number)
+        })
+      }
+      const mm = categories.find(c => c.id === activeCat)?.match_duration_min ?? 30
+      const plan = planAutoAdvance(curMatches, {
+        busyCourts: busy,
+        calledAt: calledIds,
+        soonSentAt: soonSentRef.current,
+        matchMinutes: mm,
+      })
+      setEstimates(plan.estimates)
+
+      // 지금 호출할 경기 (빈 코트 맨 앞) — 순차 발송
+      for (const m of plan.toCall) {
+        try {
+          await callMatch({ match: m, tournamentId: id, court: m.court_number, sport: sportOf(m), recipients: recipientsOf(m) })
+          setCalledIds(prev => ({ ...prev, [m.id]: Date.now() }))
+          pushAutoLog(`${m.court_number}번 코트 자동 호출 — ${teamNamesOf(m)}`)
+        } catch { /* 다음 틱에 재시도 */ }
+      }
+      // 곧 호출될 경기 — 사전 알림 1회
+      for (const m of plan.toSoon) {
+        try {
+          const est = plan.estimates[m.id]
+          await callMatchSoon({ match: m, tournamentId: id, court: m.court_number, sport: sportOf(m), aheadCount: est?.ahead ?? null, recipients: recipientsOf(m) })
+          soonSentRef.current[m.id] = Date.now()
+          pushAutoLog(`${m.court_number}번 코트 곧 호출 예고 — ${teamNamesOf(m)}`)
+        } catch { /* 무시 */ }
+      }
+    } finally {
+      orchestrating.current = false
+    }
   }
 
   // ── MMR 반영은 이제 completeMatch → apply_match_mmr RPC 단일 진입점이 전담.
@@ -456,6 +546,52 @@ export default function LiveDashboard() {
             ))}
           </div>
 
+          {/* ── 무인 자동 진행 스위치 (빈 코트 자동 호출) ──────────────── */}
+          <div className="px-4 pt-4">
+            <div className={`rounded-2xl border p-4 transition
+              ${autoRun ? 'border-[#C60C30] bg-red-50/60' : 'border-gray-100 bg-white'}`}>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Zap size={18} className={autoRun ? 'text-[#C60C30]' : 'text-gray-400'} />
+                  <div className="min-w-0">
+                    <p className="font-bold text-sm">무인 자동 진행</p>
+                    <p className="text-[11px] text-gray-500 leading-tight">
+                      코트가 비면 다음 경기를 자동 호출하고, 다음 팀에게 "곧 호출" 을 미리 알려요.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setAutoRun(v => !v)}
+                  role="switch"
+                  aria-checked={autoRun}
+                  className={`relative shrink-0 w-12 h-7 rounded-full transition-colors
+                    ${autoRun ? 'bg-[#C60C30]' : 'bg-gray-300'}`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-6 h-6 rounded-full bg-white shadow transition-transform
+                    ${autoRun ? 'translate-x-5' : ''}`} />
+                </button>
+              </div>
+
+              {autoRun && (
+                <div className="mt-3 pt-3 border-t border-red-100 space-y-1.5">
+                  <p className="text-[11px] font-bold text-[#C60C30] flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#C60C30] animate-pulse" />
+                    자동 진행 중 — 화면을 열어두면 사람 없이 호출돼요
+                  </p>
+                  {autoLog.length === 0 ? (
+                    <p className="text-[11px] text-gray-400">빈 코트가 생기면 여기에 자동 호출 내역이 기록됩니다.</p>
+                  ) : (
+                    autoLog.map((l, i) => (
+                      <p key={i} className="text-[11px] text-gray-500 truncate">
+                        <span className="text-gray-400 tabular-nums">{fmt(l.t)}</span> · {l.msg}
+                      </p>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
           <div className="px-4 py-4 space-y-3">
             {catMatches.map(m => {
               const t1p = [m.team1?.player1, m.team1?.player2].filter(Boolean)
@@ -473,9 +609,15 @@ export default function LiveDashboard() {
                   ${m.status === 'in_progress' ? 'border-[#C60C30] shadow-md' : 'border-gray-100'}`}
                 >
                   <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-1.5 text-xs text-gray-400">
+                    <div className="flex items-center gap-1.5 text-xs text-gray-400 flex-wrap">
                       <Clock size={11} /> {fmt(m.scheduled_time)}
                       {m.court_number && <span>· 코트 {m.court_number}</span>}
+                      {m.status === 'scheduled' && estimates[m.id] && (
+                        <span className="flex items-center gap-0.5 text-[#003478] font-semibold">
+                          <Timer size={10} /> 예상 호출 {fmt(estimates[m.id].at)}쯤
+                          {estimates[m.id].ahead > 0 ? ` · 앞 ${estimates[m.id].ahead}경기` : ' · 대기 없음'}
+                        </span>
+                      )}
                     </div>
                     <span className={`text-xs font-bold px-2 py-0.5 rounded-full
                       ${m.status === 'completed'   ? 'bg-emerald-100 text-emerald-700'
