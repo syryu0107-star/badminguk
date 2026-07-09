@@ -287,7 +287,7 @@ export default function CreateTournament() {
     court_count: 4,
     registration_end: '',
     description: '',
-    cert_level: 'none',
+    cert_level: 'c',
   })
   const [categories, setCategories] = useState([{ ...DEFAULT_CAT }])
   const [expandedCats, setExpandedCats] = useState({})
@@ -385,43 +385,16 @@ export default function CreateTournament() {
           </div>
         </section>
 
-        {/* 공인 등급 = 전국 랭킹(MMR) 반영 여부 */}
+        {/* 모든 대회는 전국 랭킹(MMR)에 반영 */}
         <section>
-          <h2 className="font-bold mb-1 text-gray-700">이 대회 결과를 전국 랭킹(MMR)에 반영할까요?</h2>
-          <p className="text-xs text-gray-400 mb-3">
-            공인 등급이 높을수록 경기 뒤 선수들의 MMR이 더 크게 오르내려요. 연습·친목 대회라면 '비공인'을 고르세요.
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            {CERT_OPTIONS.map(opt => {
-              const active = form.cert_level === opt.key
-              return (
-                <button
-                  key={opt.key}
-                  onClick={() => update('cert_level', opt.key)}
-                  className={`p-3 rounded-2xl border-2 text-left transition
-                              ${active ? 'border-[#C60C30] bg-red-50' : 'border-gray-100 bg-white'}`}
-                >
-                  <p className="text-base mb-0.5">{opt.icon}</p>
-                  <p className="font-bold text-sm">{opt.label}</p>
-                  <p className={`text-xs font-bold mt-1 ${opt.key === 'none' ? 'text-gray-400' : 'text-[#C60C30]'}`}>
-                    {opt.mmr}
-                  </p>
-                  <p className="text-xs text-gray-400 mt-0.5">{opt.desc}</p>
-                </button>
-              )
-            })}
-          </div>
-          <div className="mt-2 flex items-start gap-2 bg-blue-50 rounded-xl px-3 py-2">
-            <Info size={14} className="text-blue-500 shrink-0 mt-0.5" />
-            {form.cert_level === 'none' ? (
-              <p className="text-xs text-blue-700">
-                지금은 <b>친선전</b>이에요. 경기를 치러도 선수들의 MMR(전국 랭킹)은 변하지 않아요.
+          <div className="flex items-start gap-2.5 bg-blue-50 rounded-2xl px-4 py-3.5">
+            <Info size={18} className="text-blue-500 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-bold text-blue-800">이 대회 결과는 전국 랭킹(MMR)에 반영됩니다</p>
+              <p className="text-xs text-blue-600 mt-1 leading-relaxed">
+                모든 경기 결과가 선수들의 MMR과 전국 랭킹에 자동으로 반영돼요. 대회를 치르면 실력에 따라 순위가 오르내립니다.
               </p>
-            ) : (
-              <p className="text-xs text-blue-700">
-                공인 대회는 경기 결과가 전국 랭킹(MMR)에 반영돼요. 향후 배드민국 심사 후 승인 예정이며, 현재는 테스트 목적으로 즉시 적용됩니다.
-              </p>
-            )}
+            </div>
           </div>
         </section>
 
@@ -538,13 +511,14 @@ export default function CreateTournament() {
                   {/* 최대 팀 / 참가비 */}
                   <div className="flex items-center gap-3">
                     <label className="text-xs text-gray-500 shrink-0">최대 팀</label>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => updateCat(i, 'max_teams', Math.max(4, cat.max_teams - 4))}
-                        className="w-6 h-6 rounded-full bg-gray-100 font-bold flex items-center justify-center text-sm">−</button>
-                      <span className="text-sm font-bold w-6 text-center">{cat.max_teams}</span>
-                      <button onClick={() => updateCat(i, 'max_teams', cat.max_teams + 4)}
-                        className="w-6 h-6 rounded-full bg-gray-100 font-bold flex items-center justify-center text-sm">+</button>
-                    </div>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={2}
+                      value={cat.max_teams}
+                      onChange={e => updateCat(i, 'max_teams', Number(e.target.value))}
+                      className="text-sm border border-gray-200 rounded-lg px-2 py-1 w-20 outline-none text-right"
+                    />
                     <label className="text-xs text-gray-500 ml-auto shrink-0">참가비</label>
                     <input
                       type="number"
