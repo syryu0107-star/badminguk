@@ -66,6 +66,10 @@ async function sendSolapiSMS(to: string, text: string) {
   const salt      = crypto.randomUUID().replace(/-/g, '')
   const signature = await hmacSha256(SOLAPI_SECRET, date + salt)
 
+  // 솔라피는 국내형식(01012345678)만 받는다 — +82 국제형식을 변환
+  const toLocal   = to.replace(/^\+82/, '0').replace(/\D/g, '')
+  const fromLocal = SENDER_PHONE.replace(/\D/g, '')
+
   const resp = await fetch('https://api.solapi.com/messages/v4/send', {
     method: 'POST',
     headers: {
@@ -74,8 +78,8 @@ async function sendSolapiSMS(to: string, text: string) {
     },
     body: JSON.stringify({
       message: {
-        to,
-        from: SENDER_PHONE,
+        to: toLocal,
+        from: fromLocal,
         text,
       },
     }),
