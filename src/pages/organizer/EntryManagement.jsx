@@ -6,7 +6,8 @@ import GradeChip from '../../components/GradeChip'
 import Spinner from '../../components/Spinner'
 import { assessSandbag, worseLevel, SANDBAG_STYLE } from '../../lib/sandbag'
 import { planAutoApprovals } from '../../lib/stateMachine'
-import { Check, X, ShieldAlert, Trophy, Clock, Sparkles } from 'lucide-react'
+import { parseDeposits, matchDeposits } from '../../lib/payment'
+import { Check, X, ShieldAlert, Trophy, Clock, Sparkles, Banknote, ChevronDown } from 'lucide-react'
 
 // 신청 상태별 표시(라벨·색). 011에서 partner_pending/partner_rejected 추가됨.
 const ENTRY_STATUS_META = {
@@ -37,6 +38,11 @@ export default function EntryManagement() {
   const [podium, setPodium]         = useState({}) // playerId → { champ, medal }
   const [loading, setLoading]       = useState(true)
   const [approving, setApproving]   = useState(false)
+
+  // 입금 자동 매칭 (C3) — 무통장 입금 내역 붙여넣기 대조
+  const [depositText, setDepositText] = useState('')
+  const [showDeposit, setShowDeposit] = useState(false)
+  const [confirming, setConfirming]   = useState(false)
 
   // 무인 자동 승인 스위치 (기본 OFF) — 대회별 기억
   const autoKey = `bdm.autoapprove.${id}`
@@ -116,6 +122,32 @@ export default function EntryManagement() {
     () => planAutoApprovals(entries, catById, { counts: approvedCounts }),
     [entries, catById, approvedCounts],
   )
+
+  // 입금 자동 매칭 — 참가비 있는 대회에서만 노출
+  const hasFee = useMemo(() => categories.some(c => (Number(c.entry_fee) || 0) > 0), [categories])
+  const deposits = useMemo(() => parseDeposits(depositText), [depositText])
+  const match = useMemo(() => matchDeposits(entries, deposits, catById), [entries, deposits, catById])
+  const feePendingCount = useMemo(
+    () => entries.filter(e => {
+      const fee = Number(catById[e.category_id]?.entry_fee) || 0
+      return fee > 0 && e.payment_status !== 'confirmed' && e.payment_status !== 'refunded'
+        && !['withdrawn', 'rejected', 'partner_rejected'].includes(e.entry_status)
+    }).length,
+    [entries, catById],
+  )
+
+  // 매칭된 신청을 입금 완료 처리 (payment_status='confirmed')
+  async function confirmPayments(list) {
+    const ids = (list ?? match.confirmed).map(m => m.entry.id)
+    if (!ids.length || confirming) return
+    setConfirming(true)
+    try {
+      await supabase.from('tournament_entries').update({ payment_status: 'confirmed' }).in('id', ids)
+      const idSet = new Set(ids)
+      setEntries(prev => prev.map(e => idSet.has(e.id) ? { ...e, payment_status: 'confirmed' } : e))
+    } catch { /* 무시 — 다음 로드에서 재시도 */ }
+    setConfirming(false)
+  }
 
   // 안전한 신청 일괄 자동 승인
   async function approveSafe(list) {
@@ -233,6 +265,111 @@ export default function EntryManagement() {
           )}
         </div>
       </div>
+
+      {/* 입금 자동 매칭 (C3) — 무통장 입금 내역 대조 */}
+      {hasFee && (
+        <div className="px-4 pt-3">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            <button
+              onClick={() => setShowDeposit(v => !v)}
+              className="w-full flex items-center justify-between gap-3 p-4 text-left"
+            >
+              <div className="flex items-start gap-2">
+                <Banknote size={18} className="text-[#003478] mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-bold text-sm">입금 자동 매칭</p>
+                  <p className="text-xs text-gray-400 leading-relaxed mt-0.5">
+                    은행 입금 내역을 붙여넣으면 신청자 이름·금액으로 자동 대조해 입금 완료 처리해요.
+                    {feePendingCount > 0
+                      ? <> 현재 <b className="text-amber-600">입금 대기 {feePendingCount}건</b></>
+                      : <> 입금 대기가 없어요 ✓</>}
+                  </p>
+                </div>
+              </div>
+              <ChevronDown size={18} className={`text-gray-400 shrink-0 transition ${showDeposit ? 'rotate-180' : ''}`} />
+            </button>
+
+            {showDeposit && (
+              <div className="px-4 pb-4 border-t border-gray-50 pt-3">
+                <textarea
+                  value={depositText}
+                  onChange={e => setDepositText(e.target.value)}
+                  rows={4}
+                  placeholder={'은행/토스 입금 내역을 그대로 붙여넣으세요\n예) 2026-07-10  홍길동  30,000원\n     김민준,30000'}
+                  className="w-full text-sm rounded-xl border border-gray-200 p-3 leading-relaxed
+                             focus:outline-none focus:ring-2 focus:ring-[#003478]/30 resize-none"
+                />
+
+                {depositText.trim() && (
+                  <>
+                    {/* 매칭 결과 요약 */}
+                    <div className="grid grid-cols-3 gap-1.5 mt-3 text-center">
+                      {[
+                        { n: match.confirmed.length, label: '자동 확인', cls: 'text-emerald-600' },
+                        { n: match.review.length,    label: '확인 권장', cls: 'text-amber-600' },
+                        { n: match.unmatched.length, label: '미매칭',    cls: 'text-gray-500' },
+                      ].map(b => (
+                        <div key={b.label} className="bg-gray-50 rounded-xl py-2">
+                          <p className={`text-lg font-black ${b.cls}`}>{b.n}</p>
+                          <p className="text-[11px] text-gray-400">{b.label}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {match.confirmed.length > 0 && (
+                      <button
+                        onClick={() => confirmPayments(match.confirmed)}
+                        disabled={confirming}
+                        className="w-full mt-3 py-2.5 rounded-xl bg-[#003478] text-white text-sm font-bold
+                                   active:scale-[.98] transition disabled:opacity-50"
+                      >
+                        {confirming ? '처리 중…' : `자동 확인 ${match.confirmed.length}건 입금 완료 처리`}
+                      </button>
+                    )}
+
+                    {/* 확인 권장 — 이름/금액 애매, 사람이 1탭 승인 */}
+                    {match.review.length > 0 && (
+                      <div className="mt-3 space-y-1.5">
+                        <p className="text-xs font-semibold text-amber-700">확인 권장 — 맞으면 개별 확인하세요</p>
+                        {match.review.map(m => (
+                          <div key={m.entry.id} className="flex items-center gap-2 bg-amber-50 rounded-xl px-3 py-2">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-semibold truncate">
+                                {m.entry.player1?.name}
+                                {m.entry.player2 && ` · ${m.entry.player2.name}`}
+                              </p>
+                              <p className="text-[11px] text-amber-600 truncate">
+                                입금 “{m.deposit.name} {m.deposit.amount?.toLocaleString('ko-KR')}원” · {m.reason}
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => confirmPayments([m])}
+                              disabled={confirming}
+                              className="shrink-0 px-2.5 py-1.5 rounded-lg bg-amber-500 text-white text-xs font-bold
+                                         active:opacity-80 disabled:opacity-50"
+                            >
+                              입금 확인
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* 신청과 못 붙은 입금 — 오입금·중복·미신청 */}
+                    {match.unusedDeposits.length > 0 && (
+                      <p className="mt-2 text-[11px] text-gray-400">
+                        신청과 못 붙은 입금 {match.unusedDeposits.length}건:
+                        {' '}{match.unusedDeposits.map(d => `${d.name}(${d.amount?.toLocaleString('ko-KR')})`).join(', ')}
+                        {' '}— 오입금·미신청·이름 상이일 수 있어요.
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 종목 탭 */}
       <div className="flex gap-2 px-4 py-3 bg-white border-b border-gray-100 overflow-x-auto">

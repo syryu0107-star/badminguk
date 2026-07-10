@@ -5,8 +5,8 @@
 ## 플로우 자동화율 (0~100%)
 | 플로우 | 점수 | 완주 막는 잔여 갭 |
 |--------|:---:|------------------|
-| 주최자 | 58% | 셀프 체크인 무인 집계 ✅ / 입금 확인(C3)·시상 확정(무인) 미연결 |
-| 선수   | 63% | 셀프 체크인·디지털 선수증 ✅ (신청→체크인→예상시각→호출→결과 화면 하나로 연결) / 결제 부재 |
+| 주최자 | 66% | 무통장 입금 자동 매칭 ✅ (붙여넣기→퍼지매칭→입금확인→자동승인 연결) / PG 실결제·시상 확정(무인) 미연결 |
+| 선수   | 66% | 셀프 체크인·디지털 선수증 ✅, 참가비 입금 확인 자동화(계좌) ✅ / PG 카드결제 부재 |
 | 심판   | 70% | 무심판 코트 셀프스코어 부재 |
 | 운영   | 68% | 빈코트 자동투입·자동호출·사전알림·예상시각·노쇼 타이머(미응답 경고 자동발송+카운트다운+부전승 원터치) ✅ / 지연재조정(rescheduleAfterForfeit)·자동 부전승 확정 미연결 |
 
@@ -15,7 +15,7 @@
 |---|----------|:---:|----------------|
 | C1 | 경기 호출·알림 인프라 | ⚠️ | notify.js+orchestrator.js — 자동호출·사전알림(곧 호출)·예상 호출시각 end-to-end(LiveDashboard→MyMatches). 웹푸시/알림톡/SMS는 human-gated 스텁, WO카운트다운·재알림 타이머 미구현 |
 | C2 | 대회 상태 오케스트레이션 | ⚠️ | stateMachine.js 신설 — 순수 판정 엔진. TournamentManage "무인 자동 진행" 스위치: 접수 마감 시각 경과/정원 충족 시 open→closed, 대회 당일+대진표 존재 시 closed→in_progress 자동 전환(추천 배너+원터치). EntryManagement "무인 자동 승인": 정상 신청 자동 승인, 샌드배깅 의심·입금 미확인·정원 초과만 사람 큐. draft→open(개설 공개)·시상 확정(무인)은 아직 수동 |
-| C3 | 입금·결제·환불 | ❌ | payment_status 쓰는 코드 없음 |
+| C3 | 입금·결제·환불 | ⚠️ | `payment.js` 신설 — 무통장 입금 내역 붙여넣기→신청자명 퍼지매칭(Levenshtein+정규화)+금액 대조→`payment_status='confirmed'` 자동 처리. EntryManagement "입금 자동 매칭" 패널(자동확인/확인권장/미매칭 분류, 1탭 확인). 입금 확인이 auto-approval 입금대기 버킷을 비워 무인 승인까지 연결. PG 실결제(토스)·가상계좌·환불규정 코드화는 미구현·human-gated |
 | C4 | 셀프 체크인 | ✅ | `checkin.js` 엔진 신설 — 선수 MyMatches "디지털 선수증" 카드에서 대회 당일/진행중 원터치 셀프 체크인(verified_method='self'). 실명인증 선수는 무인 완료, 미인증은 "본인확인 권장" 예외로만 노출. LiveDashboard 체크인 패널 실시간 반영(tournament_checkins 구독)+셀프/본인확인권장/신고 요약. 운영자 수동 체크인 병존. QR/PIN 키오스크·대리스코어링만 잔여 |
 | C5 | AI 대진 최적화 | ⚠️ | seededShuffle 단일 셔플 + MMR 시드만 |
 | C6 | 실시간 진행·지연 재조정 | ⚠️ | 빈코트 감시→다음경기 자동투입(orchestrator.planAutoAdvance, LiveDashboard 무인 진행 스위치) ✅. rescheduleAfterForfeit·누적지연 시뮬은 아직 미연결 |
@@ -27,6 +27,19 @@
 | C12 | 대회 탐색·파트너·전적 | ⚠️ | 파트너 초대·랭킹 있음, 추천/매칭 없음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-10 · C3 · `src/lib/payment.js`(신규)·`src/pages/organizer/EntryManagement.jsx`
+  · 무통장 입금 자동 매칭(C3 ❌→⚠️) — 주최자 완주를 막던 결정적 공백을 메움. payment_status 컬럼은
+    존재하는데 'confirmed'로 바꾸는 코드 경로가 앱 어디에도 없어, 참가비 있는 신청은 auto-approval의
+    "입금대기" 사람 큐에 영구히 갇혀 무인 승인이 불가능했다. 순수 엔진 `payment.js` 신설 —
+    `normalizeName`(괄호·꼬리숫자·공백 제거), `parseAmount`, `nameSimilarity`(정규화 동일=1·포함=0.9·
+    Levenshtein 비율), `parseDeposits`(은행/토스 붙여넣기를 [{name,amount}] 로 관대 파싱, 날짜 오인식 방지),
+    `matchDeposits`(참가비>0·미확인 신청 ↔ 입금 그리디 매칭: 유사도≥0.85+금액충족=confirmed, 0.6~0.85·
+    금액부족·경합=review, 입금 1건=신청 1건 중복배정 방지, 미매칭 신청·미사용 입금 분리). EntryManagement에
+    "입금 자동 매칭" 접이식 패널 추가 — 내역 붙여넣기→자동확인/확인권장/미매칭 3분류 요약→"자동 확인 N건 입금
+    완료 처리" 일괄 버튼(payment_status='confirmed') + review 행별 1탭 개별 확인 + 미사용 입금(오입금/미신청)
+    안내. 입금 확인이 planAutoApprovals의 payment 버킷을 비워 무인 자동 승인까지 자연 연결(별도 트리거 불필요).
+    스키마 변경 없음(기존 payment_status·entry_fee 사용). 엔진 20개 시나리오 자체 검증 통과, `npx vite build`
+    green. PG 실결제·환불규정은 human-gated 유지. (자동화율 주최자 58%→66%, 선수 63%→66%)
 - 2026-07-09 · C4 · `src/lib/checkin.js`(신규)·`src/pages/player/MyMatches.jsx`·`src/pages/organizer/LiveDashboard.jsx`
   · 셀프 체크인(C4 ⚠️→✅) — 선수 완주를 막던 "체크인은 운영자만 손으로 클릭" 공백을 메움. 순수함수
     `getCheckinWindow`(대회 date/status로 before/open/ended 창 판정: 당일 또는 in_progress면 체크인 가능)·
