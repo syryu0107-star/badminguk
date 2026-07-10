@@ -10,9 +10,13 @@ import {
 } from '../../lib/campaign'
 import { sendCampaign } from '../../lib/notify'
 import {
+  computeSettlement, formatWon, printSettlement,
+  WITHHOLDING_PRESETS, presetByKey,
+} from '../../lib/settlement'
+import {
   Users, GitBranch, Zap, Monitor, ChevronRight, Trophy,
   Share2, Copy, Check, Printer, ExternalLink, Sparkles, AlertTriangle,
-  Megaphone, Send,
+  Megaphone, Send, Calculator, Plus, X, TrendingUp, TrendingDown,
 } from 'lucide-react'
 
 // ═══════════════════════════════════════════════════════════════
@@ -260,6 +264,7 @@ export default function TournamentManage() {
   const [tournament, setTournament] = useState(null)
   const [categories, setCategories] = useState([])
   const [entryCounts, setEntryCounts] = useState({})
+  const [entries, setEntries] = useState([])   // 정산용 (payment_status·amount)
   const [matches, setMatches] = useState([])
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
@@ -277,6 +282,23 @@ export default function TournamentManage() {
   const [sendingCampaign, setSendingCampaign] = useState(null)
   const autoSentRef = useRef(new Set())
 
+  // 정산·손익(C10) — 경비·상금·원천징수 입력은 대회별 localStorage 기억
+  const settleKey = `bdm.settle.${id}`
+  const [settleInput, setSettleInput] = useState(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(settleKey) || '{}')
+      return {
+        costs: Array.isArray(raw.costs) ? raw.costs : [],
+        prizeTotal: Number(raw.prizeTotal) || 0,
+        whKey: raw.whKey || 'none',
+      }
+    } catch { return { costs: [], prizeTotal: 0, whKey: 'none' } }
+  })
+  function saveSettleInput(next) {
+    setSettleInput(next)
+    try { localStorage.setItem(settleKey, JSON.stringify(next)) } catch { /* 무시 */ }
+  }
+
   const liveUrl = `${window.location.origin}/live/${id}`
 
   useEffect(() => {
@@ -285,7 +307,7 @@ export default function TournamentManage() {
         supabase.from('tournaments').select('*').eq('id', id).single(),
         supabase
           .from('tournament_categories')
-          .select('id, max_teams, min_teams, sport_type')
+          .select('id, max_teams, min_teams, sport_type, entry_fee')
           .eq('tournament_id', id),
       ])
 
@@ -299,20 +321,26 @@ export default function TournamentManage() {
         counts[cat.id] = count ?? 0
       }
 
-      // 대진표 존재/완료 판정용 경기 상태 (있으면)
+      // 대진표 존재/완료 판정용 경기 상태 + 정산용 신청 내역 (있으면)
       let ms = []
+      let ents = []
       const catIds = (cats ?? []).map(c => c.id)
       if (catIds.length) {
-        const { data } = await supabase
-          .from('tournament_matches')
-          .select('id, status')
-          .in('category_id', catIds)
-        ms = data ?? []
+        const [{ data: md }, { data: ed }] = await Promise.all([
+          supabase.from('tournament_matches').select('id, status').in('category_id', catIds),
+          supabase
+            .from('tournament_entries')
+            .select('id, category_id, payment_status, payment_amount, entry_status')
+            .in('category_id', catIds),
+        ])
+        ms = md ?? []
+        ents = ed ?? []
       }
 
       setTournament(t)
       setCategories(cats ?? [])
       setEntryCounts(counts)
+      setEntries(ents)
       setMatches(ms)
       setLoading(false)
     }
@@ -455,6 +483,43 @@ export default function TournamentManage() {
 </body>
 </html>`)
     w.document.close()
+  }
+
+  // 정산·손익 계산 (실측 참가비 + 주최자 입력 경비·상금)
+  const preset = presetByKey(settleInput.whKey)
+  const settlement = useMemo(
+    () => computeSettlement({
+      categories,
+      entries,
+      costs: settleInput.costs,
+      prize: { total: settleInput.prizeTotal, withholdingRate: preset.rate },
+    }),
+    [categories, entries, settleInput, preset.rate],
+  )
+
+  // 참가비가 있는 대회거나(수입) 경비·상금을 입력했으면 정산 패널 노출
+  const hasFee = categories.some(c => (c.entry_fee || 0) > 0)
+  const showSettlement = hasFee || settleInput.costs.length > 0 || settleInput.prizeTotal > 0
+
+  function addCost() {
+    saveSettleInput({ ...settleInput, costs: [...settleInput.costs, { label: '', amount: 0 }] })
+  }
+  function updateCost(i, patch) {
+    const costs = settleInput.costs.map((c, idx) => (idx === i ? { ...c, ...patch } : c))
+    saveSettleInput({ ...settleInput, costs })
+  }
+  function removeCost(i) {
+    saveSettleInput({ ...settleInput, costs: settleInput.costs.filter((_, idx) => idx !== i) })
+  }
+  function printReport() {
+    const ok = printSettlement({
+      title: tournament?.title,
+      date: tournament?.date,
+      venue: tournament?.venue,
+      settlement,
+      withholdingLabel: preset.label,
+    })
+    if (!ok) alert('팝업이 차단되어 있어요. 팝업 허용 후 다시 눌러주세요.')
   }
 
   if (loading) return <div className="flex justify-center py-20"><Spinner /></div>
@@ -633,6 +698,178 @@ export default function TournamentManage() {
 
             <p className="text-[11px] text-gray-300 mt-3 leading-relaxed">
               문자·알림톡 실발송은 준비 중이라, 지금은 앱 안 공지함으로 도착해요.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* 정산 · 손익 리포트 (C10 결과·시상·정산) */}
+      {showSettlement && (
+        <div className="px-4 pt-4">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+            <div className="flex items-start gap-2">
+              <Calculator size={18} className="text-[#003478] mt-0.5 shrink-0" />
+              <div>
+                <p className="font-bold text-sm">정산 · 손익</p>
+                <p className="text-xs text-gray-400 leading-relaxed mt-0.5">
+                  입금 확인된 참가비에서 경비·상금을 빼서 손익을 자동으로 계산해요.
+                  경비와 상금만 입력하면 원천징수까지 정리됩니다.
+                </p>
+              </div>
+            </div>
+
+            {/* 순손익 큰 숫자 */}
+            <div
+              className="mt-3 rounded-xl p-4 text-center"
+              style={{ background: settlement.isProfit ? 'rgba(5,150,105,.08)' : 'rgba(198,12,48,.07)' }}
+            >
+              <p className="text-xs font-semibold text-gray-400">
+                {settlement.isProfit ? '순수익' : '순손실'}
+              </p>
+              <p
+                className="text-3xl font-black mt-0.5 flex items-center justify-center gap-1.5 tabular-nums"
+                style={{ color: settlement.isProfit ? '#059669' : '#C60C30' }}
+              >
+                {settlement.isProfit
+                  ? <TrendingUp size={22} className="shrink-0" />
+                  : <TrendingDown size={22} className="shrink-0" />}
+                {formatWon(settlement.net)}
+              </p>
+            </div>
+
+            {/* 수입 / 지출 요약 */}
+            <div className="grid grid-cols-2 gap-2 mt-3">
+              <div className="rounded-xl bg-blue-50 p-3">
+                <p className="text-[11px] font-semibold text-[#003478]">참가비 수입</p>
+                <p className="text-lg font-black text-[#003478] tabular-nums">{formatWon(settlement.income)}</p>
+                <p className="text-[11px] text-gray-400">입금 확인 {settlement.revenue.count}팀</p>
+              </div>
+              <div className="rounded-xl bg-red-50 p-3">
+                <p className="text-[11px] font-semibold text-[#C60C30]">총지출</p>
+                <p className="text-lg font-black text-[#C60C30] tabular-nums">{formatWon(settlement.expense)}</p>
+                <p className="text-[11px] text-gray-400">경비 + 상금</p>
+              </div>
+            </div>
+
+            {/* 미수금 · 환불 안내 */}
+            {(settlement.pending.amount > 0 || settlement.refund.amount > 0) && (
+              <div className="mt-2 space-y-1">
+                {settlement.pending.amount > 0 && (
+                  <p className="text-[11px] text-amber-600 flex items-center gap-1">
+                    <AlertTriangle size={11} className="shrink-0" />
+                    아직 입금 안 된 참가비 {formatWon(settlement.pending.amount)} · {settlement.pending.count}팀
+                    <span className="text-gray-400">(입금되면 수입에 자동 반영)</span>
+                  </p>
+                )}
+                {settlement.refund.amount > 0 && (
+                  <p className="text-[11px] text-gray-400">
+                    환불 처리 {formatWon(settlement.refund.amount)} · {settlement.refund.count}팀 (순손익 영향 없음)
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* 종목별 수입 */}
+            {settlement.byCat.length > 1 && (
+              <div className="mt-3 rounded-xl border border-gray-100 divide-y divide-gray-50">
+                {settlement.byCat.map(c => (
+                  <div key={c.categoryId} className="flex items-center justify-between px-3 py-2 text-xs">
+                    <span className="font-semibold text-gray-600">{c.name}</span>
+                    <span className="tabular-nums text-gray-500">
+                      <b className="text-[#003478]">{formatWon(c.confirmed)}</b>
+                      <span className="text-gray-400"> · {c.confirmedCount}팀</span>
+                      {c.pending > 0 && <span className="text-amber-500"> (미입금 {formatWon(c.pending)})</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* 경비 입력 */}
+            <div className="mt-4">
+              <p className="text-xs font-bold text-gray-500 mb-1.5">지출 경비</p>
+              <div className="space-y-1.5">
+                {settleInput.costs.map((c, i) => (
+                  <div key={i} className="flex items-center gap-1.5">
+                    <input
+                      value={c.label}
+                      onChange={e => updateCost(i, { label: e.target.value })}
+                      placeholder="예: 코트 대관료"
+                      className="flex-1 min-w-0 bg-gray-50 rounded-lg px-2.5 py-2 text-sm outline-none focus:bg-white focus:ring-1 focus:ring-[#003478]/30 placeholder:text-gray-300"
+                    />
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      <input
+                        type="number" inputMode="numeric" min="0"
+                        value={c.amount || ''}
+                        onChange={e => updateCost(i, { amount: Math.max(0, Number(e.target.value) || 0) })}
+                        placeholder="0"
+                        className="w-24 bg-gray-50 rounded-lg px-2.5 py-2 text-sm text-right tabular-nums outline-none focus:bg-white focus:ring-1 focus:ring-[#C60C30]/30 placeholder:text-gray-300"
+                      />
+                      <span className="text-xs text-gray-400">원</span>
+                    </div>
+                    <button onClick={() => removeCost(i)} className="p-1.5 text-gray-300 active:text-[#C60C30]" aria-label="경비 삭제">
+                      <X size={15} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <button
+                onClick={addCost}
+                className="mt-1.5 flex items-center gap-1 text-xs font-bold text-[#003478] px-2 py-1.5 rounded-lg active:bg-gray-50"
+              >
+                <Plus size={13} /> 경비 항목 추가
+              </button>
+            </div>
+
+            {/* 상금 · 원천징수 */}
+            <div className="mt-3 pt-3 border-t border-gray-50">
+              <p className="text-xs font-bold text-gray-500 mb-1.5">상금 · 원천징수</p>
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm text-gray-500 shrink-0">상금 총액</span>
+                <input
+                  type="number" inputMode="numeric" min="0"
+                  value={settleInput.prizeTotal || ''}
+                  onChange={e => saveSettleInput({ ...settleInput, prizeTotal: Math.max(0, Number(e.target.value) || 0) })}
+                  placeholder="0"
+                  className="flex-1 min-w-0 bg-gray-50 rounded-lg px-2.5 py-2 text-sm text-right tabular-nums outline-none focus:bg-white focus:ring-1 focus:ring-[#C60C30]/30 placeholder:text-gray-300"
+                />
+                <span className="text-xs text-gray-400 shrink-0">원</span>
+              </div>
+
+              {settleInput.prizeTotal > 0 && (
+                <>
+                  <select
+                    value={settleInput.whKey}
+                    onChange={e => saveSettleInput({ ...settleInput, whKey: e.target.value })}
+                    className="mt-2 w-full bg-gray-50 rounded-lg px-2.5 py-2 text-sm outline-none focus:bg-white"
+                  >
+                    {WITHHOLDING_PRESETS.map(p => (
+                      <option key={p.key} value={p.key}>{p.label} — {p.desc}</option>
+                    ))}
+                  </select>
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-center">
+                    <div className="rounded-lg bg-gray-50 py-2">
+                      <p className="text-[11px] text-gray-400">원천징수 (세무서 납부)</p>
+                      <p className="text-sm font-black text-[#C60C30] tabular-nums">{formatWon(settlement.prize.withholding)}</p>
+                    </div>
+                    <div className="rounded-lg bg-gray-50 py-2">
+                      <p className="text-[11px] text-gray-400">선수 실지급액</p>
+                      <p className="text-sm font-black text-gray-700 tabular-nums">{formatWon(settlement.prize.netPay)}</p>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <button
+              onClick={printReport}
+              className="mt-4 w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-gray-200 text-sm font-bold text-gray-600 active:bg-gray-50"
+            >
+              <Printer size={15} /> 정산 리포트 인쇄 · PDF 저장
+            </button>
+            <p className="text-[11px] text-gray-300 mt-2 leading-relaxed">
+              원천징수 세율은 참고용이에요 — 실제 세무 처리는 세무 전문가와 확인하세요.
+              경비·상금은 이 기기에 저장돼요.
             </p>
           </div>
         </div>
