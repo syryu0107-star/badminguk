@@ -5,8 +5,8 @@
 ## 플로우 자동화율 (0~100%)
 | 플로우 | 점수 | 완주 막는 잔여 갭 |
 |--------|:---:|------------------|
-| 주최자 | 70% | 무통장 입금 자동 매칭 ✅ / 디지털 상장 자동 생성·시상식용 일괄 인쇄 ✅ / PG 실결제·정산(손익) 리포트·사후 공지(C11) 미연결 |
-| 선수   | 70% | 셀프 체크인·디지털 선수증 ✅, 입금 확인 자동화 ✅, 결과·급수·**상장(디지털 상장 인쇄)** ✅ — 선수 완주 화면 완결 / PG 카드결제 부재 |
+| 주최자 | 74% | 무통장 입금 자동 매칭 ✅ / 디지털 상장 ✅ / **사후 공지·리마인더·감사·설문 자동 발송(C11)** ✅ / PG 실결제·정산(손익) 리포트 미연결 |
+| 선수   | 73% | 셀프 체크인·디지털 선수증 ✅, 입금 확인 자동화 ✅, 결과·급수·상장 ✅, **대회 안내·공지함 수신(C11)** ✅ — 선수 완주 화면 완결 / PG 카드결제 부재 |
 | 심판   | 70% | 무심판 코트 셀프스코어 부재 |
 | 운영   | 74% | 빈코트 자동투입·자동호출·사전알림·예상시각(관측 페이스 보정)·노쇼 타이머·지연 예측(현재 페이스면 N분 지연+예상 종료+재배치안) ✅ / 자동 부전승 확정·빈코트 실제 재배치 실행 미연결 |
 
@@ -23,10 +23,27 @@
 | C8 | 요강·설정 마법사 | ⚠️ | 설정 폼만, 역산/문서생성 없음 |
 | C9 | 문의 챗봇 | ❌ | 없음 |
 | C10 | 결과·시상·정산 | ⚠️ | 순위집계·급수승급 자동 + `certificate.js` 신설 — 대회 종료(final_rank 확정) 시 입상 팀 **디지털 상장** 자동 생성(순위별 등급·수여문·발급번호·주최 표기, XSS 이스케이프). 선수 Results "내 상장 받기·인쇄"(자기 입상), Results 시상대 "상장 모두 인쇄", LiveDashboard 시상 결과 "시상식용 상장 일괄 인쇄"(주최자). 브라우저 인쇄=PDF 저장. 스키마·키 불필요. 정산(손익)·원천징수 리포트만 잔여 |
-| C11 | 사후 커뮤니케이션 | ❌ | 없음 |
+| C11 | 사후 커뮤니케이션 | ⚠️ | `campaign.js` 신설 — 대회 상태·날짜만 보고 발송할 안내를 판정: 전날 리마인더(open/closed+D-1)·당일 안내(closed/in_progress+D-0)·종료 후 감사·만족도 설문. notify.js `sendCampaign`(3채널 팬아웃)+`fetchNotices`(공지함)·CAMPAIGN 타입. TournamentManage "대회 안내·공지" 패널: 무인 ON이면 때가 된 캠페인 자동 1회 발송(localStorage 재발송 차단), OFF면 원터치 "지금 보내기". 선수 MyMatches "공지·안내" 공지함(미읽음 배지·탭 읽음, 라이브 방송 즉시 수신). 하이라이트(개인 성적 요약)·실외부발송(문자/알림톡)은 미구현·human-gated |
 | C12 | 대회 탐색·파트너·전적 | ⚠️ | 파트너 초대·랭킹 있음, 추천/매칭 없음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-10 · C11 · `src/lib/campaign.js`(신규)·`src/lib/notify.js`·`src/pages/organizer/TournamentManage.jsx`·`src/pages/player/MyMatches.jsx`
+  · 사후 커뮤니케이션(C11 ❌→⚠️) — 북극성 체인의 마지막 고리 "공지"가 코드 0건이라, 주최자가 단톡방에
+    손으로 쓰던 리마인더·감사·설문이 앱 밖 수작업으로 남아 있었다. 순수 엔진 `campaign.js` 신설 —
+    `dayDiff`(대회 날짜−오늘, 타임존 밀림 방지 위해 앞 10자만 파싱)·`localDateStr`·`planCampaigns`(상태×날짜로
+    발송 후보 판정: open/closed+D-1→전날안내, closed/in_progress+D-0→당일안내, completed→감사+설문,
+    각 문구는 제목·날짜·장소 삽입)·`pendingCampaigns`·발신기기 localStorage 재발송 차단
+    (`loadSentCampaigns`/`markCampaignSent`, RLS상 주최자는 수신자 알림 조회 불가라 서버판정 대신)·
+    `fetchCampaignRecipients`(approved 엔트리 player1·2 프로필 중복제거). notify.js에 `CAMPAIGN` 타입 4종·
+    `NOTICE_TYPES`·`sendCampaign`(경기호출과 동일한 broadcast+persist+외부스텁 팬아웃, matchId 없음)·
+    `fetchNotices`(공지함용 지속형 알림 조회)·`markNoticeRead`, `subscribeNotifications`가 CAMPAIGN 이벤트도
+    수신하게 확장. TournamentManage에 "대회 안내·공지" 패널 — 무인 자동 진행 ON이면 useEffect가 때가 된
+    캠페인을 스스로 1회 발송(autoSentRef+localStorage 중복차단), OFF면 캠페인별 "지금 보내기"/"보냄✓". 종료
+    후에도 보이도록 action 게이팅 밖에 배치. 선수 MyMatches에 "공지·안내" 공지함 — 로드시 fetchNotices,
+    미읽음 빨간 배지·탭 읽음(markNoticeRead), 라이브 방송 수신 시 즉시 상단 삽입(중복 방지). 스키마 변경 없음
+    (기존 013 notifications 재사용, 미적용 시 broadcast만 도달하고 조용히 degrade). 엔진 17개 시나리오
+    (날짜차·상태별 판정·sent 필터·문구) 자체 검증 통과, `npx vite build` green. 하이라이트(개인 성적 요약)·
+    실외부발송은 human-gated 유지. (자동화율 주최자 70%→74%, 선수 70%→73%)
 - 2026-07-10 · C10 · `src/lib/certificate.js`(신규)·`src/pages/player/Results.jsx`·`src/pages/organizer/LiveDashboard.jsx`
   · 디지털 상장 자동 생성 — 선수 완주(신청→…→결과·급수·**상장**)의 마지막 단계 "상장"이 코드 0건이라
     선수 플로우가 화면에서 완결되지 못했다. 순수 엔진 `certificate.js` 신설 — `certRankInfo`(순위→우승/
@@ -111,3 +128,4 @@
 - [ ] 카카오 알림톡 템플릿 승인 → 알림톡 폴백 활성화
 - [ ] TEST_MODE 해제 결정 (실로그인 전환)
 - [ ] 013 마이그레이션 적용 후 `VITE_ENABLE_PUSH=true` + FCM/알림톡/SMS 키 등록 → notify.js `dispatchExternal` 실발송 활성화 (현재는 인앱 실시간 방송만 도달)
+- [ ] (C11) 사후 설문 URL(구글폼 등) 연동 — 현재 설문 캠페인은 앱 내 안내 문구만. 외부 설문 링크는 대회 설정에 URL 필드 추가 후 payload에 실어 발송하면 됨(human-gated, 링크 준비 필요)

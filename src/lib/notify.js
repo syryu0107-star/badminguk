@@ -21,6 +21,19 @@ export const NOTIFY = {
   RESULT:         'result',          // 결과·급수 반영
 }
 
+// 사후 커뮤니케이션 캠페인 종류 (C11) — 대회 생애주기 안내·공지.
+// 경기 호출(NOTIFY)과 달리 "지금 당장"이 아니라 지속 도달(공지함)이 핵심이라
+// 인앱 방송 + notifications 지속 저장으로 팬아웃한다.
+export const CAMPAIGN = {
+  REMIND_D1:   'campaign_remind_d1',    // 대회 전날 안내
+  REMIND_DDAY: 'campaign_remind_dday',  // 대회 당일 아침 안내
+  THANKS:      'campaign_thanks',       // 종료 후 감사 + 결과 안내
+  SURVEY:      'campaign_survey',       // 만족도 설문 요청
+}
+
+// 공지함(inbox)에 모아 보여줄 지속형 알림 종류 (전송성 호출과 구분)
+export const NOTICE_TYPES = [...Object.values(CAMPAIGN), NOTIFY.RESULT, NOTIFY.SCHEDULE_SHIFT]
+
 const PUSH_ENABLED = import.meta.env.VITE_ENABLE_PUSH === 'true'
 const DEV = import.meta.env.DEV
 
@@ -181,14 +194,34 @@ export async function callWalkoverWarn({ match, tournamentId, court, sport, seco
   return { payload, broadcast: bc, persist: ps, external: ex }
 }
 
+// ── 고수준 진입점: 사후 커뮤니케이션 캠페인 (C11) ──────────────────────
+// 대회 생애주기 안내(전날/당일 리마인더·감사·설문)를 참가자에게 팬아웃한다.
+// 경기 호출과 동일하게 3채널(인앱 방송·지속 저장·외부 스텁)을 쓰되 matchId 는 없다.
+export async function sendCampaign({ type, tournamentId, title, body, recipients = [], data = {} }) {
+  const payload = {
+    type,
+    tournamentId,
+    matchId: null,
+    title,
+    body,
+    ...data,
+    createdAt: new Date().toISOString(),
+  }
+  const bc = await broadcast(payload)
+  const ps = await persist(payload, recipients)   // 공지함에 남으려면 지속 저장이 핵심
+  const ex = dispatchExternal(payload, recipients) // 실발송은 human-gated 스텁
+  return { payload, broadcast: bc, persist: ps, external: ex }
+}
+
 // ── 수신자 헬퍼: 내 대회들의 알림 채널 구독 ────────────────────────────
-// tournamentIds 각각에 대해 broadcast 를 듣고, 모든 NOTIFY 이벤트를 handler 로 넘긴다.
+// tournamentIds 각각에 대해 broadcast 를 듣고, 모든 NOTIFY·CAMPAIGN 이벤트를 handler 로 넘긴다.
 // 반환값은 정리 함수(unsubscribe).
 export function subscribeNotifications(tournamentIds, handler) {
   const ids = [...new Set((tournamentIds ?? []).filter(Boolean))]
+  const events = [...Object.values(NOTIFY), ...Object.values(CAMPAIGN)]
   const chans = ids.map(tid => {
     const ch = supabase.channel(notifyChannel(tid))
-    Object.values(NOTIFY).forEach(evt => {
+    events.forEach(evt => {
       ch.on('broadcast', { event: evt }, ({ payload }) => {
         try { handler(payload) } catch { /* 수신 콜백 오류는 구독을 죽이지 않는다 */ }
       })
@@ -198,6 +231,31 @@ export function subscribeNotifications(tournamentIds, handler) {
   })
   return () => chans.forEach(c => supabase.removeChannel(c))
 }
+
+// ── 공지함(inbox): 내가 받은 지속형 안내·공지 최근 목록 ─────────────────
+// 경기 호출/사전알림 같은 전송성 알림은 배너로 처리하므로 제외하고,
+// 캠페인·결과·일정변경 같은 "남겨두고 볼" 공지만 모은다. 테이블 없으면 빈 배열.
+export async function fetchNotices(recipientId, { withinDays = 45, limit = 30 } = {}) {
+  if (!recipientId) return []
+  try {
+    const since = new Date(Date.now() - withinDays * 86400000).toISOString()
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('recipient_id', recipientId)
+      .in('type', NOTICE_TYPES)
+      .gte('created_at', since)
+      .order('created_at', { ascending: false })
+      .limit(limit)
+    if (error) throw error
+    return data ?? []
+  } catch {
+    return [] // 013 미적용 시 조용히 degrade
+  }
+}
+
+// 공지 읽음 처리 — markCallRead 와 동일한 갱신(테이블 없으면 no-op).
+export const markNoticeRead = markCallRead
 
 // ── 미확인 호출 복구: 방송을 놓친 선수용(예: 앱을 닫았다 다시 열었을 때) ──
 // notifications 테이블이 있으면 최근 미읽음 호출을 반환, 없으면 빈 배열로 degrade.

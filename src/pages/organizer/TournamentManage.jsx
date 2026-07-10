@@ -5,8 +5,14 @@ import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
 import { planTournamentState } from '../../lib/stateMachine'
 import {
+  planCampaigns, pendingCampaigns, loadSentCampaigns, markCampaignSent,
+  fetchCampaignRecipients,
+} from '../../lib/campaign'
+import { sendCampaign } from '../../lib/notify'
+import {
   Users, GitBranch, Zap, Monitor, ChevronRight, Trophy,
   Share2, Copy, Check, Printer, ExternalLink, Sparkles, AlertTriangle,
+  Megaphone, Send,
 } from 'lucide-react'
 
 // ═══════════════════════════════════════════════════════════════
@@ -266,6 +272,11 @@ export default function TournamentManage() {
   })
   const autoAppliedRef = useRef(null)  // 같은 전환 중복 적용 방지
 
+  // 사후 커뮤니케이션(C11) — 보낸 캠페인 기억, 발송 중 상태, 자동발송 중복차단
+  const [sentCampaigns, setSentCampaigns] = useState(() => loadSentCampaigns(id))
+  const [sendingCampaign, setSendingCampaign] = useState(null)
+  const autoSentRef = useRef(new Set())
+
   const liveUrl = `${window.location.origin}/live/${id}`
 
   useEffect(() => {
@@ -342,6 +353,49 @@ export default function TournamentManage() {
     updateStatus(plan.recommended)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoState, plan.auto, plan.changed, plan.current, plan.recommended])
+
+  // 발송할 캠페인 목록(상태·날짜 기준) + 보냄 여부
+  const campaigns = useMemo(
+    () => planCampaigns(tournament, { now: new Date(now), sent: sentCampaigns }),
+    [tournament, now, sentCampaigns],
+  )
+
+  // 캠페인 1건 발송 — 참가 확정 선수에게 3채널 팬아웃(인앱 도달 + 지속 저장).
+  async function runCampaign(c) {
+    if (!tournament || sendingCampaign) return false
+    setSendingCampaign(c.type)
+    try {
+      const recipients = await fetchCampaignRecipients(
+        supabase,
+        categories.map(cat => cat.id),
+      )
+      await sendCampaign({
+        type: c.type,
+        tournamentId: id,
+        title: c.title,
+        body: c.body,
+        recipients,
+      })
+      const next = markCampaignSent(id, c.type)
+      setSentCampaigns(new Set(next))
+      return true
+    } catch {
+      return false
+    } finally {
+      setSendingCampaign(null)
+    }
+  }
+
+  // 무인 자동 진행 ON → 때가 된(아직 안 보낸) 캠페인을 스스로 1회 발송.
+  useEffect(() => {
+    if (!autoState || !tournament) return
+    const due = pendingCampaigns(tournament, { now: new Date(now), sent: sentCampaigns })
+    const target = due.find(c => !autoSentRef.current.has(c.type))
+    if (!target) return
+    autoSentRef.current.add(target.type)
+    runCampaign(target)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoState, tournament, now, sentCampaigns])
 
   async function copyLiveUrl() {
     try {
@@ -527,6 +581,59 @@ export default function TournamentManage() {
                 <span>{plan.blockReason}</span>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 대회 안내·공지 자동 발송 (C11 사후 커뮤니케이션) */}
+      {campaigns.length > 0 && (
+        <div className="px-4 pt-4">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+            <div className="flex items-start gap-2">
+              <Megaphone size={18} className="text-[#003478] mt-0.5 shrink-0" />
+              <div>
+                <p className="font-bold text-sm">대회 안내·공지</p>
+                <p className="text-xs text-gray-400 leading-relaxed mt-0.5">
+                  때가 되면 참가자에게 보낼 안내예요. <b>무인 자동 진행</b>이 켜져 있으면
+                  앱이 알아서 보내고, 꺼져 있으면 아래에서 직접 보낼 수 있어요.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-3 space-y-2">
+              {campaigns.map(c => (
+                <div
+                  key={c.key}
+                  className={`rounded-xl border px-3 py-2.5 ${c.sent ? 'border-gray-100 bg-gray-50' : 'border-blue-100 bg-blue-50/50'}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-bold text-sm truncate">{c.title}</p>
+                      <span className="text-[11px] font-semibold text-gray-400">{c.label}</span>
+                    </div>
+                    {c.sent ? (
+                      <span className="shrink-0 flex items-center gap-1 text-xs font-bold text-emerald-600">
+                        <Check size={13} /> 보냄
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => runCampaign(c)}
+                        disabled={!!sendingCampaign}
+                        className="shrink-0 flex items-center gap-1 text-xs font-bold text-white
+                                   bg-[#003478] px-3 py-1.5 rounded-lg active:scale-95 disabled:opacity-50"
+                      >
+                        <Send size={12} /> {sendingCampaign === c.type ? '보내는 중…' : '지금 보내기'}
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-gray-500 leading-relaxed mt-1.5">{c.body}</p>
+                </div>
+              ))}
+            </div>
+
+            <p className="text-[11px] text-gray-300 mt-3 leading-relaxed">
+              문자·알림톡 실발송은 준비 중이라, 지금은 앱 안 공지함으로 도착해요.
+            </p>
           </div>
         </div>
       )}

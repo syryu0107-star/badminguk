@@ -1,11 +1,11 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
-import { subscribeNotifications, fetchRecentCalls, markCallRead } from '../../lib/notify'
+import { subscribeNotifications, fetchRecentCalls, markCallRead, fetchNotices, markNoticeRead, NOTICE_TYPES } from '../../lib/notify'
 import { getCheckinWindow, assessSelfCheckin, selfCheckin, fetchMyCheckins } from '../../lib/checkin'
 import BottomNav from '../../components/BottomNav'
 import MatchCard from '../../components/MatchCard'
 import Spinner from '../../components/Spinner'
-import { CalendarDays, Mail, Check, X, Clock, Megaphone, AlertTriangle, UserCheck, ShieldCheck, MapPin } from 'lucide-react'
+import { CalendarDays, Mail, Check, X, Clock, Megaphone, AlertTriangle, UserCheck, ShieldCheck, MapPin, Bell } from 'lucide-react'
 
 // ── 다음 경기 하이라이트용 상수·헬퍼 ────────────────────────────
 // 이미 끝난 경기 상태 (다음 경기 후보에서 제외)
@@ -235,6 +235,7 @@ export default function MyMatches() {
   const [call, setCall]         = useState(null) // 수신한 경기 호출 { court, sport, matchId, notificationId }
   const [soon, setSoon]         = useState(null) // 사전 알림 { court, sport, aheadCount }
   const [warn, setWarn]         = useState(null) // 미입장 부전승 경고 { court, sport, secondsLeft }
+  const [notices, setNotices]   = useState([])   // 공지함: 받은 대회 안내·공지 (C11)
   const myEntryIds     = useRef(new Set())        // 내가 속한 엔트리 id (호출 대상 판정용)
   const myTournamentIds = useRef([])              // 내가 참가한 대회 id (구독 대상)
 
@@ -276,6 +277,9 @@ export default function MyMatches() {
         .filter(Boolean),
     )]
     setCheckins(await fetchMyCheckins(supabase, tIds, user.id))
+
+    // ── 공지함: 받은 대회 안내·공지 (C11) ────────────────────────────
+    setNotices(await fetchNotices(user.id))
 
     // ── 호출 수신용: 내 엔트리·대회 id 집합 ───────────────────────
     myEntryIds.current = new Set((es ?? []).map(e => e.id))
@@ -365,6 +369,24 @@ export default function MyMatches() {
     }
 
     const unsub = subscribeNotifications(myTournamentIds.current, payload => {
+      // 대회 안내·공지(C11) — 내 대회면 수신(엔트리 대상 없이 대회 전체 발송).
+      if (NOTICE_TYPES.includes(payload?.type)) {
+        setNotices(prev => {
+          if (prev.some(n => n.payload?.createdAt === payload.createdAt && n.type === payload.type)) return prev
+          const row = {
+            id: `live-${payload.type}-${payload.createdAt}`,
+            type: payload.type,
+            title: payload.title,
+            body: payload.body,
+            created_at: payload.createdAt,
+            read_at: null,
+            payload,
+          }
+          return [row, ...prev]
+        })
+        try { if (navigator.vibrate) navigator.vibrate(80) } catch { /* noop */ }
+        return
+      }
       const mine = (payload?.entryIds ?? []).some(eid => myEntryIds.current.has(eid))
       if (!mine) return
       // 사전 알림(곧 호출) — 가벼운 준비 안내. 실제 호출이 오면 아래에서 덮어씀.
@@ -394,6 +416,15 @@ export default function MyMatches() {
     if (call?.notificationId) markCallRead(call.notificationId)
     setCall(null)
   }
+
+  // 공지 읽음 처리 (라이브 수신 임시행은 서버 갱신 없이 상태만)
+  function readNotice(n) {
+    if (n.read_at) return
+    if (typeof n.id === 'string' && !n.id.startsWith('live-')) markNoticeRead(n.id)
+    setNotices(prev => prev.map(x => (x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x)))
+  }
+
+  const unreadNotices = notices.filter(n => !n.read_at).length
 
   // ── 파트너 초대 수락 / 거절 ─────────────────────────────────────
   async function respondInvite(entryId, accept) {
@@ -583,6 +614,37 @@ export default function MyMatches() {
                       checkingIn={checkingIn}
                       onCheckin={doSelfCheckin}
                     />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* ── 공지 · 안내 (C11 사후 커뮤니케이션) ──────────────── */}
+            {notices.length > 0 && (
+              <section>
+                <h2 className="font-bold text-sm mb-2 flex items-center gap-1.5">
+                  <Bell size={16} className="text-[#003478]" /> 공지 · 안내
+                  {unreadNotices > 0 && (
+                    <span className="bg-[#C60C30] text-white text-[11px] font-bold rounded-full px-1.5 py-0.5 leading-none">
+                      {unreadNotices}
+                    </span>
+                  )}
+                </h2>
+                <div className="space-y-2">
+                  {notices.map(n => (
+                    <button
+                      key={n.id}
+                      onClick={() => readNotice(n)}
+                      className={`w-full text-left rounded-2xl border p-3.5 transition active:scale-[.99]
+                        ${n.read_at ? 'bg-white border-gray-100' : 'bg-blue-50/60 border-blue-100'}`}
+                    >
+                      <div className="flex items-center gap-2">
+                        {!n.read_at && <span className="w-1.5 h-1.5 rounded-full bg-[#C60C30] shrink-0" />}
+                        <p className="font-bold text-sm flex-1 min-w-0 truncate">{n.title}</p>
+                        <span className="text-[10px] text-gray-400 shrink-0">{n.created_at ? fmtClock(n.created_at) : ''}</span>
+                      </div>
+                      <p className="text-xs text-gray-500 leading-relaxed mt-1">{n.body}</p>
+                    </button>
                   ))}
                 </div>
               </section>

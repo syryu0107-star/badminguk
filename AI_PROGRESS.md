@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-10 — [C11] 사후 커뮤니케이션 — 리마인더·감사·설문 자동 발송 + 선수 공지함 (북극성 체인의 마지막 고리 "공지")
+
+- **C11 사후 커뮤니케이션 — 대회 생애주기 안내 자동화 (필수/중, 주최자·선수 완주 공백, C11 ❌→⚠️)**
+  - 파일: `src/lib/campaign.js`(신규), `src/lib/notify.js`, `src/pages/organizer/TournamentManage.jsx`, `src/pages/player/MyMatches.jsx`
+  - 요약: 북극성 체인(접수→…→정산→급수반영→**공지**)의 마지막 "공지"가 앱 어디에도 코드가 없어, 주최자가 단톡방에 손으로 쓰던 "내일 대회예요 / 오늘 체크인하세요 / 참여 감사합니다 / 설문 부탁드려요"가 앱 밖 전면 수작업으로 남아 있었다. 스키마 변경 없이(기존 013 notifications 재사용) 대회 상태·날짜만 보고 앱이 스스로 안내를 발송하게 했다. 순수 엔진 `campaign.js` 신설 — `dayDiff(dateStr, now)`(대회 날짜−오늘의 일수차, 타임존 밀림 방지 위해 날짜 앞 10자만 로컬 자정 기준 파싱), `localDateStr`, `planCampaigns(tournament, {now, sent})`(상태×날짜로 발송 후보 판정: open/closed+D-1→전날 리마인더, closed/in_progress+D-0→당일 안내, completed→감사+설문 순, 각 캠페인 문구에 제목·날짜·장소 삽입, sent 집합이면 보냄 표시), `pendingCampaigns`(미발송만), 발신기기 localStorage 재발송 차단(`loadSentCampaigns`/`markCampaignSent` — RLS상 주최자는 수신자 알림을 조회할 수 없어 서버 조회로 판정 불가하므로 기기 기록으로 idempotency), `fetchCampaignRecipients`(카테고리들의 approved 엔트리 player1/2 프로필 id 중복제거). notify.js에 `CAMPAIGN` 타입 4종·`NOTICE_TYPES`·`sendCampaign`(경기 호출과 동일한 broadcast+persist+외부 스텁 3채널 팬아웃, matchId 없음)·`fetchNotices`(공지함용 지속형 알림 최근 목록, 013 미적용 시 빈배열 degrade)·`markNoticeRead` 추가하고, `subscribeNotifications`가 NOTIFY뿐 아니라 CAMPAIGN 이벤트도 수신하게 확장. 주최자 TournamentManage에 "대회 안내·공지" 패널 — 무인 자동 진행 ON이면 useEffect가 때가 된(아직 안 보낸) 캠페인을 스스로 1회 발송(autoSentRef+localStorage 중복 차단), OFF여도 캠페인별 "지금 보내기"(발송 중 표시)/"보냄✓"을 제공. 종료 후에도 보이도록 status action 게이팅 밖에 배치. 선수 MyMatches에 "공지·안내" 공지함 섹션 — 로드 시 fetchNotices로 받은 안내를 모으고, 미읽음 빨간 배지·탭 시 읽음 처리(markNoticeRead, 라이브 임시행은 상태만), 구독 중 캠페인 방송이 오면 즉시 상단에 삽입(createdAt+type 중복 방지, 약한 진동). 실발송(문자·알림톡)은 human-gated 스텁 유지 — 지금은 인앱 공지함으로 도달해 데모 가능. 엔진 17개 시나리오(날짜차 파싱·상태별 판정·sent 필터·문구 삽입) 자체 검증 통과, `npx vite build` green.
+
 ## 2026-07-10 — [C10] 디지털 상장 자동 생성 (선수 완주의 마지막 단계 "상장")
 
 - **C10 결과·시상·정산 — 디지털 상장 (필수/중, 선수·주최자 완주 공백)**
