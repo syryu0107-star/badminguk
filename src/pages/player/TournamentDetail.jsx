@@ -9,6 +9,7 @@ import { getGradeFromMMR } from '../../lib/sandbag'
 import TopBar from '../../components/TopBar'
 import GradeChip from '../../components/GradeChip'
 import Spinner from '../../components/Spinner'
+import HelpChat from '../../components/HelpChat'
 import { MapPin, Calendar, Users, ChevronDown, ChevronUp, Shield, Lock, Search, X } from 'lucide-react'
 
 // 복식 종목(파트너 필수) — 그 외(남단/여단)는 단식(혼자 신청)
@@ -499,6 +500,12 @@ export default function TournamentDetail() {
           </div>
         </div>
       </div>
+
+      {/* 문의 챗봇 (규정 FAQ + 이 대회 데이터 개인화) */}
+      <HelpChat
+        title={`${tournament.title} 도우미`}
+        context={{ tournament, categories, myEntries }}
+      />
     </div>
   )
 }
