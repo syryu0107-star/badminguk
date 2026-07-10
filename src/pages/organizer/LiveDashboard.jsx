@@ -7,9 +7,10 @@ import { completeMatch, finalizeTournament, scoresToPairs } from '../../lib/adva
 import { callMatch, callMatchSoon, callWalkoverWarn } from '../../lib/notify'
 import { planAutoAdvance, planNoShow, analyzeDelay } from '../../lib/orchestrator'
 import { summarizeCheckins } from '../../lib/checkin'
+import { buildCertificates, printCertificates } from '../../lib/certificate'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
-import { Clock, Shield, UserCheck, Flag, CheckCircle, Gavel, Trophy, ListOrdered, Megaphone, Zap, Timer, AlertTriangle, TrendingUp } from 'lucide-react'
+import { Clock, Shield, UserCheck, Flag, CheckCircle, Gavel, Trophy, ListOrdered, Megaphone, Zap, Timer, AlertTriangle, TrendingUp, Award } from 'lucide-react'
 
 // 초 → "m:ss" 카운트다운 표기
 function fmtCountdown(sec) {
@@ -1033,6 +1034,28 @@ export default function LiveDashboard() {
                         </div>
                       ))}
                   </div>
+                  {isCompleted && standings.rankedEntries.some(e => e.rank <= (activeCatObj?.prize_spots ?? 3)) && (
+                    <button
+                      onClick={() => {
+                        const prizeSpots = activeCatObj?.prize_spots ?? 3
+                        const winners = standings.rankedEntries
+                          .filter(e => e.rank <= prizeSpots)
+                          .map(e => ({ recipient: e.label, rank: e.rank }))
+                        const ok = printCertificates(
+                          buildCertificates({
+                            tournament, category: activeCatObj, winners, prizeSpots,
+                            organizerName: tournament?.organizer?.name || '배드민국',
+                          }),
+                          { docTitle: `${activeCatObj?.sport_type ?? ''} 상장` },
+                        )
+                        if (!ok) alert('인쇄할 상장이 없거나 팝업이 차단되어 있어요. 팝업 허용 후 다시 눌러주세요.')
+                      }}
+                      className="w-full mt-3 flex items-center justify-center gap-1.5 py-2.5 rounded-xl
+                                 bg-[#003478] text-white text-sm font-bold active:scale-[.98] transition"
+                    >
+                      <Award size={15} /> 시상식용 상장 일괄 인쇄
+                    </button>
+                  )}
                 </div>
               )}
 

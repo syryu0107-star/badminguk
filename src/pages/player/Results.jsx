@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { prizeLabel } from '../../lib/tournament'
+import { certRankInfo, buildCertificate, buildCertificates, printCertificates } from '../../lib/certificate'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
-import { Trophy, Hourglass, Users, GitBranch, Medal } from 'lucide-react'
+import { Trophy, Hourglass, Users, GitBranch, Medal, Award } from 'lucide-react'
 
 // ─── 헬퍼 ────────────────────────────────────────────────────────
 
@@ -126,6 +127,31 @@ export default function Results() {
     if (rm.length > 0) koRounds.push({ round: r, matches: rm })
   }
 
+  // ── 디지털 상장 (C10) ─────────────────────────────────────────
+  const organizerName = tournament.organizer?.name || '배드민국'
+  const myCert = isCompleted && myEntry ? certRankInfo(myEntry.final_rank, prizeSpots) : null
+  const podiumWinners = isCompleted
+    ? catEntries
+        .filter(e => certRankInfo(e.final_rank, prizeSpots))
+        .map(e => ({ recipient: teamLabel(e), rank: e.final_rank }))
+    : []
+
+  function printMyCertificate() {
+    const ok = printCertificates(
+      buildCertificate({ tournament, category: cat, recipient: teamLabel(myEntry), rank: myEntry.final_rank, prizeSpots, organizerName }),
+      { docTitle: `상장 · ${teamLabel(myEntry)}` },
+    )
+    if (!ok) alert('팝업이 차단되어 있어요. 팝업 허용 후 다시 눌러주세요.')
+  }
+
+  function printPodiumCertificates() {
+    const ok = printCertificates(
+      buildCertificates({ tournament, category: cat, winners: podiumWinners, prizeSpots, organizerName }),
+      { docTitle: `${cat?.sport_type ?? ''} 상장` },
+    )
+    if (!ok) alert('인쇄할 상장이 없거나 팝업이 차단되어 있어요. 팝업 허용 후 다시 눌러주세요.')
+  }
+
   function poolRecord(pool, entryId) {
     let w = 0, l = 0
     for (const m of matches) {
@@ -196,6 +222,15 @@ export default function Results() {
                     : '집계 중'}
                 </p>
               </div>
+              {myCert && (
+                <button
+                  onClick={printMyCertificate}
+                  className="w-full mt-3 flex items-center justify-center gap-1.5 py-2.5 rounded-xl
+                             bg-white/90 text-[#003478] text-sm font-bold active:scale-[.98] transition"
+                >
+                  <Award size={15} /> 내 상장 받기 · 인쇄
+                </button>
+              )}
             </div>
           )}
 
@@ -226,6 +261,15 @@ export default function Results() {
                     teams={third} mineFn={isMine}
                   />
                 </div>
+                {podiumWinners.length > 0 && (
+                  <button
+                    onClick={printPodiumCertificates}
+                    className="w-full mt-4 flex items-center justify-center gap-1.5 py-2.5 rounded-xl
+                               bg-[#003478] text-white text-sm font-bold active:scale-[.98] transition"
+                  >
+                    <Award size={15} /> 시상대 상장 모두 인쇄 ({podiumWinners.length}장)
+                  </button>
+                )}
               </div>
             ) : (
               <div className="bg-gray-50 rounded-2xl p-6 text-center">
