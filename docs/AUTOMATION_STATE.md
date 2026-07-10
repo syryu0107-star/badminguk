@@ -8,7 +8,7 @@
 | 주최자 | 66% | 무통장 입금 자동 매칭 ✅ (붙여넣기→퍼지매칭→입금확인→자동승인 연결) / PG 실결제·시상 확정(무인) 미연결 |
 | 선수   | 66% | 셀프 체크인·디지털 선수증 ✅, 참가비 입금 확인 자동화(계좌) ✅ / PG 카드결제 부재 |
 | 심판   | 70% | 무심판 코트 셀프스코어 부재 |
-| 운영   | 68% | 빈코트 자동투입·자동호출·사전알림·예상시각·노쇼 타이머(미응답 경고 자동발송+카운트다운+부전승 원터치) ✅ / 지연재조정(rescheduleAfterForfeit)·자동 부전승 확정 미연결 |
+| 운영   | 74% | 빈코트 자동투입·자동호출·사전알림·예상시각(관측 페이스 보정)·노쇼 타이머·지연 예측(현재 페이스면 N분 지연+예상 종료+재배치안) ✅ / 자동 부전승 확정·빈코트 실제 재배치 실행 미연결 |
 
 ## 클러스터 상태 (C1~C12)
 | C | 클러스터 | 상태 | 비고(코드 근거) |
@@ -18,7 +18,7 @@
 | C3 | 입금·결제·환불 | ⚠️ | `payment.js` 신설 — 무통장 입금 내역 붙여넣기→신청자명 퍼지매칭(Levenshtein+정규화)+금액 대조→`payment_status='confirmed'` 자동 처리. EntryManagement "입금 자동 매칭" 패널(자동확인/확인권장/미매칭 분류, 1탭 확인). 입금 확인이 auto-approval 입금대기 버킷을 비워 무인 승인까지 연결. PG 실결제(토스)·가상계좌·환불규정 코드화는 미구현·human-gated |
 | C4 | 셀프 체크인 | ✅ | `checkin.js` 엔진 신설 — 선수 MyMatches "디지털 선수증" 카드에서 대회 당일/진행중 원터치 셀프 체크인(verified_method='self'). 실명인증 선수는 무인 완료, 미인증은 "본인확인 권장" 예외로만 노출. LiveDashboard 체크인 패널 실시간 반영(tournament_checkins 구독)+셀프/본인확인권장/신고 요약. 운영자 수동 체크인 병존. QR/PIN 키오스크·대리스코어링만 잔여 |
 | C5 | AI 대진 최적화 | ⚠️ | seededShuffle 단일 셔플 + MMR 시드만 |
-| C6 | 실시간 진행·지연 재조정 | ⚠️ | 빈코트 감시→다음경기 자동투입(orchestrator.planAutoAdvance, LiveDashboard 무인 진행 스위치) ✅. rescheduleAfterForfeit·누적지연 시뮬은 아직 미연결 |
+| C6 | 실시간 진행·지연 재조정 | ⚠️ | 빈코트 감시→다음경기 자동투입(orchestrator.planAutoAdvance) ✅. `analyzeDelay` 신설 — 진행 중 경기 경과로 관측 페이스 추정→예상 호출/종료 시각 보정, 계획(scheduled_time) 대비 지연 예측("현재 페이스면 약 N분 지연·예상 종료 HH:MM")+재배치안(빈코트 활용·페이스 안내)을 LiveDashboard 배너로 표출 ✅. 실제 재배치 실행(빈코트로 대기경기 이동)·rescheduleAfterForfeit(사전스케줄용, 라이브 미적용)은 아직 미연결 |
 | C7 | 노쇼·기권·실격 자동처리 | ⚠️ | 노쇼 타이머 신설(orchestrator.planNoShow): 호출 후 미응답 경기를 waiting/warned/overdue 3단계로 판정 → 무인 진행 시 WALKOVER_WARN 자동 발송(선수 긴급 배너)+대시보드 카운트다운, overdue는 "노쇼 확인 대기" 패널 원터치 부전승(completeMatch walkover). "누가 안 왔는지"는 현장 예외라 사람 1탭 확인. 실격 출전권 무효·자동 부전승 확정은 미구현 |
 | C8 | 요강·설정 마법사 | ⚠️ | 설정 폼만, 역산/문서생성 없음 |
 | C9 | 문의 챗봇 | ❌ | 없음 |
@@ -27,6 +27,18 @@
 | C12 | 대회 탐색·파트너·전적 | ⚠️ | 파트너 초대·랭킹 있음, 추천/매칭 없음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-10 · C6 · `src/lib/orchestrator.js`(analyzeDelay 추가)·`src/pages/organizer/LiveDashboard.jsx`
+  · 진행 페이스·지연 예측(AI 재조정 레이어) — 운영 완주를 막던 "계획대로 되고 있는지·언제 끝날지"를
+    사람이 눈대중하던 공백을 메움. 지금껏 예상 호출 시각은 고정 30분 가정이라 경기가 밀리면 전부 어긋났다.
+    순수 함수 `analyzeDelay(matches,{matchMinutes,now})` 신설 — (1) 진행 중 경기의 경과 시간으로 관측 페이스
+    `observedMin` 추정(계획보다 오래 걸리면 보수적으로 반영), (2) 예정 시각 지났는데 미시작인 경기의
+    최대 밀림 `scheduleDriftMin`, (3) 계획 종료 `plannedFinish`(최늦 scheduled_time+1경기), (4) 코트별 큐를
+    관측 페이스로 굴린 실제 예상 종료 `projectedFinish`, (5) 지연 `delayMin`=projected−planned(≥0),
+    (6) 코트 부하·유휴 코트 기반 `suggestions`(재배치안). LiveDashboard가 관측 페이스를 planAutoAdvance에
+    되먹여 예상 호출 시각을 실시간 보정하고, "진행 페이스·지연 예측" 배너로 "현재 페이스면 약 N분 지연 ·
+    예상 종료 HH:MM(계획 HH:MM) · 경기당 M분" + 재배치안을 표출(온트랙이면 초록 "계획대로"). 실시간 틱을
+    진행 중 경기가 있으면도 돌게 확장(10초). 스키마 변경 없음(기존 actual_start·scheduled_time 사용). 엔진
+    5개 시나리오 자체 검증 통과, `npx vite build` green. (자동화율 운영 68%→74%)
 - 2026-07-10 · C3 · `src/lib/payment.js`(신규)·`src/pages/organizer/EntryManagement.jsx`
   · 무통장 입금 자동 매칭(C3 ❌→⚠️) — 주최자 완주를 막던 결정적 공백을 메움. payment_status 컬럼은
     존재하는데 'confirmed'로 바꾸는 코드 경로가 앱 어디에도 없어, 참가비 있는 신청은 auto-approval의

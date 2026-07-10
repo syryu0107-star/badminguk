@@ -133,3 +133,92 @@ export function planNoShow(matches, {
   }
   return { toWarn, overdue, status }
 }
+
+// 진행 페이스·지연 재조정 분석 (C6) — 계획 대비 실시간 지연을 예측하고 재배치안을 제시.
+// ──────────────────────────────────────────────────────────────────────
+// scheduler 가 미리 깔아둔 scheduled_time(계획)과 실시간 상태(진행 중 경과·시작 대기
+// 밀림)를 비교해 "현재 페이스면 몇 분 지연될지" 를 예측한다. 순수 함수 — DB·발송 없음.
+//   - observedMin      : 관측 경기 소요(분). 진행 중 경기가 계획보다 오래 걸리면 페이스를
+//                        보수적으로 늦춰 예상 호출/종료 시각에 반영(estimates 정확도 향상).
+//   - scheduleDriftMin : 시작했어야 하는데 아직 예정인 경기의 최대 지연(계획 밀림).
+//   - plannedFinish    : 계획상 마지막 경기 종료(가장 늦은 scheduled_time + 1경기).
+//   - projectedFinish  : 관측 페이스로 코트 큐를 굴린 실제 예상 종료.
+//   - delayMin         : projectedFinish − plannedFinish (0 이상). 대회 종료 지연 예측.
+//   - suggestions      : 재배치안(빈 코트 활용·페이스 안내) 한국어 문구.
+export function analyzeDelay(matches, { matchMinutes = 30, now = Date.now() } = {}) {
+  const list = matches ?? []
+  const notDone = list.filter(m => !DONE_STATUSES.includes(m.status))
+  const running = list.filter(m => m.status === 'in_progress' && m.actual_start)
+  const step = Math.max(1, matchMinutes) * 60000
+
+  // 1) 관측 페이스 — 진행 중 경기의 경과 시간(최소한 이만큼은 걸렸음)을 계획과 blend.
+  let observedMin = matchMinutes
+  if (running.length) {
+    const elapsed = running.map(m => Math.max(0, (now - new Date(m.actual_start).getTime()) / 60000))
+    const avg = elapsed.reduce((a, b) => a + b, 0) / elapsed.length
+    observedMin = Math.max(matchMinutes, Math.round(avg))
+  }
+  const obsStep = Math.max(1, observedMin) * 60000
+
+  // 2) 시작 대기 밀림 — 예정 시각이 지났는데 아직 시작 안 한 경기.
+  let scheduleDriftMin = 0
+  const overdueStarts = notDone.filter(m =>
+    m.status === 'scheduled' && m.scheduled_time && new Date(m.scheduled_time).getTime() < now)
+  overdueStarts.forEach(m => {
+    const d = (now - new Date(m.scheduled_time).getTime()) / 60000
+    if (d > scheduleDriftMin) scheduleDriftMin = d
+  })
+  scheduleDriftMin = Math.round(scheduleDriftMin)
+
+  // 3) 계획된 종료 — 남은 경기 중 가장 늦은 예정 시각 + 1경기.
+  let plannedFinish = null
+  notDone.forEach(m => {
+    if (!m.scheduled_time) return
+    const end = new Date(m.scheduled_time).getTime() + step
+    if (plannedFinish == null || end > plannedFinish) plannedFinish = end
+  })
+
+  // 4) 예상 종료 — 코트별 큐를 관측 페이스로 순차 진행시켜 마지막 경기 종료를 추정.
+  const queues = buildCourtQueues(list)
+  let projectedFinish = null
+  const bump = end => { if (projectedFinish == null || end > projectedFinish) projectedFinish = end }
+  for (const q of Object.values(queues)) {
+    let cursor = now
+    if (q.running) {
+      const start = q.running.actual_start ? new Date(q.running.actual_start).getTime() : now
+      cursor = Math.max(now, start + obsStep)  // 진행 중 경기 종료 예상
+    }
+    q.queue.forEach(() => { cursor += obsStep; bump(cursor) })
+    if (q.running && !q.queue.length) bump(cursor)
+  }
+
+  const delayMin = (plannedFinish != null && projectedFinish != null)
+    ? Math.max(0, Math.round((projectedFinish - plannedFinish) / 60000))
+    : 0
+
+  // 5) 코트 부하 + 재배치안.
+  const courtLoad = Object.values(queues)
+    .map(q => ({ court: q.court, running: !!q.running, queueLen: q.queue.length }))
+    .sort((a, b) => a.court - b.court)
+  const idleCourts = courtLoad.filter(c => !c.running && c.queueLen === 0).map(c => c.court)
+  const busiestQueue = courtLoad.reduce((mx, c) => Math.max(mx, c.queueLen), 0)
+
+  const suggestions = []
+  if (observedMin > matchMinutes + 2) {
+    suggestions.push(`경기당 평균 ${observedMin}분 — 계획(${matchMinutes}분)보다 ${observedMin - matchMinutes}분씩 길어요`)
+  }
+  if (idleCourts.length && busiestQueue >= 2) {
+    suggestions.push(`${idleCourts.join('·')}번 코트가 비어 있어요 — 대기 경기를 나눠 배정하면 지연을 줄일 수 있어요`)
+  }
+  if (scheduleDriftMin >= 10 && !running.length && notDone.length) {
+    suggestions.push(`시작 대기 경기가 ${scheduleDriftMin}분 밀렸어요 — 다음 경기를 호출해 진행을 이어가세요`)
+  }
+
+  return {
+    observedMin, scheduleDriftMin, plannedFinish, projectedFinish, delayMin,
+    remaining: notDone.length, runningCount: running.length,
+    overdueStartCount: overdueStarts.length,
+    courtLoad, idleCourts, busiestQueue, suggestions,
+    onTrack: delayMin < 5 && scheduleDriftMin < 10,
+  }
+}

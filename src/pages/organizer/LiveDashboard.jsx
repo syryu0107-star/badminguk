@@ -1,15 +1,15 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { resolveMatchMMR, CERT_LEVELS } from '../../lib/mmr'
 import { calculatePoolStandings, prizeLabel } from '../../lib/tournament'
 import { completeMatch, finalizeTournament, scoresToPairs } from '../../lib/advance'
 import { callMatch, callMatchSoon, callWalkoverWarn } from '../../lib/notify'
-import { planAutoAdvance, planNoShow } from '../../lib/orchestrator'
+import { planAutoAdvance, planNoShow, analyzeDelay } from '../../lib/orchestrator'
 import { summarizeCheckins } from '../../lib/checkin'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
-import { Clock, Shield, UserCheck, Flag, CheckCircle, Gavel, Trophy, ListOrdered, Megaphone, Zap, Timer, AlertTriangle } from 'lucide-react'
+import { Clock, Shield, UserCheck, Flag, CheckCircle, Gavel, Trophy, ListOrdered, Megaphone, Zap, Timer, AlertTriangle, TrendingUp } from 'lucide-react'
 
 // 초 → "m:ss" 카운트다운 표기
 function fmtCountdown(sec) {
@@ -132,11 +132,13 @@ export default function LiveDashboard() {
   // ── 예상 호출 시각은 항상 갱신(표시용). 자동 진행이 켜져 있으면 실제 호출까지. ──
   useEffect(() => {
     const mm = categories.find(c => c.id === activeCat)?.match_duration_min ?? 30
+    // 관측 페이스(진행 중 경기가 계획보다 오래 걸리면 반영)로 예상 호출 시각을 보정.
+    const observed = analyzeDelay(matches, { matchMinutes: mm }).observedMin
     const localBusy = new Set(
       matches.filter(m => m.status === 'in_progress' && m.court_number != null).map(m => m.court_number)
     )
     const plan = planAutoAdvance(matches, {
-      busyCourts: localBusy, calledAt: calledIds, soonSentAt: soonSentRef.current, matchMinutes: mm,
+      busyCourts: localBusy, calledAt: calledIds, soonSentAt: soonSentRef.current, matchMinutes: observed,
     })
     setEstimates(plan.estimates)
     if (autoRun) runOrchestrator(matches)
@@ -144,13 +146,14 @@ export default function LiveDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matches, autoRun, activeCat])
 
-  // ── 노쇼 타이머 틱: 호출됐지만 시작 안 된 경기의 카운트다운을 10초마다 갱신 ──
-  //   호출 이력(calledIds)이 있는 동안만 돈다(불필요한 리렌더 방지).
+  // ── 실시간 틱: 노쇼 카운트다운 + 지연 예측(진행 중 경기 경과)을 10초마다 갱신 ──
+  //   호출 이력이 있거나 진행 중 경기가 있을 때만 돈다(불필요한 리렌더 방지).
   useEffect(() => {
-    if (!Object.keys(calledIds).length) return
+    const hasLive = Object.keys(calledIds).length > 0 || matches.some(m => m.status === 'in_progress')
+    if (!hasLive) return
     const iv = setInterval(() => setNowTick(Date.now()), 10000)
     return () => clearInterval(iv)
-  }, [calledIds])
+  }, [calledIds, matches])
 
   // ── 노쇼 판정: 호출 후 미응답 경기를 단계별로 분류하고, 자동 진행 시 경고 발송 ──
   //   waiting/warned/overdue 3단계. 경고(WALKOVER_WARN)는 무인 진행이 켜졌을 때만
@@ -174,6 +177,12 @@ export default function LiveDashboard() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matches, calledIds, autoRun, nowTick])
+
+  // ── 진행 페이스·지연 예측 (C6) — 계획 대비 실시간 지연을 예측(nowTick 로 라이브 갱신) ──
+  const delay = useMemo(
+    () => analyzeDelay(matches, { matchMinutes: categories.find(c => c.id === activeCat)?.match_duration_min ?? 30, now: nowTick }),
+    [matches, categories, activeCat, nowTick]
+  )
 
   async function loadMatches() {
     const { data } = await supabase
@@ -681,6 +690,71 @@ export default function LiveDashboard() {
               )}
             </div>
           </div>
+
+          {/* ── 진행 페이스·지연 예측 (계획 대비 실시간 지연 재조정 안내) ──────── */}
+          {delay.remaining > 0 && (delay.runningCount > 0 || delay.projectedFinish != null || delay.overdueStartCount > 0) && (
+            <div className="px-4 pt-4">
+              <div className={`rounded-2xl border p-4 ${delay.onTrack
+                ? 'border-emerald-200 bg-emerald-50'
+                : delay.delayMin >= 20 ? 'border-[#C60C30] bg-red-50' : 'border-amber-300 bg-amber-50'}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <p className={`font-bold text-sm flex items-center gap-1.5 ${delay.onTrack
+                    ? 'text-emerald-700' : delay.delayMin >= 20 ? 'text-[#C60C30]' : 'text-amber-800'}`}>
+                    <TrendingUp size={16} /> 진행 페이스 · 지연 예측
+                  </p>
+                  <span className="text-[11px] font-semibold text-gray-500 tabular-nums">
+                    남은 경기 {delay.remaining} · 진행 중 {delay.runningCount}
+                  </span>
+                </div>
+
+                {delay.onTrack ? (
+                  <p className="text-sm font-bold text-emerald-800 mt-1.5">
+                    현재 페이스면 계획대로 진행 중이에요 👍
+                  </p>
+                ) : (
+                  <p className={`mt-1.5 ${delay.delayMin >= 20 ? 'text-[#C60C30]' : 'text-amber-800'}`}>
+                    <span className="text-lg font-black tabular-nums">약 {delay.delayMin}분 지연</span>
+                    <span className="text-sm font-bold"> 예상 (현재 페이스 기준)</span>
+                  </p>
+                )}
+
+                {/* 예상 종료 vs 계획 */}
+                {(delay.projectedFinish != null || delay.plannedFinish != null) && (
+                  <div className="mt-2 flex items-center gap-4 text-xs">
+                    {delay.projectedFinish != null && (
+                      <div>
+                        <span className="text-gray-400">예상 종료</span>{' '}
+                        <span className="font-black text-gray-800 tabular-nums">{fmt(delay.projectedFinish)}</span>
+                      </div>
+                    )}
+                    {delay.plannedFinish != null && (
+                      <div>
+                        <span className="text-gray-400">계획</span>{' '}
+                        <span className="font-semibold text-gray-500 tabular-nums">{fmt(delay.plannedFinish)}</span>
+                      </div>
+                    )}
+                    <div>
+                      <span className="text-gray-400">경기당</span>{' '}
+                      <span className={`font-bold tabular-nums ${delay.observedMin > (activeCatObj?.match_duration_min ?? 30) ? 'text-[#C60C30]' : 'text-gray-600'}`}>
+                        {delay.observedMin}분
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 재배치안 */}
+                {delay.suggestions.length > 0 && (
+                  <ul className="mt-2.5 pt-2.5 border-t border-black/5 space-y-1">
+                    {delay.suggestions.map((s, i) => (
+                      <li key={i} className="text-[11px] text-gray-600 flex gap-1.5">
+                        <span className="text-gray-400 shrink-0">·</span>{s}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* ── 노쇼 확인 대기 (호출 후 미응답 → 부전승 처리 필요) ─────────── */}
           {overdueMatches.length > 0 && (
