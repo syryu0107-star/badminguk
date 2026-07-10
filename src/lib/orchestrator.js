@@ -134,6 +134,76 @@ export function planNoShow(matches, {
   return { toWarn, overdue, status }
 }
 
+// 빈 코트 실제 재배치 (C6) — 유휴 코트로 과부하 코트의 대기 경기를 옮긴다.
+// ──────────────────────────────────────────────────────────────────────
+// planAutoAdvance 는 "각 코트가 자기 큐의 다음 경기를 호출"까지만 한다. 그래서
+// 한 코트에 경기가 몰려 밀리는데 옆 코트가 텅 비어 있어도 대기 경기가 그 빈 코트로
+// 넘어가지 못했다(analyzeDelay 는 그 상황을 '제안'만 하고 실행하지 않았다). 이 함수가
+// 그 마지막 한 칸 — "비어 있는 코트로 대기 경기를 실제로 옮길 계획"을 순수하게 만든다.
+// 실제 court_number UPDATE·발송·재조회는 호출부(LiveDashboard)가 담당한다(순수 함수 유지).
+//
+//   courtCount  : 대회 총 코트 수(1..N). null 이면 배정된 코트 번호만 사용.
+//   busyCourts  : 다른 종목이 진행 중이라 비어있지 않은 코트 번호 Set (재배치 금지).
+//   maxMoves    : 한 번에 옮길 최대 경기 수(과도한 흔들림 방지). null=제한 없음.
+//
+// 반환 { moves:[{ match, fromCourt, toCourt }], idleCourts, overloadedCourts }.
+//   - 유휴 코트 = 진행 중 경기 없음 + 대기 경기 없음 + 다른 종목 미사용.
+//   - 과부하 코트 = (진행 중 + 대기≥1) 또는 (대기≥2). 진행 중이면 큐 맨 앞부터,
+//     아니면 두 번째부터 옮긴다(빈 코트가 아니라 '과부하'라 맨 앞은 곧 이 코트에서 시작).
+//   - 옮길 경기의 팀이 지금 다른 코트에서 경기 중이면(중복 출전) 건너뛴다.
+//   - court_number 만 바꾸면 planAutoAdvance 가 그 코트의 맨 앞으로 인식해 자동 호출한다.
+export function planRebalance(matches, {
+  courtCount = null,
+  busyCourts = new Set(),
+  maxMoves = null,
+} = {}) {
+  const list = matches ?? []
+  const queues = buildCourtQueues(list)
+
+  // 지금 경기 중인 팀(엔트리) — 이 팀 경기를 옮기면 같은 시간 두 코트 = 중복 출전.
+  const playingEntries = new Set()
+  list.filter(m => m.status === 'in_progress').forEach(m => {
+    if (m.team1_entry_id) playingEntries.add(m.team1_entry_id)
+    if (m.team2_entry_id) playingEntries.add(m.team2_entry_id)
+  })
+
+  // 대상 코트 번호 집합 = court_count 범위(있으면) ∪ 실제 배정된 코트.
+  const courtSet = new Set()
+  if (courtCount) for (let c = 1; c <= courtCount; c++) courtSet.add(c)
+  list.forEach(m => { if (m.court_number != null) courtSet.add(m.court_number) })
+  const courts = [...courtSet].sort((a, b) => a - b)
+
+  // 유휴 코트: 진행 중 없음 + 대기 없음 + 다른 종목 미사용.
+  const idleCourts = courts.filter(c => {
+    if (busyCourts.has(c)) return false
+    const q = queues[c]
+    if (!q) return true // 아무 경기도 배정 안 된 코트 = 완전 유휴
+    return !q.running && q.queue.length === 0
+  })
+
+  // 과부하 코트: 대기가 쌓인 코트 (부하 큰 순).
+  const overloaded = Object.values(queues)
+    .filter(q => (q.running && q.queue.length >= 1) || (!q.running && q.queue.length >= 2))
+    .sort((a, b) => (b.queue.length + (b.running ? 1 : 0)) - (a.queue.length + (a.running ? 1 : 0)))
+
+  const moves = []
+  const usedIdle = new Set()
+  for (const q of overloaded) {
+    const freeCourt = idleCourts.find(c => !usedIdle.has(c))
+    if (freeCourt == null) break // 남은 유휴 코트 없음
+    // 진행 중이면 큐 맨 앞(지금 옮기면 바로 시작), 아니면 두 번째부터(맨 앞은 이 코트에서 곧 시작).
+    const movable = q.running ? q.queue : q.queue.slice(1)
+    const pick = movable.find(m =>
+      !playingEntries.has(m.team1_entry_id) && !playingEntries.has(m.team2_entry_id))
+    if (!pick) continue
+    usedIdle.add(freeCourt)
+    moves.push({ match: pick, fromCourt: q.court, toCourt: freeCourt })
+    if (maxMoves && moves.length >= maxMoves) break
+  }
+
+  return { moves, idleCourts, overloadedCourts: overloaded.map(q => q.court) }
+}
+
 // 진행 페이스·지연 재조정 분석 (C6) — 계획 대비 실시간 지연을 예측하고 재배치안을 제시.
 // ──────────────────────────────────────────────────────────────────────
 // scheduler 가 미리 깔아둔 scheduled_time(계획)과 실시간 상태(진행 중 경과·시작 대기

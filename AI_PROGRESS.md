@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-10 — [C6] 빈 코트 실제 재배치 실행 (유휴 코트로 대기 경기 이동 → 자동 호출, C6 ⚠️→✅)
+
+- **C6 실시간 진행·지연 재조정 — 빈 코트 실제 재배치 (필수/중, 운영 완주 마지막 실행 갭)**
+  - 파일: `src/lib/orchestrator.js`(planRebalance 추가), `src/pages/organizer/LiveDashboard.jsx`
+  - 요약: 지금까지 `planAutoAdvance`는 코트마다 자기 큐의 다음 경기만 호출해, 한 코트에 경기가 몰려 밀리는데 옆 코트가 텅 비어 있어도 대기 경기가 그 빈 코트로 넘어가지 못했다. `analyzeDelay`는 "N번 코트가 비어 있어요 — 대기 경기를 나눠 배정하면 지연을 줄일 수 있어요"라고 제안만 하고 실제 실행은 하지 않아, 운영 무인 완주의 마지막 실행 고리가 비어 있었다(운영 잔여 갭). 순수 함수 `planRebalance(matches, {courtCount, busyCourts, maxMoves})`를 신설해, 유휴 코트(진행 중 경기 없음 + 대기 경기 없음 + 다른 종목 미사용)와 과부하 코트(진행 중 + 대기≥1, 또는 대기≥2)를 판정하고, 과부하 코트의 대기 경기(진행 중이면 큐 맨 앞=지금 옮기면 바로 시작, 아니면 큐 두 번째부터=맨 앞은 이 코트에서 곧 시작)를 유휴 코트로 옮길 `{match, fromCourt, toCourt}` 계획을 만든다. 옮길 경기의 팀이 지금 다른 코트에서 경기 중이면(같은 시간 두 코트=중복 출전) 건너뛰고, 다른 종목이 쓰는 코트(busyCourts)는 유휴에서 제외하며, 한 유휴 코트는 한 경기만 받는다(usedIdle). 실제 court_number UPDATE·재조회는 호출부가 담당(순수 함수 유지). LiveDashboard에 `runRebalance(curMatches)`를 추가 — 다종목 대회면 cross-category in_progress를 조회해 정확한 busyCourts로 재판정한 뒤 각 이동을 `court_number` UPDATE(그 사이 시작됐으면 옮기지 않도록 `.eq('status','scheduled')` 경합 방지)로 반영하고 자동 조치 로그에 남긴다. court_number만 바뀌면 그 경기는 유휴 코트의 맨 앞이 되어 기존 `planAutoAdvance`가 다음 실시간 틱에 자동 호출하므로 무인으로 완결된다(별도 트리거 불필요). 무인 자동 진행 ON이면 `runOrchestrator`가 매 틱 끝에 자동 재배치(rebalancing ref로 중복 실행 차단), OFF면 "빈 코트 재배치 추천 N건" 파란 패널에 `fromCourt→toCourt · 팀명` 미리보기(최대 3건+외 N건)와 원터치 "빈 코트로 재배치" 버튼을 제공한다. scheduler/advance 로직과 겹치지 않고(코트 번호만 조정), 스키마 변경·외부 키 불필요. 엔진 9개 시나리오(유휴 감지·1→2 이동·중복 출전 건너뜀·busyCourts 제외·대기만 있을 때 두 번째 이동·maxMoves 제한·빈 배열 안전) 자체 검증 통과, `npx vite build` green. rescheduleAfterForfeit(사전 스케줄 전용, 라이브와 별개 설계)만 미연결로 남김.
+
 ## 2026-07-10 — [C9] 문의 챗봇 — 규정 FAQ + 대진/일정 개인화 응답 (유일한 ❌ 클러스터 착수, C9 ❌→⚠️)
 
 - **C9 문의 챗봇 — 규칙 기반 규정 RAG + 대회 데이터 개인화 (필수/중, 선수·주최자 문의 응대 수작업)**

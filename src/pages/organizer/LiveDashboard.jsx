@@ -5,7 +5,7 @@ import { resolveMatchMMR, CERT_LEVELS } from '../../lib/mmr'
 import { calculatePoolStandings, prizeLabel } from '../../lib/tournament'
 import { completeMatch, finalizeTournament, scoresToPairs } from '../../lib/advance'
 import { callMatch, callMatchSoon, callWalkoverWarn } from '../../lib/notify'
-import { planAutoAdvance, planNoShow, analyzeDelay } from '../../lib/orchestrator'
+import { planAutoAdvance, planNoShow, analyzeDelay, planRebalance } from '../../lib/orchestrator'
 import { summarizeCheckins } from '../../lib/checkin'
 import { buildCertificates, printCertificates } from '../../lib/certificate'
 import TopBar from '../../components/TopBar'
@@ -70,8 +70,10 @@ export default function LiveDashboard() {
   const [autoRun, setAutoRun]       = useState(false) // 자동 진행 on/off (기본 꺼짐 — 안전)
   const [estimates, setEstimates]   = useState({})    // { [matchId]: { at, ahead } } 예상 호출 시각
   const [autoLog, setAutoLog]       = useState([])    // 최근 자동 조치 로그(투명성)
+  const [rebalanceMoves, setRebalanceMoves] = useState([]) // 빈 코트 재배치 추천(미리보기)
   const soonSentRef   = useRef({})   // { [matchId]: ts } 사전알림 중복 방지
   const orchestrating = useRef(false)
+  const rebalancing   = useRef(false) // 재배치 실행 중복 방지
 
   // ── 노쇼(호출 미응답) 타이머 상태 (C7) ─────────────────────────────
   const [noShow, setNoShow]   = useState({})   // { [matchId]: { phase, secondsLeft, elapsedSec, ... } }
@@ -142,6 +144,11 @@ export default function LiveDashboard() {
       busyCourts: localBusy, calledAt: calledIds, soonSentAt: soonSentRef.current, matchMinutes: observed,
     })
     setEstimates(plan.estimates)
+    // 빈 코트 재배치 추천 미리보기(표시용) — 다른 종목 사용 코트는 실행 시 정확히 재판정.
+    const reb = planRebalance(matches, {
+      courtCount: tournament?.court_count ?? null, busyCourts: localBusy,
+    })
+    setRebalanceMoves(reb.moves)
     if (autoRun) runOrchestrator(matches)
     // calledIds 변경만으로는 재실행 안 함(무한 루프 방지) — 실시간 matches 갱신이 트리거.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -411,6 +418,52 @@ export default function LiveDashboard() {
       }
     } finally {
       orchestrating.current = false
+    }
+    // 빈 코트로 대기 경기 실제 재배치 → 옮긴 경기는 realtime 갱신 후 다음 틱에 자동 호출됨.
+    await runRebalance(curMatches)
+  }
+
+  // ── 빈 코트 실제 재배치 (C6) — 유휴 코트로 과부하 코트의 대기 경기를 옮긴다 ──────
+  //   planAutoAdvance 는 코트마다 자기 큐만 진행하므로, 옆 코트가 텅 비어도 대기 경기가
+  //   넘어가지 못했다. 이 함수가 court_number 를 실제로 바꿔 옮기면(빈 코트로) planAutoAdvance
+  //   가 그 코트의 맨 앞으로 인식해 자동 호출한다. 다른 종목이 쓰는 코트는 정확히 제외한다.
+  //   무인 진행이 켜져 있으면 자동으로, 꺼져 있으면 추천 패널의 원터치 버튼으로 실행.
+  async function runRebalance(curMatches = matches) {
+    if (rebalancing.current) return 0
+    rebalancing.current = true
+    try {
+      const catIds = categories.map(c => c.id)
+      const busy = new Set()
+      if (catIds.length > 1) {
+        const { data: running } = await supabase
+          .from('tournament_matches')
+          .select('court_number, category_id')
+          .in('category_id', catIds)
+          .eq('status', 'in_progress')
+        ;(running ?? []).forEach(r => {
+          if (r.court_number != null && r.category_id !== activeCat) busy.add(r.court_number)
+        })
+      }
+      const reb = planRebalance(curMatches, {
+        courtCount: tournament?.court_count ?? null,
+        busyCourts: busy,
+      })
+      let applied = 0
+      for (const mv of reb.moves) {
+        try {
+          const { error } = await supabase
+            .from('tournament_matches')
+            .update({ court_number: mv.toCourt })
+            .eq('id', mv.match.id)
+            .eq('status', 'scheduled') // 그 사이 시작됐으면 옮기지 않음(경합 방지)
+          if (error) throw error
+          applied++
+          pushAutoLog(`${mv.fromCourt}→${mv.toCourt}번 코트 재배치 — ${teamNamesOf(mv.match)}`)
+        } catch { /* 다음 틱 재시도 */ }
+      }
+      return applied
+    } finally {
+      rebalancing.current = false
     }
   }
 
@@ -691,6 +744,38 @@ export default function LiveDashboard() {
               )}
             </div>
           </div>
+
+          {/* ── 빈 코트 재배치 추천 (무인 진행 OFF일 때만 원터치 실행) ───────── */}
+          {!autoRun && rebalanceMoves.length > 0 && (
+            <div className="px-4 pt-4">
+              <div className="rounded-2xl border border-[#003478]/30 bg-blue-50 p-4">
+                <p className="font-bold text-sm text-[#003478] flex items-center gap-1.5">
+                  <Zap size={15} /> 빈 코트 재배치 추천 {rebalanceMoves.length}건
+                </p>
+                <p className="text-[11px] text-gray-600 mt-0.5 leading-tight">
+                  비어 있는 코트로 대기 경기를 옮기면 더 빨리 진행돼요. 옮긴 경기는 자동 호출됩니다.
+                </p>
+                <div className="mt-2 space-y-1">
+                  {rebalanceMoves.slice(0, 3).map(mv => (
+                    <p key={mv.match.id} className="text-[11px] text-gray-600">
+                      <span className="tabular-nums">{mv.fromCourt}번</span> →{' '}
+                      <span className="font-bold text-[#003478] tabular-nums">{mv.toCourt}번 코트</span>
+                      {' · '}{teamNamesOf(mv.match)}
+                    </p>
+                  ))}
+                  {rebalanceMoves.length > 3 && (
+                    <p className="text-[11px] text-gray-400">외 {rebalanceMoves.length - 3}건</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => runRebalance().then(n => { if (n) loadMatches() })}
+                  className="w-full mt-2.5 py-2 rounded-xl bg-[#003478] text-white text-xs font-bold active:opacity-80"
+                >
+                  빈 코트로 재배치
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* ── 진행 페이스·지연 예측 (계획 대비 실시간 지연 재조정 안내) ──────── */}
           {delay.remaining > 0 && (delay.runningCount > 0 || delay.projectedFinish != null || delay.overdueStartCount > 0) && (

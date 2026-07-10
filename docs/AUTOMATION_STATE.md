@@ -8,7 +8,7 @@
 | 주최자 | 80% | 무통장 입금 자동 매칭 ✅ / 디지털 상장 ✅ / 사후 공지·리마인더·감사·설문(C11) ✅ / **정산 손익·원천징수 리포트(C10)** ✅ — 참가비 수입−경비−상금 자동 손익+상금 원천징수 계산+리포트 인쇄. 잔여: PG 실결제(human-gated)·draft→open 자동 개설·시상 확정 무인 |
 | 선수   | 76% | 셀프 체크인·디지털 선수증 ✅, 입금 확인 자동화 ✅, 결과·급수·상장 ✅, 대회 안내·공지함 수신 ✅, **문의 챗봇(C9)** ✅ — 규정·일정·참가비·내신청 자동응답으로 단톡방 문의 대체 / PG 카드결제 부재 |
 | 심판   | 70% | 무심판 코트 셀프스코어 부재 |
-| 운영   | 74% | 빈코트 자동투입·자동호출·사전알림·예상시각(관측 페이스 보정)·노쇼 타이머·지연 예측(현재 페이스면 N분 지연+예상 종료+재배치안) ✅ / 자동 부전승 확정·빈코트 실제 재배치 실행 미연결 |
+| 운영   | 80% | 빈코트 자동투입·자동호출·사전알림·예상시각(관측 페이스 보정)·노쇼 타이머·지연 예측·**빈코트 실제 재배치 실행(C6)** ✅ — 유휴 코트로 과부하 코트 대기 경기를 실제 이동(court_number UPDATE)→자동 호출까지 무인. 잔여: 자동 부전승 확정(현장 예외로 사람 1탭 유지)·rescheduleAfterForfeit(사전스케줄용, 라이브 미적용) |
 
 ## 클러스터 상태 (C1~C12)
 | C | 클러스터 | 상태 | 비고(코드 근거) |
@@ -18,7 +18,7 @@
 | C3 | 입금·결제·환불 | ⚠️ | `payment.js` 신설 — 무통장 입금 내역 붙여넣기→신청자명 퍼지매칭(Levenshtein+정규화)+금액 대조→`payment_status='confirmed'` 자동 처리. EntryManagement "입금 자동 매칭" 패널(자동확인/확인권장/미매칭 분류, 1탭 확인). 입금 확인이 auto-approval 입금대기 버킷을 비워 무인 승인까지 연결. PG 실결제(토스)·가상계좌·환불규정 코드화는 미구현·human-gated |
 | C4 | 셀프 체크인 | ✅ | `checkin.js` 엔진 신설 — 선수 MyMatches "디지털 선수증" 카드에서 대회 당일/진행중 원터치 셀프 체크인(verified_method='self'). 실명인증 선수는 무인 완료, 미인증은 "본인확인 권장" 예외로만 노출. LiveDashboard 체크인 패널 실시간 반영(tournament_checkins 구독)+셀프/본인확인권장/신고 요약. 운영자 수동 체크인 병존. QR/PIN 키오스크·대리스코어링만 잔여 |
 | C5 | AI 대진 최적화 | ⚠️ | seededShuffle 단일 셔플 + MMR 시드만 |
-| C6 | 실시간 진행·지연 재조정 | ⚠️ | 빈코트 감시→다음경기 자동투입(orchestrator.planAutoAdvance) ✅. `analyzeDelay` 신설 — 진행 중 경기 경과로 관측 페이스 추정→예상 호출/종료 시각 보정, 계획(scheduled_time) 대비 지연 예측("현재 페이스면 약 N분 지연·예상 종료 HH:MM")+재배치안(빈코트 활용·페이스 안내)을 LiveDashboard 배너로 표출 ✅. 실제 재배치 실행(빈코트로 대기경기 이동)·rescheduleAfterForfeit(사전스케줄용, 라이브 미적용)은 아직 미연결 |
+| C6 | 실시간 진행·지연 재조정 | ✅ | 빈코트 감시→다음경기 자동투입(planAutoAdvance) ✅. `analyzeDelay` 지연 예측·재배치안 배너 ✅. **`planRebalance` 신설(빈코트 실제 재배치)** ✅ — 유휴 코트(진행중·대기 없음+타종목 미사용)로 과부하 코트(진행중+대기≥1 또는 대기≥2)의 대기 경기를 court_number UPDATE로 실제 이동. 옮긴 경기는 유휴 코트 맨 앞이 돼 planAutoAdvance가 자동 호출→무인 완결. 중복 출전(팀이 경기 중) 방지·다종목 사용 코트 제외·경합 시 status='scheduled' 조건부 UPDATE. 무인 ON이면 runOrchestrator에서 자동, OFF면 추천 패널 원터치. rescheduleAfterForfeit(사전스케줄 전용)만 라이브 미적용(설계상 별개) |
 | C7 | 노쇼·기권·실격 자동처리 | ⚠️ | 노쇼 타이머 신설(orchestrator.planNoShow): 호출 후 미응답 경기를 waiting/warned/overdue 3단계로 판정 → 무인 진행 시 WALKOVER_WARN 자동 발송(선수 긴급 배너)+대시보드 카운트다운, overdue는 "노쇼 확인 대기" 패널 원터치 부전승(completeMatch walkover). "누가 안 왔는지"는 현장 예외라 사람 1탭 확인. 실격 출전권 무효·자동 부전승 확정은 미구현 |
 | C8 | 요강·설정 마법사 | ⚠️ | 설정 폼만, 역산/문서생성 없음 |
 | C9 | 문의 챗봇 | ⚠️ | `chatbot.js`+`HelpChat.jsx` 신설 — 규정 FAQ(점수/부전승/노쇼/MMR/샌드배깅/파트너/신청/환불) + 대회 데이터 개인화(일정·장소·참가비·접수마감·내 신청상태·자격·시상) 18개 주제 규칙기반 검색 응답. TournamentDetail 우하단 "문의" 챗봇. 외부 LLM 키 없이 완결(실LLM 연동은 future·human-gated) |
@@ -27,6 +27,21 @@
 | C12 | 대회 탐색·파트너·전적 | ⚠️ | 파트너 초대·랭킹 있음, 추천/매칭 없음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-10 · C6 · `src/lib/orchestrator.js`(planRebalance 추가)·`src/pages/organizer/LiveDashboard.jsx`
+  · 빈 코트 실제 재배치 실행(C6 ⚠️→✅) — 운영 완주를 막던 마지막 실행 갭. planAutoAdvance는
+    코트마다 자기 큐만 진행해, 한 코트에 경기가 몰려 밀리는데 옆 코트가 텅 비어도 대기 경기가
+    넘어가지 못했다(analyzeDelay는 그 상황을 '제안'만 하고 실행은 안 했음). 순수 함수
+    `planRebalance(matches,{courtCount,busyCourts,maxMoves})` 신설 — 유휴 코트(진행 중·대기 경기
+    없음+다른 종목 미사용)와 과부하 코트(진행 중+대기≥1 또는 대기≥2)를 판정해, 과부하 코트의
+    대기 경기(진행 중이면 큐 맨 앞, 아니면 두 번째부터)를 유휴 코트로 옮길 {match,fromCourt,toCourt}
+    계획을 만든다. 옮길 경기의 팀이 지금 경기 중이면(중복 출전) 건너뛴다. LiveDashboard가
+    court_number를 실제 UPDATE(경합 방지 status='scheduled' 조건부)하면 그 경기는 유휴 코트 맨 앞이
+    돼 기존 planAutoAdvance가 자동 호출→무인 완결(별도 트리거 불필요). 무인 자동 진행 ON이면
+    runOrchestrator가 매 실시간 틱마다 자동 재배치(rebalancing ref 중복 차단), OFF면 "빈 코트 재배치
+    추천 N건" 패널에서 fromCourt→toCourt 미리보기+원터치 실행. 다종목 공유 코트는 실행 시 cross-cat
+    in_progress 조회로 정확히 제외. court_number만 바꾸므로 scheduler/advance 로직과 겹치지 않음.
+    스키마 변경 없음. 엔진 9개 시나리오(유휴 감지·이동·중복출전 건너뜀·busy 제외·대기만·maxMoves·
+    빈배열) 자체 검증 통과, `npx vite build` green. (자동화율 운영 74%→80%)
 - 2026-07-10 · C9 · `src/lib/chatbot.js`(신규)·`src/components/HelpChat.jsx`(신규)·`src/pages/player/TournamentDetail.jsx`
   · 문의 챗봇(C9 ❌→⚠️) — 유일하게 코드 0건(❌)이던 클러스터를 채움. 대회 단톡방에서 주최자가 손으로
     답하던 "언제 시작해요·어디서 해요·참가비 얼마·제 신청 됐어요·점수 규칙" 문의 응대(운영자 상시 수작업)를
