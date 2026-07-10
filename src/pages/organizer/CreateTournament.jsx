@@ -4,7 +4,11 @@ import { supabase } from '../../lib/supabase'
 import { GRADES, SPORT_TYPES, UNITS } from '../../lib/grades'
 import { TIEBREAKER_PRESETS } from '../../lib/tournament'
 import TopBar from '../../components/TopBar'
-import { Plus, Trash2, Info, ChevronDown, ChevronUp, Settings } from 'lucide-react'
+import { Plus, Trash2, Info, ChevronDown, ChevronUp, Settings, Sparkles, FileText, Clock } from 'lucide-react'
+import {
+  recommendSetup, estimateSchedule, estimateTournament,
+  formatKoreanTime, formatDuration, printGuidelines,
+} from '../../lib/planWizard'
 
 const DEFAULT_CAT = {
   sport_type: '남복',
@@ -75,11 +79,74 @@ function Stepper({ value, min, max, step = 1, onChange, format }) {
   )
 }
 
-function FormatSection({ cat, idx, updateCat }) {
+// AI 대회 설계 도우미 — 예상 팀 수(정원)로 대진 방식 추천 + 경기 수·예상 종료 역산
+function WizardCard({ cat, idx, form, applyCat }) {
+  const teams = Number(cat.max_teams) || 0
+  const rec = recommendSetup(teams)
+  const startISO = form.start_time ? `${form.date || '2000-01-01'}T${form.start_time}` : null
+  const est = estimateSchedule({
+    cat, teams,
+    courtCount: form.court_count,
+    startTime: startISO,
+  })
+
+  // 현재 설정이 추천과 다른가?
+  const isPool = cat.tournament_format === 'pool_knockout' || cat.tournament_format === 'pool_only'
+  const differs = rec && (
+    rec.tournament_format !== cat.tournament_format ||
+    (rec.pool_size && isPool && rec.pool_size !== cat.pool_size)
+  )
+
+  function apply() {
+    if (!rec) return
+    const patch = { tournament_format: rec.tournament_format }
+    if (rec.pool_size) { patch.pool_size = rec.pool_size; patch.advancement_per_pool = rec.advancement_per_pool }
+    applyCat(idx, patch)
+  }
+
+  if (teams < 2) return null
+
+  return (
+    <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-3 space-y-2.5">
+      <div className="flex items-center gap-1.5 text-[#003478]">
+        <Sparkles size={14} />
+        <span className="text-xs font-bold">AI 대회 설계 도우미</span>
+        <span className="text-[11px] text-gray-400 ml-auto">정원 {teams}팀 기준</span>
+      </div>
+
+      {differs && (
+        <div className="bg-white rounded-lg p-2.5 border border-blue-100">
+          <p className="text-xs font-bold text-gray-800">{rec.headline}</p>
+          <p className="text-[11px] text-gray-500 mt-1 leading-relaxed">{rec.reason}</p>
+          <button
+            onClick={apply}
+            className="mt-2 w-full py-1.5 rounded-lg bg-[#003478] text-white text-xs font-bold active:opacity-80"
+          >이 추천 적용</button>
+        </div>
+      )}
+
+      <div className="flex items-start gap-2 text-[11px] text-gray-600 leading-relaxed">
+        <Clock size={13} className="text-blue-500 shrink-0 mt-0.5" />
+        <p>
+          예상 <b className="text-gray-800">{est.total}경기</b>
+          {est.pools.length > 1 && ` · ${est.pools.length}개 조`}
+          {' · '}소요 <b className="text-gray-800">{formatDuration(est.totalMinutes)}</b>
+          {est.endTime && <> · 코트 {est.courts}면이면 <b className="text-[#C60C30]">{formatKoreanTime(est.endTime)}쯤 종료</b></>}
+          {!form.start_time && ' · 시작 시간을 정하면 종료 시각도 계산돼요'}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function FormatSection({ cat, idx, updateCat, form, applyCat }) {
   const showPool = cat.tournament_format === 'pool_knockout' || cat.tournament_format === 'pool_only'
 
   return (
     <div className="space-y-4 pt-1">
+      {/* AI 설계 도우미 */}
+      <WizardCard cat={cat} idx={idx} form={form} applyCat={applyCat} />
+
       {/* A: 대진 방식 */}
       <div>
         <p className="text-xs font-semibold text-gray-500 mb-2">대진 방식</p>
@@ -288,6 +355,9 @@ export default function CreateTournament() {
   function update(k, v) { setForm(prev => ({ ...prev, [k]: v })) }
   function updateCat(i, k, v) {
     setCategories(prev => prev.map((c, idx) => idx === i ? { ...c, [k]: v } : c))
+  }
+  function applyCat(i, patch) {
+    setCategories(prev => prev.map((c, idx) => idx === i ? { ...c, ...patch } : c))
   }
   function addCat()      { setCategories(prev => [...prev, { ...DEFAULT_CAT }]) }
   function removeCat(i)  { setCategories(prev => prev.filter((_, idx) => idx !== i)) }
@@ -567,7 +637,7 @@ export default function CreateTournament() {
 
                   {expandedCats[i] && (
                     <div className="mt-3">
-                      <FormatSection cat={cat} idx={i} updateCat={updateCat} />
+                      <FormatSection cat={cat} idx={i} updateCat={updateCat} form={form} applyCat={applyCat} />
                     </div>
                   )}
                 </div>
@@ -575,7 +645,66 @@ export default function CreateTournament() {
             ))}
           </div>
         </section>
+
+        {/* 예상 진행 & 요강 문서 (C8 마법사) */}
+        <WizardSummary form={form} categories={categories} />
       </div>
     </div>
+  )
+}
+
+// 전체 종목 합산 예상 진행 + 요강 문서 생성
+function WizardSummary({ form, categories }) {
+  const startISO = form.start_time ? `${form.date || '2000-01-01'}T${form.start_time}` : null
+  const est = estimateTournament({
+    categories,
+    courtCount: form.court_count,
+    startTime: startISO,
+  })
+  const estimatedEnd = est.endTime ? formatKoreanTime(est.endTime) : null
+  const canDoc = form.title && form.date
+
+  function makeDoc() {
+    const ok = printGuidelines(form, categories, {
+      estimatedEnd: estimatedEnd ? `${estimatedEnd}쯤 (예상)` : null,
+      organizerName: '배드민국',
+    })
+    if (!ok) alert('팝업이 차단되어 요강을 열 수 없어요. 팝업 허용 후 다시 시도해 주세요.')
+  }
+
+  return (
+    <section>
+      <h2 className="font-bold mb-3 text-gray-700">예상 진행 · 요강</h2>
+      <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <div className="bg-gray-50 rounded-xl px-3 py-2.5">
+            <p className="text-[11px] text-gray-400 font-semibold">전체 예상 경기</p>
+            <p className="text-lg font-extrabold text-gray-800">{est.totalMatches}<span className="text-xs font-bold text-gray-400 ml-0.5">경기</span></p>
+          </div>
+          <div className="bg-gray-50 rounded-xl px-3 py-2.5">
+            <p className="text-[11px] text-gray-400 font-semibold">예상 소요</p>
+            <p className="text-lg font-extrabold text-gray-800">{formatDuration(est.totalMinutes).replace('약 ', '')}</p>
+          </div>
+        </div>
+        {estimatedEnd ? (
+          <p className="text-xs text-gray-500 leading-relaxed">
+            {form.start_time && `${formatKoreanTime(new Date(startISO))} 시작 · `}
+            코트 {form.court_count}면 기준 <b className="text-[#C60C30]">{estimatedEnd}쯤 종료</b> 예상이에요.
+            정원 기준 계산이라 실제 참가 팀 수에 따라 달라질 수 있어요.
+          </p>
+        ) : (
+          <p className="text-xs text-gray-400">시작 시간을 정하면 예상 종료 시각을 계산해 드려요.</p>
+        )}
+
+        <button
+          onClick={makeDoc}
+          disabled={!canDoc}
+          className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl border-2 border-[#003478] text-[#003478] text-sm font-bold active:opacity-80 disabled:opacity-40 disabled:border-gray-200 disabled:text-gray-400"
+        >
+          <FileText size={15} /> 요강 문서 만들기 (PDF)
+        </button>
+        {!canDoc && <p className="text-[11px] text-gray-400 text-center">대회명·날짜를 입력하면 요강을 만들 수 있어요.</p>}
+      </div>
+    </section>
   )
 }
