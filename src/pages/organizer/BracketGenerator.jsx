@@ -3,9 +3,10 @@ import { useParams } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { seededShuffle, makeSeed, scheduleMatches, buildRoundRobin } from '../../lib/scheduler'
 import { generatePools, generateKnockoutBracket, knockoutSkeletonSize } from '../../lib/tournament'
+import { optimizeDraw, explainDraw, poolMeanMmr } from '../../lib/drawOptimizer'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
-import { Shuffle, RotateCcw, Check, Copy, Trophy } from 'lucide-react'
+import { Shuffle, RotateCcw, Check, Copy, Trophy, Sparkles, Scale } from 'lucide-react'
 
 // ── 유틸 ─────────────────────────────────────────────────────────
 
@@ -131,6 +132,7 @@ export default function BracketGenerator() {
   const [saving, setSaving]         = useState(false)
   const [saved, setSaved]           = useState(false)
   const [seedCopied, setSeedCopied] = useState(false)
+  const [aiBalance, setAiBalance]   = useState(true)  // AI 균형 추첨 (조 편성 최적화)
   const drawInterval = useRef(null)
 
   useEffect(() => {
@@ -184,6 +186,18 @@ export default function BracketGenerator() {
   const formatInfo = FORMAT_INFO[format] ?? FORMAT_INFO.round_robin
   const seedingOn = !!activeCategory?.seeding_enabled
 
+  // AI 균형 추첨 적용 여부 판정 (조별 포맷 · 2개 이상 조 · MMR 데이터 있음)
+  const isPoolFormat = format === 'pool_only' || format === 'pool_knockout'
+  const poolSizeCfg = format === 'round_robin'
+    ? Math.max(allEntries.length, 1)
+    : Math.max(activeCategory?.pool_size ?? 4, 1)
+  const numPools = poolSizeCfg > 0 ? Math.ceil(allEntries.length / poolSizeCfg) : 1
+  const hasMmrData = allEntries.some(e => e.mmr != null)
+  // 토글 노출: 무작위 편성일 때만(시드 켜짐이면 이미 MMR 스네이크로 균형 배정)
+  const canToggleBalance = isPoolFormat && numPools >= 2 && hasMmrData && !seedingOn
+  // 최적화 실행: 조별 포맷·2개 이상 조·MMR 있음 + (시드 켜짐 or AI 균형 켜짐)
+  const useOptimizer = isPoolFormat && numPools >= 2 && hasMmrData && (seedingOn || aiBalance)
+
   // ── 추첨 계획 수립 (씨드 고정 → 저장 시 그대로 사용, 재현 가능) ──
   function startDraw() {
     if (allEntries.length < 2) return
@@ -215,7 +229,20 @@ export default function BracketGenerator() {
       const poolSize = format === 'round_robin'
         ? Math.max(allEntries.length, 1)
         : Math.max(cat?.pool_size ?? 4, 1)
-      const pools = generatePools(allEntries, poolSize, s, { seeding_enabled: seedingOn })
+      // AI 균형 추첨: 후보 대진을 비교해 조별 실력이 가장 고른 대진을 고른다(재현성 유지).
+      let pools, effSeed = s, optimization = null
+      if (useOptimizer) {
+        const res = optimizeDraw({ entries: allEntries, poolSize, baseSeed: s, seedingEnabled: seedingOn, candidates: 16 })
+        pools = res.pools
+        effSeed = res.seed
+        optimization = {
+          method: res.method, tried: res.tried,
+          bestSpread: res.bestSpread, worstSpread: res.worstSpread, avgSpread: res.avgSpread,
+          explanation: explainDraw(res, res.pools),
+        }
+      } else {
+        pools = generatePools(allEntries, poolSize, s, { seeding_enabled: seedingOn })
+      }
       // 배정 순서대로 공개 (시드 배정 시 스네이크 순서 그대로 재현)
       const sequence = []
       const maxLen = Math.max(...pools.map(p => p.entries.length))
@@ -226,7 +253,7 @@ export default function BracketGenerator() {
           if (e) sequence.push({ type: 'pool', entryId: e.id, label: e.label, poolIndex: p.poolIndex, poolName: p.poolName })
         }
       }
-      setPlan({ format, seed: s, pools, round1: null, size: null, sequence })
+      setPlan({ format, seed: effSeed, pools, round1: null, size: null, sequence, optimization })
     }
 
     setDrawnCount(0)
@@ -496,6 +523,34 @@ export default function BracketGenerator() {
               )}
             </div>
 
+            {/* AI 균형 추첨 토글 (무작위 편성 + 조 2개 이상 + MMR 있음) */}
+            {canToggleBalance && (
+              <button
+                onClick={() => setAiBalance(v => !v)}
+                className={`w-full text-left rounded-2xl border p-4 transition
+                  ${aiBalance ? 'border-[#003478] bg-blue-50/60' : 'border-gray-200 bg-white'}`}
+              >
+                <div className="flex items-start gap-3">
+                  <div className={`mt-0.5 shrink-0 w-11 h-6 rounded-full flex items-center px-0.5 transition
+                    ${aiBalance ? 'bg-[#003478] justify-end' : 'bg-gray-200 justify-start'}`}>
+                    <span className="w-5 h-5 rounded-full bg-white shadow" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <Sparkles size={15} className="text-[#003478]" />
+                      <span className="font-bold text-sm">AI 균형 추첨</span>
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-[#003478] text-white">추천</span>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                      {aiBalance
+                        ? '후보 대진 16개를 비교해 조별 실력이 가장 고른 대진을 자동으로 골라요. 한 조에 강팀이 몰리는 쏠림을 막아줘요. (씨드는 공개돼 재현 가능)'
+                        : '꺼짐 — 그냥 무작위로 한 번 뽑아요. 운에 따라 조별 실력이 기울 수 있어요.'}
+                    </p>
+                  </div>
+                </div>
+              </button>
+            )}
+
             {/* 참가팀 풀 */}
             {allEntries.length > 0 ? (
               <div className="bg-white rounded-2xl border border-gray-100 p-4">
@@ -592,9 +647,16 @@ export default function BracketGenerator() {
                   const members = drawnSeq.filter(it => it.poolIndex === p.poolIndex)
                   return (
                     <div key={p.poolIndex} className="bg-white rounded-2xl border border-gray-100 p-3">
-                      <p className="text-xs font-bold text-gray-500 mb-2">
-                        🏸 {plan.format === 'round_robin' ? '참가팀' : p.poolName} ({members.length}/{p.entries.length})
-                      </p>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs font-bold text-gray-500">
+                          🏸 {plan.format === 'round_robin' ? '참가팀' : p.poolName} ({members.length}/{p.entries.length})
+                        </p>
+                        {phase === 'done' && plan.optimization?.explanation?.hasMmr && poolMeanMmr(p) != null && (
+                          <span className="text-[10px] font-bold text-[#003478] bg-blue-50 px-1.5 py-0.5 rounded-full whitespace-nowrap">
+                            평균 {Math.round(poolMeanMmr(p))}
+                          </span>
+                        )}
+                      </div>
                       <div className="space-y-1.5">
                         {members.map(it => (
                           <div key={it.entryId}
@@ -697,6 +759,35 @@ export default function BracketGenerator() {
                     </p>
                   )}
                 </div>
+
+                {/* AI 대진 최적화 — 왜 이 대진이 균형적인지 설명 */}
+                {plan.optimization?.explanation?.hasMmr && (
+                  <div className="bg-white rounded-2xl border border-[#003478]/20 p-4">
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <Scale size={15} className="text-[#003478]" />
+                      <h3 className="font-bold text-sm text-[#003478]">
+                        {plan.optimization.explanation.headline}
+                      </h3>
+                    </div>
+                    <p className="text-xs text-gray-500 leading-relaxed">
+                      {plan.optimization.explanation.detail}
+                    </p>
+                    <div className="flex flex-wrap gap-1.5 mt-3">
+                      {plan.optimization.explanation.poolLines.map(pl => (
+                        <span key={pl.name}
+                          className="text-[11px] font-semibold px-2 py-1 rounded-lg bg-gray-50 border border-gray-200 text-gray-600">
+                          {pl.name} {pl.mean != null ? `평균 ${pl.mean}` : ''}
+                        </span>
+                      ))}
+                    </div>
+                    {plan.optimization.method === 'balanced' && plan.optimization.avgSpread > plan.optimization.bestSpread && (
+                      <p className="text-[11px] text-gray-400 mt-2">
+                        조별 평균 실력 차이 {Math.round(plan.optimization.bestSpread)}
+                        <span className="text-gray-300"> (무작위 평균 {Math.round(plan.optimization.avgSpread)})</span>
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {saved ? (
                   <div className="w-full py-4 rounded-2xl bg-emerald-500 text-white font-bold text-center">

@@ -5,7 +5,7 @@
 ## 플로우 자동화율 (0~100%)
 | 플로우 | 점수 | 완주 막는 잔여 갭 |
 |--------|:---:|------------------|
-| 주최자 | 85% | 무통장 입금 자동 매칭 ✅ / 디지털 상장 ✅ / 사후 공지·리마인더·감사·설문(C11) ✅ / 정산 손익·원천징수 리포트(C10) ✅ / **시상 확정 무인(C2)** ✅ — 전 종목 종료 후 유예(3분, 점수정정·이의제기 창) 지나면 무인 진행 ON 상태에서 finalizeTournament 자동 실행(최종순위·급수승급). 잔여: PG 실결제(human-gated)·draft→open 자동 개설(공개는 개설자 판단으로 남김) |
+| 주최자 | 87% | 무통장 입금 자동 매칭 ✅ / 디지털 상장 ✅ / 사후 공지·리마인더·감사·설문(C11) ✅ / 정산 손익·원천징수 리포트(C10) ✅ / 시상 확정 무인(C2) ✅ / **AI 균형 추첨(C5)** ✅ — 조별 포맷 무작위 편성 시 후보 16개를 시뮬레이션해 조별 평균 MMR 편차 최소 대진 자동 선택 + "왜 균형적인지" 설명. 잔여: PG 실결제(human-gated)·draft→open 자동 개설(공개는 개설자 판단으로 남김)·클럽분리(프로필에 클럽 필드 없음) |
 | 선수   | 76% | 셀프 체크인·디지털 선수증 ✅, 입금 확인 자동화 ✅, 결과·급수·상장 ✅, 대회 안내·공지함 수신 ✅, **문의 챗봇(C9)** ✅ — 규정·일정·참가비·내신청 자동응답으로 단톡방 문의 대체 / PG 카드결제 부재 |
 | 심판   | 70% | 무심판 코트 셀프스코어 부재 |
 | 운영   | 80% | 빈코트 자동투입·자동호출·사전알림·예상시각(관측 페이스 보정)·노쇼 타이머·지연 예측·**빈코트 실제 재배치 실행(C6)** ✅ — 유휴 코트로 과부하 코트 대기 경기를 실제 이동(court_number UPDATE)→자동 호출까지 무인. 잔여: 자동 부전승 확정(현장 예외로 사람 1탭 유지)·rescheduleAfterForfeit(사전스케줄용, 라이브 미적용) |
@@ -17,7 +17,7 @@
 | C2 | 대회 상태 오케스트레이션 | ⚠️ | stateMachine.js 순수 판정 엔진. TournamentManage "무인 자동 진행": open→closed(마감/정원)·closed→in_progress(당일+대진표) 자동. EntryManagement "무인 자동 승인": 정상 신청 자동, 예외만 큐. **in_progress→completed 무인 확정** ✅ — `planAutoFinalize`(순수·유예 판정) + LiveDashboard 무인 진행 ON이면 전 종목 종료 후 3분 유예(점수정정 창) 지나 finalizeTournament 자동 실행(순위·급수·상장 데이터 확정)+승급 축하 배너, "지금 시상 확정" 원터치. 잔여: draft→open(개설 공개)만 수동(개설자 의도적 판단으로 보류) |
 | C3 | 입금·결제·환불 | ⚠️ | `payment.js` 신설 — 무통장 입금 내역 붙여넣기→신청자명 퍼지매칭(Levenshtein+정규화)+금액 대조→`payment_status='confirmed'` 자동 처리. EntryManagement "입금 자동 매칭" 패널(자동확인/확인권장/미매칭 분류, 1탭 확인). 입금 확인이 auto-approval 입금대기 버킷을 비워 무인 승인까지 연결. PG 실결제(토스)·가상계좌·환불규정 코드화는 미구현·human-gated |
 | C4 | 셀프 체크인 | ✅ | `checkin.js` 엔진 신설 — 선수 MyMatches "디지털 선수증" 카드에서 대회 당일/진행중 원터치 셀프 체크인(verified_method='self'). 실명인증 선수는 무인 완료, 미인증은 "본인확인 권장" 예외로만 노출. LiveDashboard 체크인 패널 실시간 반영(tournament_checkins 구독)+셀프/본인확인권장/신고 요약. 운영자 수동 체크인 병존. QR/PIN 키오스크·대리스코어링만 잔여 |
-| C5 | AI 대진 최적화 | ⚠️ | seededShuffle 단일 셔플 + MMR 시드만 |
+| C5 | AI 대진 최적화 | ⚠️ | `drawOptimizer.js` 신설 — 조별 포맷(2개 이상 조·MMR 있음) 무작위 편성 시 `optimizeDraw`가 후보 씨드 16개를 generatePools로 시뮬레이션→`scoreDraw`(조별 평균 MMR 편차 spread + 조크기 편차 페널티)로 채점→가장 고른 대진 자동 선택. `explainDraw`가 "왜 균형적인지"(가장 센/약한 조 평균·후보 대비 개선폭·조별 평균 배지) 초보용 설명 생성. BracketGenerator "AI 균형 추첨" 토글(기본 ON, 무작위 편성 시 노출)+완료 화면 설명 카드+조별 평균 MMR 배지. 고른 씨드 저장으로 공개추첨 재현성 유지. 시드 켜짐이면 스네이크가 이미 균형이라 seeded 설명만. 잔여: 클럽분리(프로필 클럽 필드 없음·human-gated)·부전승최소(pool 크기 균형은 반영, 녹아웃 시드 최적화는 미적용)·코트이동최소(C6 planRebalance가 별도 담당) |
 | C6 | 실시간 진행·지연 재조정 | ✅ | 빈코트 감시→다음경기 자동투입(planAutoAdvance) ✅. `analyzeDelay` 지연 예측·재배치안 배너 ✅. **`planRebalance` 신설(빈코트 실제 재배치)** ✅ — 유휴 코트(진행중·대기 없음+타종목 미사용)로 과부하 코트(진행중+대기≥1 또는 대기≥2)의 대기 경기를 court_number UPDATE로 실제 이동. 옮긴 경기는 유휴 코트 맨 앞이 돼 planAutoAdvance가 자동 호출→무인 완결. 중복 출전(팀이 경기 중) 방지·다종목 사용 코트 제외·경합 시 status='scheduled' 조건부 UPDATE. 무인 ON이면 runOrchestrator에서 자동, OFF면 추천 패널 원터치. rescheduleAfterForfeit(사전스케줄 전용)만 라이브 미적용(설계상 별개) |
 | C7 | 노쇼·기권·실격 자동처리 | ⚠️ | 노쇼 타이머 신설(orchestrator.planNoShow): 호출 후 미응답 경기를 waiting/warned/overdue 3단계로 판정 → 무인 진행 시 WALKOVER_WARN 자동 발송(선수 긴급 배너)+대시보드 카운트다운, overdue는 "노쇼 확인 대기" 패널 원터치 부전승(completeMatch walkover). "누가 안 왔는지"는 현장 예외라 사람 1탭 확인. 실격 출전권 무효·자동 부전승 확정은 미구현 |
 | C8 | 요강·설정 마법사 | ⚠️ | 설정 폼만, 역산/문서생성 없음 |
@@ -27,6 +27,23 @@
 | C12 | 대회 탐색·파트너·전적 | ⚠️ | 파트너 초대·랭킹 있음, 추천/매칭 없음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-10 · C5 · `src/lib/drawOptimizer.js`(신규)·`src/pages/organizer/BracketGenerator.jsx`
+  · AI 대진 최적화 — 조별 실력 균형 + 설명(AI 차별화 레이어). 지금껏 조 편성은 무작위 씨드 1개를
+    뽑아 그대로 확정이라, 운이 나쁘면 한 조에 강팀이 몰리고 옆 조는 약팀만 모여 대진이 기울었고
+    주최자·선수 누구도 "왜 이렇게 됐냐"를 알 수 없었다(엔진 generatePools는 있지만 그 위에 AI 판단
+    레이어가 없던 상태). 순수 엔진 `drawOptimizer.js` 신설 — `poolMeanMmr`(조 평균 MMR·MMR 있는 팀만),
+    `scoreDraw`(조별 평균 MMR 스프레드=가장 센 조−약한 조 + 조크기 편차 페널티, 낮을수록 균형),
+    `candidateSeeds`(baseSeed 파생 결정적 후보·재현성 유지), `optimizeDraw`(시드 켜짐이면 스네이크
+    결정적이라 후보 1개=seeded / 꺼짐이면 후보 16개를 generatePools로 시뮬레이션해 score 최소 대진
+    선택=balanced, best/worst/avg 스프레드 반환), `explainDraw`(seeded/balanced/no-mmr별 초보용 한국어
+    설명·조별 평균 배지). BracketGenerator: "AI 균형 추첨" 토글(기본 ON, 조별 포맷·2개 이상 조·MMR
+    있음·무작위 편성일 때만 노출 — 시드 켜짐이면 이미 균형이라 숨김), startDraw가 useOptimizer면
+    optimizeDraw로 최적 씨드·조 선택(고른 씨드를 plan.seed로 저장→공개추첨 재현성 유지), 완료 화면에
+    "왜 이 대진이 균형적인지" 설명 카드(헤드라인·상세·조별 평균 칩·무작위 대비 개선폭)+조 헤더에 평균
+    MMR 배지(추첨 완료 후에만 노출로 추첨 서스펜스 유지). 클럽 필드가 스키마에 없어 클럽분리는 제외
+    (human-gated), 코트이동최소는 C6 planRebalance가 담당. 스키마·외부 키 불필요(기존 generatePools
+    재사용). 엔진 22개 시나리오(평균·점수·크기페널티·후보씨드·seeded/balanced·재현성·단일조·부분MMR·
+    설명 3분기) 자체 검증 통과, `npx vite build` green. (자동화율 주최자 85%→87%)
 - 2026-07-10 · C2 · `src/lib/stateMachine.js`(planAutoFinalize 추가)·`src/pages/organizer/LiveDashboard.jsx`
   · 무인 시상 확정(C2) — 주최자 완주의 마지막 사람 손길 제거. 지금까지 planTournamentState 는
     in_progress→completed 만 auto:false(무인 안 함)로 두고 "실시간 진행 화면에서 한 번 확인"만

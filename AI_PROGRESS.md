@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-10 — [C5] AI 대진 최적화 — 조별 실력 균형 자동 선택 + "왜 균형적인지" 설명
+
+- **C5 AI 대진 최적화 — 다목적 시드 시뮬레이션 + 설명 (AI 차별화, 주최자)**
+  - 파일: `src/lib/drawOptimizer.js`(신규), `src/pages/organizer/BracketGenerator.jsx`
+  - 요약: 북극성 "add AI 대진/예측 that competitors lack" 중 대진 최적화를 착수했다. 지금까지 조 편성은 무작위 씨드 1개(makeSeed)를 뽑아 그대로 확정이라, 운이 나쁘면 한 조에 강팀이 몰리고 옆 조는 약팀만 모여 대진이 기울었고 주최자·선수 누구도 "왜 이렇게 됐냐"를 알 수 없었다(엔진 generatePools는 있으나 그 위 AI 판단 레이어가 0). 순수 엔진 `drawOptimizer.js` 신설 — `poolMeanMmr`(조 평균 MMR, MMR 있는 팀만), `scoreDraw`(핵심 지표=조별 평균 MMR 스프레드=가장 센 조−약한 조 + 조 크기 편차에 큰 페널티, 낮을수록 균형), `candidateSeeds`(baseSeed에서 파생한 결정적 후보들 — 재현성 유지), `optimizeDraw({entries,poolSize,baseSeed,seedingEnabled,candidates})`(시드 켜짐이면 스네이크가 결정적이라 후보 1개만 평가=method 'seeded' / 꺼짐이면 후보 16개를 generatePools로 시뮬레이션해 score 최소 대진 선택=method 'balanced', best/worst/avg 스프레드 함께 반환), `explainDraw`(seeded/balanced/no-mmr 3분기로 초보 주최자용 한국어 설명: 헤드라인·상세·조별 평균 배지·무작위 대비 개선폭). BracketGenerator: "AI 균형 추첨" 토글(기본 ON, 조별 포맷·조 2개 이상·MMR 데이터 있음·무작위 편성일 때만 노출 — 시드 켜짐이면 이미 MMR 스네이크로 균형이라 토글 숨김), `startDraw`가 useOptimizer면 optimizeDraw로 최적 씨드·조 구성을 골라 `plan.seed`에 고른 씨드를 저장(공개 추첨 재현성 유지: 같은 씨드+seeding off = 같은 조)·`plan.optimization`에 지표·설명 저장, 완료 화면에 "왜 이 대진이 균형적인지" 설명 카드(헤드라인·상세·조별 평균 칩·조별 평균 차이 vs 무작위 평균)와 조 헤더 평균 MMR 배지(추첨 완료 후에만 노출해 추첨 서스펜스 유지). 프로필 스키마에 클럽 필드가 없어 클럽분리는 제외(human-gated), 코트이동최소는 C6 planRebalance가 담당하므로 이번 범위는 MMR 균형 + 설명. 스키마 변경·외부 키 불필요(기존 generatePools/seededShuffle 재사용, 대진 로직 중복 없음). 엔진 22개 시나리오(평균·점수·크기 페널티·후보 씨드·seeded/balanced 경로·재현성·단일 조·부분 MMR·설명 3분기) 자체 검증 통과, `npx vite build` green.
+
 ## 2026-07-10 — [C2] 무인 시상 확정 (전 종목 종료 → 유예 후 자동 finalizeTournament, 주최자 완주 마지막 수작업 제거)
 
 - **C2 대회 상태 오케스트레이션 — 무인 시상 확정 (필수/중, 주최자 완주 잔여 갭)**
