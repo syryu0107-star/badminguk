@@ -25,6 +25,7 @@ const CourtView = lazy(() => import('./pages/organizer/CourtView'))
 
 const LiveScore = lazy(() => import('./pages/public/LiveScore'))
 const RefereeScoreboard = lazy(() => import('./pages/referee/Scoreboard'))
+const CourtReferee = lazy(() => import('./pages/referee/CourtReferee'))
 const Results = lazy(() => import('./pages/player/Results'))
 const Terms = lazy(() => import('./pages/public/Terms'))
 const Privacy = lazy(() => import('./pages/public/Privacy'))
@@ -86,6 +87,8 @@ export default function App() {
         <Route path="/organizer/:id/courts" element={<Req s={session} p={profile}><CourtView /></Req>} />
 
         <Route path="/live/:id" element={<LiveScore />} />
+        <Route path="/referee/court/:tournamentId" element={<Req s={session} p={profile}><CourtReferee /></Req>} />
+        <Route path="/referee/court/:tournamentId/:courtNo" element={<Req s={session} p={profile}><CourtReferee /></Req>} />
         <Route path="/referee/:matchId" element={<Req s={session} p={profile}><RefereeScoreboard /></Req>} />
         <Route path="/terms" element={<Terms />} />
         <Route path="/privacy" element={<Privacy />} />

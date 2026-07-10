@@ -16,7 +16,7 @@ import {
 import {
   Users, GitBranch, Zap, Monitor, ChevronRight, Trophy,
   Share2, Copy, Check, Printer, ExternalLink, Sparkles, AlertTriangle,
-  Megaphone, Send, Calculator, Plus, X, TrendingUp, TrendingDown,
+  Megaphone, Send, Calculator, Plus, X, TrendingUp, TrendingDown, Gavel,
 } from 'lucide-react'
 
 // ═══════════════════════════════════════════════════════════════
@@ -881,6 +881,7 @@ export default function TournamentManage() {
           { label: '참가 신청 관리', icon: Users,      path: `/organizer/${id}/entries`, desc: `신청자 관리 및 승인` },
           { label: 'AI 대진표 생성', icon: GitBranch,  path: `/organizer/${id}/bracket`, desc: '자동 일정 및 대진 생성' },
           { label: '코트 현황판',    icon: Monitor,     path: `/organizer/${id}/courts`,  desc: '실시간 코트별 경기 현황 (프로젝션용)' },
+          { label: '코트별 심판 모드', icon: Gavel,      path: `/referee/court/${id}`,     desc: '코트별 현재 경기 점수판 · 다음 경기 자동 배포' },
           { label: '실시간 진행',    icon: Zap,         path: `/organizer/${id}/live`,    desc: '경기 스코어 입력 · MMR 반영' },
           { label: '최종 결과 · 시상', icon: Trophy,    path: `/tournaments/${id}/results`, desc: '시상대 · 최종 순위표 · 조별 결과' },
         ].map(({ label, icon: Icon, path, desc }) => (

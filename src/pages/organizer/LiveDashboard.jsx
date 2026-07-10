@@ -772,6 +772,16 @@ export default function LiveDashboard() {
             </div>
           </div>
 
+          {/* 코트별 심판 모드 — 코트에 배치된 심판이 자기 코트 점수판을 스스로 열도록 */}
+          <div className="px-4 pt-2">
+            <button
+              onClick={() => window.open(`/referee/court/${id}`, '_blank', 'noopener')}
+              className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl bg-[#C60C30]/5 text-[#C60C30] text-xs font-bold active:bg-[#C60C30]/10 border border-[#C60C30]/15"
+            >
+              <Gavel size={13} /> 코트별 심판 모드 — 코트마다 현재 경기 자동 배포
+            </button>
+          </div>
+
           {/* 종목 탭 */}
           <div className="flex gap-2 px-4 py-2 bg-white border-b border-gray-100 overflow-x-auto">
             {categories.map(cat => (

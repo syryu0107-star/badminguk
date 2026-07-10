@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-10 — [심판] 코트별 심판 모드 — 코트 선택 → 현재 경기 점수판 도달 + 다음 경기 자동 배포 (심판 플로우 최저 갭 메움)
+
+- **심판 도달 경로 — 코트별 심판 랜딩 (audit L1, 심판 플로우 유일 코드 갭)**
+  - 파일: `src/pages/referee/CourtReferee.jsx`(신규), `src/App.jsx`, `src/pages/organizer/TournamentManage.jsx`, `src/pages/organizer/LiveDashboard.jsx`
+  - 요약: 4개 플로우 중 최저(심판 70%)의 유일한 미해결 코드 갭이던 "심판 점수판 도달 UI 경로 부재"(docs/AUDIT_RESULT.md L1)를 메웠다. 지금까지 코트에 배치된 심판은 자기 코트의 경기 점수판을 스스로 찾아갈 화면이 없어, 주최자가 LiveDashboard에서 경기마다 새 탭(`window.open`)으로 열어주거나 `/referee/:matchId` URL을 손으로 공유해야만 점수판에 도달했다 — 북극성 DoD "심판: 코트배정 자동배포+BWF 자동판정 탭입력, 종료 시 대진표 자동반영" 중 "코트배정 자동배포"가 사람 손에 묶여 있던 고리다. 신규 페이지 `CourtReferee.jsx`를 두 라우트(`/referee/court/:tournamentId`, `/referee/court/:tournamentId/:courtNo`)로 등록하고(둘 다 Req 가드, court 경로가 `/referee/:matchId`보다 구체적이라 라우팅 우선), (1) courtNo 없으면 코트 선택 그리드 — 대회 court_count ∪ 실제 배정 코트를 버튼으로 깔고 각 코트에 경기중(초록 펄스)/대기/비어있음 배지·현재 대진 미리보기·대기 경기 수 표시, (2) courtNo 있으면 그 코트 패널 — `courtQueue(cn)`이 playable 경기에서 그 코트의 현재 경기(in_progress 우선, 없으면 첫 예정)와 대기열을 뽑아, 진행 중이면 라이브 스코어(live_score_t1/t2·게임번호)+"점수판 이어서 열기", 예정이면 예정 시각+"이 경기 점수 입력 시작" 버튼을 주고 누르면 기존 BWF 점수판(`/referee/:matchId`)으로 이동(양 팀 미확정이면 비활성+안내), 아래에 이 코트 대기 경기 목록. (3) `tournament_matches` 실시간 구독(`court-ref-${id}` 채널, 이 대회 카테고리 변경만 필터)으로 경기가 끝나 다음 경기가 그 코트에 자동 배정되면(completeMatch 승자 진출·seedKnockoutFromPools/scheduler 코트 배정) 화면이 사람 조작 없이 스스로 갱신된다(코트배정 자동배포) + 15초 폴링 폴백 + 오프라인 복귀 재조회(useOnline) + ConnectionStatus 배지 + 끊김→재연결 시 전체 재조회(7-3 패턴 재사용). 종료된 대회는 점수판 진입 차단·안내. 진입점 2곳 추가: TournamentManage 메뉴에 "코트별 심판 모드"(Gavel, `/referee/court/${id}`), LiveDashboard 경기진행 탭 상단에 퀵링크(새 탭, 코트 staff에게 per-court URL 배포 가능). 스키마·외부 키 불필요 — 읽기 전용 "도달 경로"만 채우고 실제 점수 저장·승자 진출·MMR·대진 반영은 전부 기존 Scoreboard.jsx+advance.js가 담당(엔진 로직 중복 0). `npx vite build` green. 무심판 코트 셀프 스코어(선수 자가 점수 입력)는 `tournament_matches` UPDATE RLS 확장(현재 주최자 전용)이 선행돼야 발화 가능해 human-gated로 남김. (자동화율 심판 70%→78%)
+
 ## 2026-07-10 — [C5] AI 대진 최적화 — 조별 실력 균형 자동 선택 + "왜 균형적인지" 설명
 
 - **C5 AI 대진 최적화 — 다목적 시드 시뮬레이션 + 설명 (AI 차별화, 주최자)**
