@@ -107,6 +107,46 @@ export function planTournamentState({
 }
 
 /**
+ * 무인 시상 확정(auto-finalize) 준비 상태 판정 — 순수 함수.
+ *
+ * planTournamentState 는 in_progress→completed 를 "무인 자동 전환 안 함(auto:false)"
+ * 으로 두고 사람 확인만 추천한다(시상 확정은 final_rank·급수 승급을 반영하고 되돌릴 수
+ * 없기 때문). 이 함수는 그 한 번의 사람 확인마저 없애기 위한 안전 장치다 —
+ * 전 종목 실경기가 모두 끝난 뒤에도 곧바로 확정하지 않고, 점수 오류·이의제기를 흡수할
+ * 짧은 유예(grace) 창을 둔다. 유예가 지나면 무인 확정 대상(ready)이 된다.
+ *
+ * 실제 finalizeTournament 호출·유예 시작 시각(allDoneSince) 관리·유예 중 재조회는
+ * 호출부(LiveDashboard)가 한다. 이 함수는 판정만 한다.
+ *
+ * @param {object[]} matches        전 종목 경기 [{ status }] (bye 제외 후 완료 판정)
+ * @param {number|null} allDoneSince 모든 경기가 처음 '완료'로 관측된 시각(ms). 아직 없으면 null.
+ * @param {number} now              기준 시각(ms)
+ * @param {number} graceSec         유예(초), 기본 180(3분)
+ * @returns {{ allDone:boolean, ready:boolean, remainingSec:number|null }}
+ *   allDone     — 부전승/부전 제외 실경기가 전부 끝났는가
+ *   ready       — 유예까지 지나 지금 무인 확정해도 되는가
+ *   remainingSec— 확정까지 남은 유예 초(allDone 전이면 null)
+ */
+export function planAutoFinalize({
+  matches = [],
+  allDoneSince = null,
+  now = Date.now(),
+  graceSec = 180,
+} = {}) {
+  const real = (matches ?? []).filter(m => m?.status !== 'bye')
+  const allDone = real.length > 0 && real.every(m => DONE.includes(m.status))
+  if (!allDone) return { allDone: false, ready: false, remainingSec: null }
+
+  const grace = Math.max(0, Math.round(Number(graceSec) || 0))
+  // 아직 유예 시작 시각이 기록 안 됐으면(호출부가 이번에 기록) 전체 유예가 남은 것으로 본다.
+  if (allDoneSince == null) return { allDone: true, ready: grace <= 0, remainingSec: grace }
+
+  const elapsedSec = Math.max(0, (now - allDoneSince) / 1000)
+  const remainingSec = Math.max(0, Math.round(grace - elapsedSec))
+  return { allDone: true, ready: remainingSec <= 0, remainingSec }
+}
+
+/**
  * 참가 신청을 자동 승인 가능 / 검토 필요 / 입금 대기 / 파트너 대기로 분류.
  *
  * "사람은 예외만" 원칙: 의심 없는 정상 신청은 앱이 자동 승인하고, 샌드배깅

@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-10 — [C2] 무인 시상 확정 (전 종목 종료 → 유예 후 자동 finalizeTournament, 주최자 완주 마지막 수작업 제거)
+
+- **C2 대회 상태 오케스트레이션 — 무인 시상 확정 (필수/중, 주최자 완주 잔여 갭)**
+  - 파일: `src/lib/stateMachine.js`(planAutoFinalize 추가), `src/pages/organizer/LiveDashboard.jsx`
+  - 요약: 북극성 DoD "주최자: …상태전환·시상확정이 자동, 사람은 예외 큐만" 중 마지막 사람 손길이던 "시상 확정"을 무인화했다. 기존 `planTournamentState` 는 in_progress→completed 를 의도적으로 auto:false(무인 전환 안 함)로 두고 "실시간 진행 화면에서 한 번 확인"만 추천해, 모든 경기가 끝나도 주최자가 직접 "대회 종료·시상 확정" 버튼을 눌러야 최종순위·급수 승급·상장이 확정됐다(주최자 유일하게 남은 상시 수작업). MMR 은 이미 각 경기 완료 시점(completeMatch → apply_match_mmr RPC)에 반영되므로 확정이 추가하는 것은 final_rank·급수 승급뿐이라 되돌림 위험이 작지만, 그래도 점수 오입력·이의제기를 흡수할 3분 유예 창을 두고 자동화했다. 순수 함수 `planAutoFinalize({ matches, allDoneSince, now, graceSec=180 })` 신설 — 부전승/부전(bye) 제외 실경기가 전부 DONE 인가(allDone)·유예가 지나 지금 확정해도 되는가(ready)·남은 유예초(remainingSec)를 판정만 하고, 실제 finalizeTournament 호출과 유예 시작 시각 관리는 호출부가 맡는다(순수 함수 유지). LiveDashboard 는 `matches` 상태가 활성 종목만 담기므로 (1) 값싼 게이트로 활성 종목 완료를 먼저 확인한 뒤 (2) 전 종목 status 를 재조회(finishTournament 와 동일 경로)해 판정하고, 무인 자동 진행 ON + ready 면 `finalizeTournament(supabase, id, catIds)` 를 1회 자동 실행(autoFinalizingRef 로 중복 차단, 실패 시 재시도 허용)한 뒤 status='completed'·순위표 탭 이동·급수 승급 축하 배너를 띄운다. 유예 중에는 "무인 시상 확정 대기 — 약 m:ss 후 자동 확정, 점수 정정이 필요하면 지금 하세요" 빨간 배너와 "지금 시상 확정" 원터치를 제공하고(무인 OFF면 기존 수동 "대회 종료·시상 확정" 버튼 그대로), 실시간 틱 hasLive 게이트에 "무인 확정 유예 진행 중" 조건을 추가해 계산이 확정 순간까지 10초마다 이어지게 했다. 부수로, 기존 수동 finishTournament 이 finalizeTournament 반환값을 버려 승급 배너가 실제로는 안 뜨던 문제를 함께 고쳐(res.promotions 캡처) 자동·수동 양쪽에서 "🎉 급수 승급 N명" 배너가 뜨도록 했다. 스키마 변경·외부 키 불필요(기존 finalizeTournament·finalizeRanks·apply_match_mmr·promote_grades RPC 재사용). 엔진 8개 시나리오(빈 배열·bye만·완료+진행중 혼재·유예 미시작 전체·시작 직후·중간 경과·유예 초과 ready·graceSec=0 즉시 ready) 자체 검증 통과, `npx vite build` green. draft→open(개설 공개)만 개설자 의도적 판단으로 수동 유지.
+
 ## 2026-07-10 — [C6] 빈 코트 실제 재배치 실행 (유휴 코트로 대기 경기 이동 → 자동 호출, C6 ⚠️→✅)
 
 - **C6 실시간 진행·지연 재조정 — 빈 코트 실제 재배치 (필수/중, 운영 완주 마지막 실행 갭)**

@@ -5,7 +5,7 @@
 ## 플로우 자동화율 (0~100%)
 | 플로우 | 점수 | 완주 막는 잔여 갭 |
 |--------|:---:|------------------|
-| 주최자 | 80% | 무통장 입금 자동 매칭 ✅ / 디지털 상장 ✅ / 사후 공지·리마인더·감사·설문(C11) ✅ / **정산 손익·원천징수 리포트(C10)** ✅ — 참가비 수입−경비−상금 자동 손익+상금 원천징수 계산+리포트 인쇄. 잔여: PG 실결제(human-gated)·draft→open 자동 개설·시상 확정 무인 |
+| 주최자 | 85% | 무통장 입금 자동 매칭 ✅ / 디지털 상장 ✅ / 사후 공지·리마인더·감사·설문(C11) ✅ / 정산 손익·원천징수 리포트(C10) ✅ / **시상 확정 무인(C2)** ✅ — 전 종목 종료 후 유예(3분, 점수정정·이의제기 창) 지나면 무인 진행 ON 상태에서 finalizeTournament 자동 실행(최종순위·급수승급). 잔여: PG 실결제(human-gated)·draft→open 자동 개설(공개는 개설자 판단으로 남김) |
 | 선수   | 76% | 셀프 체크인·디지털 선수증 ✅, 입금 확인 자동화 ✅, 결과·급수·상장 ✅, 대회 안내·공지함 수신 ✅, **문의 챗봇(C9)** ✅ — 규정·일정·참가비·내신청 자동응답으로 단톡방 문의 대체 / PG 카드결제 부재 |
 | 심판   | 70% | 무심판 코트 셀프스코어 부재 |
 | 운영   | 80% | 빈코트 자동투입·자동호출·사전알림·예상시각(관측 페이스 보정)·노쇼 타이머·지연 예측·**빈코트 실제 재배치 실행(C6)** ✅ — 유휴 코트로 과부하 코트 대기 경기를 실제 이동(court_number UPDATE)→자동 호출까지 무인. 잔여: 자동 부전승 확정(현장 예외로 사람 1탭 유지)·rescheduleAfterForfeit(사전스케줄용, 라이브 미적용) |
@@ -14,7 +14,7 @@
 | C | 클러스터 | 상태 | 비고(코드 근거) |
 |---|----------|:---:|----------------|
 | C1 | 경기 호출·알림 인프라 | ⚠️ | notify.js+orchestrator.js — 자동호출·사전알림(곧 호출)·예상 호출시각 end-to-end(LiveDashboard→MyMatches). 웹푸시/알림톡/SMS는 human-gated 스텁, WO카운트다운·재알림 타이머 미구현 |
-| C2 | 대회 상태 오케스트레이션 | ⚠️ | stateMachine.js 신설 — 순수 판정 엔진. TournamentManage "무인 자동 진행" 스위치: 접수 마감 시각 경과/정원 충족 시 open→closed, 대회 당일+대진표 존재 시 closed→in_progress 자동 전환(추천 배너+원터치). EntryManagement "무인 자동 승인": 정상 신청 자동 승인, 샌드배깅 의심·입금 미확인·정원 초과만 사람 큐. draft→open(개설 공개)·시상 확정(무인)은 아직 수동 |
+| C2 | 대회 상태 오케스트레이션 | ⚠️ | stateMachine.js 순수 판정 엔진. TournamentManage "무인 자동 진행": open→closed(마감/정원)·closed→in_progress(당일+대진표) 자동. EntryManagement "무인 자동 승인": 정상 신청 자동, 예외만 큐. **in_progress→completed 무인 확정** ✅ — `planAutoFinalize`(순수·유예 판정) + LiveDashboard 무인 진행 ON이면 전 종목 종료 후 3분 유예(점수정정 창) 지나 finalizeTournament 자동 실행(순위·급수·상장 데이터 확정)+승급 축하 배너, "지금 시상 확정" 원터치. 잔여: draft→open(개설 공개)만 수동(개설자 의도적 판단으로 보류) |
 | C3 | 입금·결제·환불 | ⚠️ | `payment.js` 신설 — 무통장 입금 내역 붙여넣기→신청자명 퍼지매칭(Levenshtein+정규화)+금액 대조→`payment_status='confirmed'` 자동 처리. EntryManagement "입금 자동 매칭" 패널(자동확인/확인권장/미매칭 분류, 1탭 확인). 입금 확인이 auto-approval 입금대기 버킷을 비워 무인 승인까지 연결. PG 실결제(토스)·가상계좌·환불규정 코드화는 미구현·human-gated |
 | C4 | 셀프 체크인 | ✅ | `checkin.js` 엔진 신설 — 선수 MyMatches "디지털 선수증" 카드에서 대회 당일/진행중 원터치 셀프 체크인(verified_method='self'). 실명인증 선수는 무인 완료, 미인증은 "본인확인 권장" 예외로만 노출. LiveDashboard 체크인 패널 실시간 반영(tournament_checkins 구독)+셀프/본인확인권장/신고 요약. 운영자 수동 체크인 병존. QR/PIN 키오스크·대리스코어링만 잔여 |
 | C5 | AI 대진 최적화 | ⚠️ | seededShuffle 단일 셔플 + MMR 시드만 |
@@ -27,6 +27,25 @@
 | C12 | 대회 탐색·파트너·전적 | ⚠️ | 파트너 초대·랭킹 있음, 추천/매칭 없음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-10 · C2 · `src/lib/stateMachine.js`(planAutoFinalize 추가)·`src/pages/organizer/LiveDashboard.jsx`
+  · 무인 시상 확정(C2) — 주최자 완주의 마지막 사람 손길 제거. 지금까지 planTournamentState 는
+    in_progress→completed 만 auto:false(무인 안 함)로 두고 "실시간 진행 화면에서 한 번 확인"만
+    추천해, 전 경기가 끝나도 사람이 "대회 종료·시상 확정" 버튼을 눌러야 순위·급수·상장이 확정됐다
+    (주최자 유일 잔여 수작업). MMR 은 이미 경기 완료 때(completeMatch) 반영되므로 확정이 추가하는 건
+    최종순위(final_rank)·급수 승급뿐 — 그래도 점수 오류·이의제기를 흡수할 3분 유예 창을 두고 자동화.
+    순수 함수 `planAutoFinalize({matches,allDoneSince,now,graceSec=180})` 신설 — 부전승/부전 제외
+    실경기가 전부 끝났는가(allDone)·유예가 지나 지금 확정해도 되는가(ready)·남은 유예초(remainingSec)
+    를 판정. 실제 finalizeTournament 호출·유예 시작시각(allDoneSinceRef) 관리는 호출부(LiveDashboard).
+    LiveDashboard 는 matches 가 활성 종목만 담기므로 값싼 게이트(활성 종목 완료) 후 전 종목 status 를
+    재조회해 판정하고, 무인 진행 ON + ready 면 finalizeTournament 를 1회 자동 실행(autoFinalizingRef
+    중복 차단, 실패 시 재시도 허용)→status='completed'·순위표 이동·급수 승급 배너. 유예 카운트다운은
+    "무인 시상 확정 대기 — 약 m:ss 후 자동 확정, 점수 정정이 필요하면 지금 하세요" 배너로 표시하고
+    "지금 시상 확정" 원터치 제공(무인 OFF면 기존 수동 버튼 그대로). 실시간 틱 hasLive 게이트에
+    유예 진행 조건을 추가해 카운트다운이 확정까지 이어지게 함. 수동 finishTournament 도 승급 결과를
+    캡처해 배너 표시(기존엔 반환값 무시로 승급 배너가 실제로 안 떴음 — 부수 수정). 스키마 변경·외부 키
+    불필요(기존 finalizeTournament·apply_match_mmr·promote_grades RPC 재사용). 엔진 8개 시나리오
+    (빈·onlyBye·mixed·유예 시작/중간/경과·grace0) 자체 검증 통과, `npx vite build` green.
+    (자동화율 주최자 80%→85%)
 - 2026-07-10 · C6 · `src/lib/orchestrator.js`(planRebalance 추가)·`src/pages/organizer/LiveDashboard.jsx`
   · 빈 코트 실제 재배치 실행(C6 ⚠️→✅) — 운영 완주를 막던 마지막 실행 갭. planAutoAdvance는
     코트마다 자기 큐만 진행해, 한 코트에 경기가 몰려 밀리는데 옆 코트가 텅 비어도 대기 경기가

@@ -6,6 +6,7 @@ import { calculatePoolStandings, prizeLabel } from '../../lib/tournament'
 import { completeMatch, finalizeTournament, scoresToPairs } from '../../lib/advance'
 import { callMatch, callMatchSoon, callWalkoverWarn } from '../../lib/notify'
 import { planAutoAdvance, planNoShow, analyzeDelay, planRebalance } from '../../lib/orchestrator'
+import { planAutoFinalize } from '../../lib/stateMachine'
 import { summarizeCheckins } from '../../lib/checkin'
 import { buildCertificates, printCertificates } from '../../lib/certificate'
 import TopBar from '../../components/TopBar'
@@ -38,6 +39,10 @@ function maskName(name) {
 const CERT_COLOR = { none: 'bg-gray-100 text-gray-500', c: 'bg-blue-100 text-blue-700', b: 'bg-purple-100 text-purple-700', a: 'bg-red-100 text-red-700' }
 
 const DONE_STATUSES = ['completed', 'forfeited', 'bye']
+
+// 무인 시상 확정 유예(초) — 전 종목 종료 후 점수 오류·이의제기를 흡수할 창.
+// 이 시간이 지나면 무인 진행 ON 상태에서 스스로 대회 종료·시상 확정을 실행한다.
+const FINALIZE_GRACE_SEC = 180
 
 function statusLabel(m) {
   if (m.status === 'scheduled')   return '예정'
@@ -74,6 +79,12 @@ export default function LiveDashboard() {
   const soonSentRef   = useRef({})   // { [matchId]: ts } 사전알림 중복 방지
   const orchestrating = useRef(false)
   const rebalancing   = useRef(false) // 재배치 실행 중복 방지
+
+  // ── 무인 시상 확정 (C2) 상태 ───────────────────────────────────────
+  const [autoFinalize, setAutoFinalize] = useState(null) // { allDone, ready, remainingSec } 무인 확정 대기 표시
+  const [promotions, setPromotions]     = useState(null) // 시상 확정 후 급수 승급 결과(축하 배너)
+  const allDoneSinceRef   = useRef(null) // 전 종목이 처음 완료로 관측된 시각(ms)
+  const autoFinalizingRef = useRef(false) // 무인 확정 실행 중복 방지
 
   // ── 노쇼(호출 미응답) 타이머 상태 (C7) ─────────────────────────────
   const [noShow, setNoShow]   = useState({})   // { [matchId]: { phase, secondsLeft, elapsedSec, ... } }
@@ -157,11 +168,15 @@ export default function LiveDashboard() {
   // ── 실시간 틱: 노쇼 카운트다운 + 지연 예측(진행 중 경기 경과)을 10초마다 갱신 ──
   //   호출 이력이 있거나 진행 중 경기가 있을 때만 돈다(불필요한 리렌더 방지).
   useEffect(() => {
-    const hasLive = Object.keys(calledIds).length > 0 || matches.some(m => m.status === 'in_progress')
+    const hasLive =
+      Object.keys(calledIds).length > 0 ||
+      matches.some(m => m.status === 'in_progress') ||
+      // 무인 시상 확정 유예 카운트다운이 진행 중이면 계속 틱을 돌려 확정까지 이어간다.
+      (autoRun && autoFinalize?.allDone && !autoFinalize?.ready && tournament?.status !== 'completed')
     if (!hasLive) return
     const iv = setInterval(() => setNowTick(Date.now()), 10000)
     return () => clearInterval(iv)
-  }, [calledIds, matches])
+  }, [calledIds, matches, autoRun, autoFinalize, tournament?.status])
 
   // ── 노쇼 판정: 호출 후 미응답 경기를 단계별로 분류하고, 자동 진행 시 경고 발송 ──
   //   waiting/warned/overdue 3단계. 경고(WALKOVER_WARN)는 무인 진행이 켜졌을 때만
@@ -191,6 +206,73 @@ export default function LiveDashboard() {
     () => analyzeDelay(matches, { matchMinutes: categories.find(c => c.id === activeCat)?.match_duration_min ?? 30, now: nowTick }),
     [matches, categories, activeCat, nowTick]
   )
+
+  // ── 무인 시상 확정 (C2) — 전 종목 종료 + 유예 경과 시 스스로 대회 종료·시상 확정 ──
+  //   MMR 은 경기 완료(completeMatch) 때 이미 반영되므로, 여기서 추가되는 것은 최종
+  //   순위(final_rank)·급수 승급뿐이다. 그래도 점수 오류·이의제기를 흡수할 유예 창을 두고,
+  //   유예가 지나면 finalizeTournament 를 1회 자동 실행한다(무인 진행 ON 일 때만).
+  //   matches 는 활성 종목만 담기므로, 값싼 게이트 후 전 종목 상태를 재조회해 판정한다.
+  useEffect(() => {
+    if (!autoRun || !tournament || tournament.status === 'completed') {
+      allDoneSinceRef.current = null
+      setAutoFinalize(prev => (prev ? null : prev))
+      return
+    }
+    const catIds = categories.map(c => c.id)
+    if (!catIds.length) return
+
+    // 빠른 게이트: 활성 종목이 아직 안 끝났으면 전 종목도 아님 → 값비싼 전체 조회 생략
+    const activeReal = matches.filter(m => m.status !== 'bye')
+    const activeAllDone = activeReal.length > 0 && activeReal.every(m => DONE_STATUSES.includes(m.status))
+    if (!activeAllDone) {
+      allDoneSinceRef.current = null
+      setAutoFinalize(prev => (prev ? null : prev))
+      return
+    }
+
+    let cancelled = false
+    ;(async () => {
+      const { data: all, error } = await supabase
+        .from('tournament_matches')
+        .select('status')
+        .in('category_id', catIds)
+      if (cancelled || error) return
+
+      const plan = planAutoFinalize({
+        matches: all ?? [],
+        allDoneSince: allDoneSinceRef.current,
+        now: Date.now(),
+        graceSec: FINALIZE_GRACE_SEC,
+      })
+      if (plan.allDone) {
+        if (allDoneSinceRef.current == null) allDoneSinceRef.current = Date.now()
+      } else {
+        allDoneSinceRef.current = null
+      }
+      if (cancelled) return
+      setAutoFinalize(plan)
+
+      if (plan.ready && !autoFinalizingRef.current) {
+        autoFinalizingRef.current = true
+        pushAutoLog('모든 경기 종료 — 시상 자동 확정 중…')
+        try {
+          const res = await finalizeTournament(supabase, id, catIds)
+          if (cancelled) return
+          setTournament(t => ({ ...t, status: 'completed' }))
+          if (res?.promotions?.length) setPromotions(res.promotions)
+          setViewMode('standings')
+          pushAutoLog(
+            `시상 자동 확정 완료 — 순위·급수 반영${res?.promotions?.length ? ` · 승급 ${res.promotions.length}명` : ''}`
+          )
+        } catch (e) {
+          autoFinalizingRef.current = false // 재시도 허용
+          pushAutoLog('시상 자동 확정 실패 — 수동 확정이 필요해요')
+        }
+      }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matches, autoRun, nowTick, categories, tournament?.status])
 
   async function loadMatches() {
     const { data } = await supabase
@@ -585,8 +667,9 @@ export default function LiveDashboard() {
 
     setFinishing(true)
     try {
-      await finalizeTournament(supabase, id, catIds)
+      const res = await finalizeTournament(supabase, id, catIds)
       setTournament(t => ({ ...t, status: 'completed' }))
+      if (res?.promotions?.length) setPromotions(res.promotions)
       alert('대회가 종료되었습니다! 🏆 순위표 탭에서 시상 결과를 확인하세요.')
       setViewMode('standings')
     } catch (e) {
@@ -710,6 +793,7 @@ export default function LiveDashboard() {
                     <p className="font-bold text-sm">무인 자동 진행</p>
                     <p className="text-[11px] text-gray-500 leading-tight">
                       코트가 비면 다음 경기를 자동 호출하고, 다음 팀에게 "곧 호출" 을 미리 알려요.
+                      모든 경기가 끝나면 시상까지 자동 확정합니다.
                     </p>
                   </div>
                 </div>
@@ -1062,17 +1146,44 @@ export default function LiveDashboard() {
               </div>
             )}
 
-            {/* 대회 종료 · 시상 확정 */}
+            {/* 무인 시상 확정 대기 (무인 진행 ON + 전 종목 종료 후 유예 카운트다운) */}
+            {!isCompleted && catMatches.length > 0 && autoRun && autoFinalize?.allDone && (
+              <div className="mb-3 rounded-2xl border border-[#C60C30] bg-red-50 p-4">
+                <p className="font-bold text-sm text-[#C60C30] flex items-center gap-1.5">
+                  <Trophy size={15} />
+                  {autoFinalize.ready ? '시상 자동 확정 중…' : '무인 시상 확정 대기'}
+                </p>
+                <p className="text-[11px] text-gray-600 mt-0.5 leading-tight">
+                  {autoFinalize.ready
+                    ? '최종 순위·급수를 반영하고 있어요. 잠시만 기다려주세요.'
+                    : `모든 경기가 끝났어요 — 약 ${fmtCountdown(autoFinalize.remainingSec)} 후 시상을 자동 확정합니다. 점수 정정이 필요하면 지금 하세요.`}
+                </p>
+              </div>
+            )}
+
+            {/* 급수 승급 축하 (시상 확정 후) */}
+            {promotions?.length > 0 && (
+              <div className="mb-3 rounded-2xl border border-emerald-300 bg-emerald-50 p-4">
+                <p className="font-bold text-sm text-emerald-700">🎉 급수 승급 {promotions.length}명</p>
+                <p className="text-[11px] text-emerald-700/80 mt-0.5 leading-tight">
+                  시상 확정과 함께 공인대회 자동 승급이 반영됐어요.
+                </p>
+              </div>
+            )}
+
+            {/* 대회 종료 · 시상 확정 (수동 — 무인 OFF 이거나 지금 바로 확정할 때) */}
             {!isCompleted && catMatches.length > 0 && (
               <button
                 onClick={finishTournament}
-                disabled={finishing}
+                disabled={finishing || autoFinalize?.ready}
                 className="w-full py-4 rounded-2xl font-bold text-white text-base
                            flex items-center justify-center gap-2 active:scale-[.97] transition disabled:opacity-60"
                 style={{ background: 'linear-gradient(135deg, #003478, #C60C30)' }}
               >
                 <Trophy size={18} />
-                {finishing ? '시상 확정 중...' : '대회 종료 · 시상 확정'}
+                {finishing || autoFinalize?.ready
+                  ? '시상 확정 중...'
+                  : autoRun && autoFinalize?.allDone ? '지금 시상 확정' : '대회 종료 · 시상 확정'}
               </button>
             )}
             {isCompleted && (
