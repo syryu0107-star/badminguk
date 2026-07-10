@@ -8,9 +8,9 @@
 //    none은 레거시 호환용(MMR 변동 없음 행 표시). 신규 대회는 항상 c/b/a.
 export const CERT_LEVELS = {
   none: { label: '미반영',   k: 0,  color: 'gray',   desc: 'MMR 변동 없음' },
-  c:    { label: '구 대회',  k: 32, color: 'blue',   desc: 'K=32 · 구 단위 대회' },
-  b:    { label: '시 대회',  k: 48, color: 'purple', desc: 'K=48 · 시 단위 대회' },
-  a:    { label: '전국 대회', k: 64, color: 'red',    desc: 'K=64 · 전국 단위 대회' },
+  c:    { label: '구 대회',  k: 32, color: 'blue',   desc: '구 단위 대회 · 순위 변동 보통' },
+  b:    { label: '시 대회',  k: 48, color: 'purple', desc: '시 단위 대회 · 순위 변동 큼' },
+  a:    { label: '전국 대회', k: 64, color: 'red',    desc: '전국 단위 대회 · 순위 변동 매우 큼' },
 }
 
 // 신규 플레이어(10경기 미만) K 보정: 1.5배

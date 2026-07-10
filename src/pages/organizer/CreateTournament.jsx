@@ -390,23 +390,16 @@ export default function CreateTournament() {
                 <p className={`text-sm font-bold ${form.unit === u.key ? 'text-[#C60C30]' : 'text-gray-700'}`}>
                   {u.label} 대회
                 </p>
-                <p className="text-xs text-gray-400 mt-0.5">MMR 반영 K{u.k}</p>
+                <p className="text-xs text-gray-400 mt-0.5">순위 변동 {u.impact}</p>
               </button>
             ))}
           </div>
-          <p className="text-[11px] text-gray-400 mt-2 px-1 leading-relaxed">
-            단위가 클수록 MMR 반영과 급수 승급 가중이 커집니다 (구 &lt; 시 &lt; 전국). 승급도 이 단위의 급수 트랙에 반영돼요.
-          </p>
-        </section>
-
-        {/* 모든 대회는 전국 랭킹(MMR)에 반영 */}
-        <section>
-          <div className="flex items-start gap-2.5 bg-blue-50 rounded-2xl px-4 py-3.5">
+          <div className="flex items-start gap-2.5 bg-blue-50 rounded-2xl px-4 py-3.5 mt-3">
             <Info size={18} className="text-blue-500 shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-bold text-blue-800">이 대회 결과는 전국 랭킹(MMR)에 반영됩니다</p>
+              <p className="text-sm font-bold text-blue-800">모든 대회 결과는 전국 랭킹(MMR)에 반영됩니다</p>
               <p className="text-xs text-blue-600 mt-1 leading-relaxed">
-                모든 경기 결과가 선수들의 MMR과 전국 랭킹에 자동으로 반영돼요. 대회를 치르면 실력에 따라 순위가 오르내립니다.
+                단위가 클수록 순위 변동과 급수 승급 폭이 커져요 (구 &lt; 시 &lt; 전국). 승급은 선택한 단위의 급수에 반영됩니다.
               </p>
             </div>
           </div>

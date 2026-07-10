@@ -67,9 +67,9 @@ export function allowedGradesLabel(arr) {
 // ══════════════════════════════════════════════════════════════════
 
 export const UNITS = [
-  { key: 'gu',  label: '구',   cert: 'c', k: 32 },
-  { key: 'si',  label: '시',   cert: 'b', k: 48 },
-  { key: 'nat', label: '전국', cert: 'a', k: 64 },
+  { key: 'gu',  label: '구',   cert: 'c', k: 32, impact: '보통' },
+  { key: 'si',  label: '시',   cert: 'b', k: 48, impact: '큼' },
+  { key: 'nat', label: '전국', cert: 'a', k: 64, impact: '매우 큼' },
 ]
 export const UNIT_KEYS = UNITS.map(u => u.key)
 
