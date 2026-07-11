@@ -27,6 +27,26 @@
 | C12 | 대회 탐색·파트너·전적 | ✅ | `discover.js`+`partners.js`+`record.js` — **대회 탐색 추천** ✅ + **파트너 매칭** ✅ + **통합 전적 뷰** ✅. **대회 탐색 추천(`discover.js`)**: `regionTokens`(venue·주소에서 17시도+시/군/구 세밀 토큰 추출, 광역시/특별시 중복 제외)·`preferredRegions`(내 참가 이력 대회의 지역 빈도 집계)·`ddayOf`(로컬 자정 기준 D-day)·`recommendTournaments`(접수중·미신청·미래 대회 중 급수 참가 가능 종목이 있는 것만 골라 지역 매칭·마감 임박·대회일 근접으로 점수화, 근거 배열 반환). 자격 판정은 lib/grades.js로 승격한 공용 `checkEligibility`를 fitOf로 주입(신청 화면과 100% 동일 로직·중복 0). Tournaments.jsx가 로그인 선수의 프로필·참가 이력을 1회 로드→"🎯 나에게 맞는 대회" 카드+근거 칩(급수 파랑/지역 초록/마감 빨강·주황) 노출(전체 탭·검색 없을 때만, 실패 시 검색만 degrade). 파트너 매칭·통합 전적은 아래 유지. 통합 전적(`record.js`): `computeCareerRecord`가 내가 낀 전 대회 완료 경기(+세트)에서 총 승패·승률·세트/점수 득실·풀세트·부전 카운트와 상대 선수별 head-to-head(`byOpponent`)를 집계, `opponentPlayers`(팀에서 나 제외·게스트팀명 폴백)·`hasCareerRecord`. Profile "대회 커리어" 탭에 통합 전적 카드(승/패/승률 게이지·세부지표)+상대 전적 카드(자주 만난 상대별 W/L 최대 8명)를 추가, 내 엔트리 id 배치로 tournament_matches 조회(try-catch degrade, 헤더 mmr delta 근사와 달리 실경기 기준 정확 전적). 파트너 매칭: `collectPastPartners`(내가 낀 복식 신청 이력에서 상대를 모아 함께 출전 횟수·최근순 집계)+`rankPartnerSuggestions`(호출부 checkEligibility 주입 → 종목 자격 통과 먼저·횟수·최근순)+`partnerReason`. TournamentDetail 복식 신청 폼에 "추천 파트너 · 지난 대회에 함께 나간 분들" 카드(자격 통과 최대 4명, "다시 초대" 원터치→selectPartner). 대진DB 개인화 추천으로 검색-only 마찰 완화. 잔여: 대회 탐색 추천(급수·지역 맞춤 대회 추천)만 남음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-11 · 하드닝(테스트 커버리지 확장 ③) · `tests/engines3.test.mjs`(신규)
+  · 경쟁 무결성·레이팅·입금 매칭 3대 최고위험 엔진에 회귀 테스트 35개 추가 — 직전 두 런이 판정
+    엔진(engines.test.mjs 36) + 나머지 순수 엔진(engines2.test.mjs 27)을 덮었지만, **깨지면 조용히
+    잘못된 팀이 진출(=엉뚱한 시상)·레이팅이 틀어짐·엉뚱한 입금이 자동 확인되는** 최고위험 엔진 3종은
+    여전히 커밋된 테스트가 0이었다(직전 로그가 "다음 후보: payment.matchDeposits·tournament.generatePools·
+    mmr"로 명시). 기능 백로그가 human-gated로 소진된 하드닝 모드에서 북극성 "never regressed"를 지킬
+    최고가치 슬라이스. `tests/*.test.mjs` 자동 발견 러너에 **새 파일만 추가**(소스·기존 테스트 불변 →
+    회귀 위험 0), 각 단언은 소스 실측 트레이스. 커버: **tournament**(generatePools 빈/RangeError/조
+    이름·개수/스네이크 시드 균형·무작위 재현성, calculatePoolStandings 승패·게임/점수 득실 집계·**표준
+    타이브레이커 승자승 우선(a>b)** vs **득실 우선(b>a)**·3자 동률 승자승 미적용(순환 방지)·무경기 순번,
+    determineAdvancements 직행+와일드카드 득실순·WC0, countActualAdvancers 균형/불균형 풀 상한·
+    knockoutSkeletonSize nextPow2/진출<2=0, generateKnockoutBracket 진출<2=[]/3팀 size4 부전승1건 라운드,
+    prizeLabel 시상범위, formatSummary format_label 우선·조별+토너먼트 합성), **mmr**(CERT_LEVELS K계약,
+    partnerAdjustment 강/약 파트너·상하한 클램프, teamMMR 반올림, calcMMRDelta none0/동급±/신규 1.5배,
+    resolveMatchMMR none 전원0·복식 동급 대칭·after 하한100), **payment**(normalizeName 괄호/꼬리숫자/공백,
+    parseAmount 콤마/통화/실패, nameSimilarity 동일1/포함0.9/오타 부분점수, parseDeposits 날짜라인 최대금액,
+    matchDeposits 정확확인·부족/오타 review·미매칭/미사용 분리·무료/확정/철회/환불 제외·null 안전).
+    `npm test` → **98/98 통과**(기존 63 + 신규 35), `npx vite build` green. 다음 하드닝 후보: notify/campaign
+    (supabase 스텁 주입 필요)·advance.advanceWinner/completeMatch(supabase 의존)·bwf.scoreSummary 세부 +
+    UI 빈/로딩/에러 상태·실시간 구독 경쟁조건. (플로우 점수 불변 — 자동화 기능이 아니라 품질 하드닝)
 - 2026-07-11 · 하드닝(테스트 커버리지 확장) · `tests/engines2.test.mjs`(신규)
   · 미커버 순수 엔진 12종에 회귀 테스트 27개 추가 — 직전 런이 커밋한 회귀 테스트 그물(`engines.test.mjs`,
     36개)이 자동화 "판정" 엔진(bwf·scheduler·stateMachine·orchestrator.planNoShow·advance·noshowPredict·

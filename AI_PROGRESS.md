@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-11 — [하드닝] 회귀 테스트 커버리지 확장 ③ — 경쟁 무결성·레이팅·입금 3대 최고위험 엔진에 35개 테스트 추가
+
+- **품질 하드닝 — 회귀 테스트 그물 확장(tournament·mmr·payment)**
+  - 파일: `tests/engines3.test.mjs`(신규)
+  - 요약: 직전 두 런이 판정 엔진(`engines.test.mjs` 36) + 나머지 순수 엔진(`engines2.test.mjs` 27)을 덮었지만, **깨지면 조용히 잘못된 팀이 본선 진출(=엉뚱한 시상)·레이팅이 틀어짐·엉뚱한 입금이 자동 확인되는** 최고위험 엔진 3종(`tournament.js`·`mmr.js`·`payment.js`)은 여전히 커밋된 테스트가 0이었다(직전 하드닝 로그가 "다음 후보: payment.matchDeposits·tournament.generatePools·mmr"로 명시). 비-human-gated 기능 백로그가 소진된 하드닝 모드에서 북극성 "매 실행 strictly better·never regressed"를 지킬 최고가치 슬라이스로 이 3대 엔진 커버를 선택. `scripts/run-tests.mjs`가 `tests/*.test.mjs`를 자동 발견하므로 **새 파일만 추가**(기존 테스트·엔진·페이지 불변 → 회귀 위험 0). 각 단언은 소스를 실측 트레이스(특히 타이브레이커 시나리오는 4팀 조별 결과로 손계산). 커버(엔진·불변식): **tournament**(generatePools 빈입력/poolSize<1·비정수 RangeError/조 개수·A·B·C조 이름·전원배정/**시드 스네이크 균형편성**(최강+최약 한 조)/무작위 편성 시드 재현성, calculatePoolStandings 승패·게임/점수 득실 집계 정확·**표준 타이브레이커=승자승 우선(a>b)** vs **득실 우선 프리셋=득실 우선(b>a)**·**3자 동률이면 승자승 미적용(순환 방지)→점수 득실**·무경기 시 전원0 순번, determineAdvancements 직행+와일드카드(득실순)·WC0 직행만, countActualAdvancers 균형/불균형 풀(작은 조는 조 팀 수까지·WC는 실후보 상한), knockoutSkeletonSize nextPow2·진출<2=0, generateKnockoutBracket 진출<2=[]·3팀→size4 부전승1건·round2 존재, prizeLabel 시상 범위 안/밖 null, formatSummary format_label 우선·조별+토너먼트+판수/점수 합성), **mmr**(CERT_LEVELS K값 계약 none0/c32/b48/a64, partnerAdjustment 강한 파트너 0.75·약한 1.25·상하한 0.4/1.6 클램프, teamMMR 평균 반올림, calcMMRDelta none=0·동급 승/패 ±16·신규<10경기 K 1.5배→24, resolveMatchMMR none 전원 delta0·복식 동급 승팀+16/패팀−16 대칭·after 하한100 방어), **payment**(normalizeName 괄호/꼬리숫자/공백 제거, parseAmount 콤마/통화기호/실패 null, nameSimilarity 동일1/포함0.9/오타 0.6~0.85, parseDeposits 공백·날짜 라인에서 날짜 제외 최대금액, matchDeposits 정확 일치 자동확인·금액부족/이름오타 review·미매칭 신청과 미사용 입금 분리·무료/확정/철회/환불 신청 매칭 제외·null 입력 안전). `npm test` → **98/98 통과**(기존 63 + 신규 35), `npx vite build` green. 다음 하드닝 후보: notify/campaign(supabase 스텁 주입)·advance.advanceWinner/completeMatch(supabase 의존)·bwf.scoreSummary 세부 + UI 빈/로딩/에러 상태·실시간 구독 경쟁조건. (플로우 점수 불변 — 품질 하드닝)
+
 ## 2026-07-11 — [하드닝] 회귀 테스트 커버리지 확장 — 미커버 순수 엔진 12종에 27개 테스트 추가
 
 - **품질 하드닝 — 회귀 테스트 그물 확장(미커버 엔진 커버)**
