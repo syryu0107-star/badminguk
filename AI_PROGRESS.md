@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-11 — [C3] 선수 입금 안내 — 참가비 금액·본인 실명 입금자명·자동확인 안내 (무통장 결제 루프 선수측 완결)
+
+- **C3 입금·결제·환불 — 선수 입금 안내 (필수/중, 선수 결제 단계 완주 공백, 접수→입금→승인 무인 체인)**
+  - 파일: `src/lib/deposit.js`(신규), `src/pages/player/MyMatches.jsx`
+  - 요약: 참가비가 있는 대회에 신청한 선수의 "입금" 단계가 앱 안에서 안내가 전혀 없어 결제가 단톡방·눈치에 묶여 있던 공백을 메웠다. 지금까지 MyMatches의 내 신청 카드는 `PAY_BADGE`로 "입금 대기 / 입금 완료" 배지만 보여줬을 뿐, **얼마를·어떤 입금자명으로** 넣어야 하는지 화면에 없었다. 결정적으로, 주최자측 C3 무통장 자동 매칭(`payment.js matchDeposits`)은 입금자명을 신청 팀의 player1 OR player2 실명과 유사도 대조하는데(매칭 성공 시 `payment_status='confirmed'`→무인 승인까지 자동), 선수에게 "실명으로 입금하라"는 안내가 어디에도 없어 애칭·타인 명의 입금이 자동 확인을 빗나가게 했다 — 자동화의 전제가 정작 선수에게 전달되지 않던 것. 이 안내가 그 전제를 선수 화면에 처음으로 명시해 무통장 입금 루프를 주최자·선수 양쪽에서 완결한다. 순수 엔진 `deposit.js` 신설(스키마·외부 키·PG 불필요) — `formatWon(n)`(₩ 천단위 콤마·음수 안전), `shouldShowDeposit(entry, fee)`(참가비>0(또는 payment_amount>0)이고 entry_status가 partner_pending/partner_rejected/rejected/withdrawn/cancelled가 아닌 신청만 입금 단계로 판정 — 파트너 수락 전·거절·철회는 결제 단계 아님), `depositGuide(entry, {fee, myName, partnerName})`(무료→applicable:false, payment_status='confirmed'→done·"자동으로 확인됐어요", 'refunded'→"환불 완료", 'pending'→금액·`payerName`(뷰어 본인 실명)·3단계 안내(①금액을 안내 계좌로 입금 ②입금자명을 "본인 실명"으로—앱이 자동 확인 ③확인되면 카드가 "입금 완료"로)·note(파트너 있으면 "본인 또는 파트너 실명 중 하나로 입금하면 자동 확인"/없으면 "계좌 모르면 문의·공지 확인"), payment_amount가 있으면 fee보다 우선). matcher가 두 실명을 모두 허용하므로 각 뷰어에게 "자기 실명"만 안내하면 항상 매칭되도록 설계. MyMatches 배선: entries select에 `category.entry_fee` 추가(기존 컬럼, 안전), 신청 카드 map에서 `myDepositName`(인증실명 우선), `dep`(shouldShowDeposit이면 depositGuide) 계산, 미입금 pending이면 배지 아래 "💳 입금 안내" 카드(금액 큰 빨강 글씨·"입금자명 [본인 실명]" 원터치 복사 버튼(`copiedName` 상태로 "복사됨 ✓" 1.5초 피드백, 클립보드 미지원 무시)·번호 매긴 3단계·note), confirmed면 초록 체크 "입금 완료·자동 확인됨" 한 줄. 비파괴적 추가만(기존 PAY_BADGE·파트너 메시지·상태 배지 그대로). 계좌번호 직접 표시는 `tournaments`에 계좌 컬럼이 없고(비존재 컬럼 select는 PostgREST 400으로 전체 쿼리를 깨뜨림) 계좌는 주최자 개인정보라 스키마 결정이 필요해 human-gated로 남기고, 그 자리는 문의(C9 챗봇)·주최자 공지로 유도. 엔진 28개 시나리오(포맷 4·shouldShow 10·무료/null·pending tone/amount/payerName/steps/note·파트너 노트 양쪽 이름·이름 없을 때 generic·payment_amount override·confirmed·refunded) esbuild 자체 검증 통과, `npx vite build` green. PG 카드결제·가상계좌·환불규정 코드화는 human-gated 유지. (자동화율 선수 80%→82%)
+
 ## 2026-07-11 — [C7] 팀 대회 이탈·실격 일괄 부전 처리 — 남은 경기 자동 부전패 + 상대 자동 진출 (C7 ⚠️→✅)
 
 - **C7 노쇼·기권·실격 자동처리 — 실격·출전권 무효 자동처리 (필수/중, 운영 완주 마지막 반복 수작업)**

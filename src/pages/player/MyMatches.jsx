@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
 import { subscribeNotifications, fetchRecentCalls, markCallRead, fetchNotices, markNoticeRead, NOTICE_TYPES } from '../../lib/notify'
 import { getCheckinWindow, assessSelfCheckin, selfCheckin, fetchMyCheckins } from '../../lib/checkin'
+import { depositGuide, shouldShowDeposit, formatWon } from '../../lib/deposit'
 import BottomNav from '../../components/BottomNav'
 import MatchCard from '../../components/MatchCard'
 import Spinner from '../../components/Spinner'
@@ -225,6 +226,7 @@ const PAY_BADGE = {
 export default function MyMatches() {
   const [userId, setUserId]     = useState(null)
   const [profile, setProfile]   = useState(null) // 내 프로필(디지털 선수증·인증여부)
+  const [copiedName, setCopiedName] = useState(false) // 입금자명 복사 피드백
   const [entries, setEntries]   = useState([])   // 내가 신청자(A) 또는 파트너(B)인 모든 신청
   const [matches, setMatches]   = useState([])   // 경기 일정
   const [nextMatch, setNextMatch] = useState(null) // 다음 경기 하이라이트
@@ -259,6 +261,7 @@ export default function MyMatches() {
         *,
         category:tournament_categories(
           sport_type,
+          entry_fee,
           tournament:tournaments(id, title, date, status, location)
         ),
         p1:profiles!player1_id(id, name),
@@ -723,6 +726,12 @@ export default function MyMatches() {
                     const pb = PAY_BADGE[e.payment_status]
                     const pn = partnerName(e)
                     const iAmPartner = e.player2_id === userId
+                    const fee = e.category?.entry_fee ?? 0
+                    const myDepositName =
+                      (profile?.identity_verified && profile?.verified_name) || profile?.name || ''
+                    const dep = shouldShowDeposit(e, fee)
+                      ? depositGuide(e, { fee, myName: myDepositName, partnerName: pn })
+                      : null
                     return (
                       <div key={e.id} className="bg-white rounded-2xl border border-gray-100 p-4">
                         <div className="flex items-start justify-between gap-2">
@@ -751,6 +760,58 @@ export default function MyMatches() {
                             </span>
                           )}
                         </div>
+
+                        {/* ── 입금 안내 (참가비 있는 미입금 신청) ─────────────── */}
+                        {dep && !dep.done && (
+                          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-bold text-amber-700 flex items-center gap-1">
+                                💳 입금 안내
+                              </span>
+                              <span className="text-base font-extrabold text-[#C60C30]">
+                                {formatWon(dep.amount)}
+                              </span>
+                            </div>
+                            {dep.payerName && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await navigator.clipboard.writeText(dep.payerName)
+                                    setCopiedName(e.id)
+                                    setTimeout(() => setCopiedName(false), 1500)
+                                  } catch { /* 클립보드 미지원 무시 */ }
+                                }}
+                                className="mt-2 w-full flex items-center justify-between gap-2 rounded-lg
+                                  bg-white border border-amber-200 px-3 py-2 text-left active:scale-[0.99]"
+                              >
+                                <span className="text-xs text-gray-500">
+                                  입금자명 <strong className="text-gray-800 text-sm">{dep.payerName}</strong>
+                                </span>
+                                <span className="text-xs font-semibold text-[#003478] shrink-0">
+                                  {copiedName === e.id ? '복사됨 ✓' : '복사'}
+                                </span>
+                              </button>
+                            )}
+                            <ol className="mt-2 space-y-1">
+                              {dep.steps.map((s, i) => (
+                                <li key={i} className="text-xs text-amber-800 flex gap-1.5">
+                                  <span className="font-bold shrink-0">{i + 1}.</span>
+                                  <span>{s}</span>
+                                </li>
+                              ))}
+                            </ol>
+                            {dep.note && (
+                              <p className="mt-2 text-[11px] text-amber-600 leading-snug">{dep.note}</p>
+                            )}
+                          </div>
+                        )}
+                        {dep && dep.done && dep.status === 'confirmed' && (
+                          <p className="mt-2 text-xs text-emerald-600 flex items-center gap-1">
+                            <Check size={13} /> {dep.message}
+                          </p>
+                        )}
+
                         {e.entry_status === 'partner_pending' && !iAmPartner && (
                           <p className="text-xs text-amber-600 mt-2">
                             파트너 <strong>{pn ?? ''}</strong> 님의 수락을 기다리는 중이에요.
