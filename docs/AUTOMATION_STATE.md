@@ -27,6 +27,31 @@
 | C12 | 대회 탐색·파트너·전적 | ✅ | `discover.js`+`partners.js`+`record.js` — **대회 탐색 추천** ✅ + **파트너 매칭** ✅ + **통합 전적 뷰** ✅. **대회 탐색 추천(`discover.js`)**: `regionTokens`(venue·주소에서 17시도+시/군/구 세밀 토큰 추출, 광역시/특별시 중복 제외)·`preferredRegions`(내 참가 이력 대회의 지역 빈도 집계)·`ddayOf`(로컬 자정 기준 D-day)·`recommendTournaments`(접수중·미신청·미래 대회 중 급수 참가 가능 종목이 있는 것만 골라 지역 매칭·마감 임박·대회일 근접으로 점수화, 근거 배열 반환). 자격 판정은 lib/grades.js로 승격한 공용 `checkEligibility`를 fitOf로 주입(신청 화면과 100% 동일 로직·중복 0). Tournaments.jsx가 로그인 선수의 프로필·참가 이력을 1회 로드→"🎯 나에게 맞는 대회" 카드+근거 칩(급수 파랑/지역 초록/마감 빨강·주황) 노출(전체 탭·검색 없을 때만, 실패 시 검색만 degrade). 파트너 매칭·통합 전적은 아래 유지. 통합 전적(`record.js`): `computeCareerRecord`가 내가 낀 전 대회 완료 경기(+세트)에서 총 승패·승률·세트/점수 득실·풀세트·부전 카운트와 상대 선수별 head-to-head(`byOpponent`)를 집계, `opponentPlayers`(팀에서 나 제외·게스트팀명 폴백)·`hasCareerRecord`. Profile "대회 커리어" 탭에 통합 전적 카드(승/패/승률 게이지·세부지표)+상대 전적 카드(자주 만난 상대별 W/L 최대 8명)를 추가, 내 엔트리 id 배치로 tournament_matches 조회(try-catch degrade, 헤더 mmr delta 근사와 달리 실경기 기준 정확 전적). 파트너 매칭: `collectPastPartners`(내가 낀 복식 신청 이력에서 상대를 모아 함께 출전 횟수·최근순 집계)+`rankPartnerSuggestions`(호출부 checkEligibility 주입 → 종목 자격 통과 먼저·횟수·최근순)+`partnerReason`. TournamentDetail 복식 신청 폼에 "추천 파트너 · 지난 대회에 함께 나간 분들" 카드(자격 통과 최대 4명, "다시 초대" 원터치→selectPartner). 대진DB 개인화 추천으로 검색-only 마찰 완화. 잔여: 대회 탐색 추천(급수·지역 맞춤 대회 추천)만 남음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-11 · 하드닝(자체 테스트) · `scripts/ext-loader.mjs`(신규)·`scripts/run-tests.mjs`(신규)·`tests/_harness.mjs`(신규)·`tests/engines.test.mjs`(신규)·`package.json`(test 스크립트)
+  · 순수 엔진 회귀 테스트 스위트 커밋 — 비-human-gated 기능 백로그가 소진된 상태(남은 ⚠️ 잔여는 전부
+    외부 발송·PG·실LLM·클럽/계좌 필드·심판 셀프스코어 RLS 등 human-gated)에서, 북극성 원칙 "매 실행 repo를
+    strictly better·never regressed"를 지키기 위한 하드닝(마스터 프롬프트 하드닝 목록의 "self-tests")을
+    선택. **진단**: 지금껏 매 실행 로그가 "node 자체 검증 통과 / 29개 시나리오"를 주장했지만 그 테스트는
+    전부 일회성(esbuild로 번들해 돌리고 버림)이라 커밋된 테스트가 **0건**이었다 — 이후 무인 실행이 공유
+    엔진(scheduler/bwf/advance/stateMachine 등)을 리팩터하다 판정을 깨도 자동으로 잡을 그물이 없었다(무인
+    진행이 조용히 오작동할 수 있는 최대 품질 공백). **구현**: 의존성 0으로 동작하는 테스트 인프라 신설 —
+    (1) `scripts/ext-loader.mjs`(엔진들의 확장자 없는 상대 임포트 `./grades`를 Node ESM에서 해석하도록 실패
+    시 `.js` 보완하는 로더 훅, 소스는 불변·Vite 동작 불변), (2) `tests/_harness.mjs`(node:assert/strict 기반
+    초경량 test/run), (3) `scripts/run-tests.mjs`(tests/*.test.mjs 로드→실행→실패 시 exit 1), (4)
+    `tests/engines.test.mjs`(자동화 핵심 엔진 36개 테스트). 커버: **bwf**(isGameOver 2점차·듀스·골든/
+    isIntervalPoint/applyPoint 게임·매치 종료·서브권/applyForfeit/serviceCourt/foldEvents 언두/matchCall
+    게임·매치포인트·듀스·골든·무콜/scoreSummary), **scheduler**(buildSingleElimination 부전승·buildRoundRobin·
+    scheduleMatches 코트 배정·**rescheduleAfterForfeit**), **stateMachine**(planTournamentState open→closed
+    마감/정원·closed blockReason·in_progress 전환·finish auto:false / planAutoFinalize 유예 / planAutoApprovals
+    auto·payment·review·capacity), **orchestrator.planNoShow**(waiting→recall→warned→overdue·max·제외),
+    **advance.planTeamForfeit**(toForfeit/toVacate), **noshowPredict**(predict 티어·buildNoShowIndex 대회단위
+    중복방지·entryNoShowRisk·recommendWaitlist·worseNoShow), **checkin**(getCheckinWindow·assessSelfCheckin·
+    assessNoShowResolution·summarizeCheckins), **sandbag**(assessSandbag gap·표본부족 완화·worseLevel),
+    **reliability**(tier·isRanked·calcReliability 만점/빈). `npm test` → 36/36 통과, `npx vite build` green,
+    소스/페이지 변경 0(순수 추가라 회귀 위험 0, 기존 트리거 배선 grep 유지 확인). 다음 하드닝 후보: 미커버
+    엔진(drawOptimizer·planWizard·settlement·deposit·highlight·record·discover·partners·certificate·chatbot·
+    mmr·grades·tournament) + orchestrator planAutoAdvance/planRebalance/analyzeDelay + notify/campaign(supabase
+    스텁 주입 필요) 테스트 확장. (플로우 점수 불변 — 자동화 기능이 아니라 품질 하드닝)
 - 2026-07-11 · C7(AI 예측) · `src/lib/noshowPredict.js`(신규)·`src/pages/organizer/EntryManagement.jsx`
   · 노쇼(불참) 예측 · 예비명단/오버부킹 추천 — 북극성 AI 차별화 목록 #5("노쇼 예측 — 과거 패턴
     기반 오버부킹/예비명단")를 채운 순수 AI 판단 레이어. 비-human-gated 잔여가 사실상 소진된
@@ -466,4 +491,7 @@
 - [ ] (C11) 사후 설문 URL(구글폼 등) 연동 — 현재 설문 캠페인은 앱 내 안내 문구만. 외부 설문 링크는 대회 설정에 URL 필드 추가 후 payload에 실어 발송하면 됨(human-gated, 링크 준비 필요)
 - [ ] (C9 선택) 문의 챗봇 실LLM 연동 — 현재는 규칙 기반(정적 규정 KB + 대회 데이터 검색)으로 완결 동작. 자유질의 이해도를 높이려면 Claude API 키를 발급해 `askBot` 폴백을 LLM 호출로 대체(규정 KB를 시스템 프롬프트에, 대회 ctx를 컨텍스트로 주입). 키·비용 발생이라 human-gated.
 - [ ] (C3 선택·선수 입금 안내 보강) 주최자 계좌번호 직접 표시 — 현재 "입금 안내" 카드는 금액·본인 실명 입금자명·단계까지 보여주고 계좌 자체는 문의/공지로 유도한다. 계좌까지 화면에 박으려면 `tournaments`에 계좌 컬럼(`bank_name`·`account_number`·`account_holder`)을 더하는 마이그레이션을 만들어 적용하고, CreateTournament에 입력 UI를 추가(컬럼 미존재 시 조회 400 에러 방지 위해 feature-detect 후 조건부 select/insert)한 뒤 MyMatches 카드가 그 값을 표시하면 된다. 계좌는 주최자 개인정보라 스키마 결정이 필요해 human-gated로 남김.
+- [ ] (품질·선택) `npm test`를 CI에 연결 — 2026-07-11 순수 엔진 회귀 테스트 스위트(`npm test`, 의존성 0)를
+      커밋했다. `.github/**`는 에이전트 금지 영역이라 CI 워크플로에 `npm test` 스텝을 넣는 건 사람이 해야 한다
+      (넣으면 무인 실행이 엔진을 깨는 PR을 자동 차단). 로컬/빌드 전 수동 실행은 지금 바로 가능.
 - [ ] (다음 목표·심판 78%) 무심판 코트 셀프 스코어 — 코트별 심판 모드(`/referee/court/:id`)로 심판 도달 경로는 채웠다(2026-07-10). 남은 건 "심판 없이 선수가 자기 폰으로 점수 입력". 선수가 `/referee/:matchId`를 열어 점수를 쓰려면 `tournament_matches` UPDATE가 필요한데 현재 RLS는 주최자(001 "주최자 관리" FOR ALL)만 허용. 참가 선수도 자기 경기의 live_*·status를 쓰도록 하는 RLS 정책 마이그레이션이 선행돼야 실제 발화 가능(엔진/UI는 그 후 추가). 이 갭이 심판 플로우의 유일한 잔여 공백.
