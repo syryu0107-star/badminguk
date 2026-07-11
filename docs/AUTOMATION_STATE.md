@@ -27,6 +27,33 @@
 | C12 | 대회 탐색·파트너·전적 | ✅ | `discover.js`+`partners.js`+`record.js` — **대회 탐색 추천** ✅ + **파트너 매칭** ✅ + **통합 전적 뷰** ✅. **대회 탐색 추천(`discover.js`)**: `regionTokens`(venue·주소에서 17시도+시/군/구 세밀 토큰 추출, 광역시/특별시 중복 제외)·`preferredRegions`(내 참가 이력 대회의 지역 빈도 집계)·`ddayOf`(로컬 자정 기준 D-day)·`recommendTournaments`(접수중·미신청·미래 대회 중 급수 참가 가능 종목이 있는 것만 골라 지역 매칭·마감 임박·대회일 근접으로 점수화, 근거 배열 반환). 자격 판정은 lib/grades.js로 승격한 공용 `checkEligibility`를 fitOf로 주입(신청 화면과 100% 동일 로직·중복 0). Tournaments.jsx가 로그인 선수의 프로필·참가 이력을 1회 로드→"🎯 나에게 맞는 대회" 카드+근거 칩(급수 파랑/지역 초록/마감 빨강·주황) 노출(전체 탭·검색 없을 때만, 실패 시 검색만 degrade). 파트너 매칭·통합 전적은 아래 유지. 통합 전적(`record.js`): `computeCareerRecord`가 내가 낀 전 대회 완료 경기(+세트)에서 총 승패·승률·세트/점수 득실·풀세트·부전 카운트와 상대 선수별 head-to-head(`byOpponent`)를 집계, `opponentPlayers`(팀에서 나 제외·게스트팀명 폴백)·`hasCareerRecord`. Profile "대회 커리어" 탭에 통합 전적 카드(승/패/승률 게이지·세부지표)+상대 전적 카드(자주 만난 상대별 W/L 최대 8명)를 추가, 내 엔트리 id 배치로 tournament_matches 조회(try-catch degrade, 헤더 mmr delta 근사와 달리 실경기 기준 정확 전적). 파트너 매칭: `collectPastPartners`(내가 낀 복식 신청 이력에서 상대를 모아 함께 출전 횟수·최근순 집계)+`rankPartnerSuggestions`(호출부 checkEligibility 주입 → 종목 자격 통과 먼저·횟수·최근순)+`partnerReason`. TournamentDetail 복식 신청 폼에 "추천 파트너 · 지난 대회에 함께 나간 분들" 카드(자격 통과 최대 4명, "다시 초대" 원터치→selectPartner). 대진DB 개인화 추천으로 검색-only 마찰 완화. 잔여: 대회 탐색 추천(급수·지역 맞춤 대회 추천)만 남음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-11 · 하드닝(테스트 커버리지 확장 ⑤ — 커뮤니케이션 레이어 notify/campaign) · `scripts/ext-loader.mjs`(load 훅+supabase 리다이렉트 추가)·`tests/_supabase-singleton-stub.mjs`(신규)·`tests/notify.test.mjs`(신규)
+  · C1 경기 호출 인프라(notify.js)와 C11 사후 캠페인(campaign.js)에 회귀 테스트 29개 추가 —
+    직전 네 런이 순수 엔진(engines 36+engines2 27+engines3 35)과 supabase 의존 advance.js(23)까지 덮어
+    98→121개를 커밋했지만, **북극성이 "가장 큰 공백"으로 지목한 C1 호출 인프라와 C11 캠페인 두 엔진은
+    여전히 커밋된 테스트가 0**이었다(직전 로그가 "다음 후보: notify/campaign(신설 스텁 재사용)"로 명시).
+    이유: notify.js 는 유일하게 (1) Vite 전용 `import.meta.env`(VITE_ENABLE_PUSH·DEV) 를 모듈 최상위에서
+    읽고 (2) 실 Supabase 싱글턴(`import { supabase } from './supabase'`, @supabase/supabase-js+env 의존)을
+    끌어와, 순정 Node ESM 에서 **임포트 자체가 TypeError**(env)·**모듈 없음**(supabase-js 미설치)으로 불가했다.
+    campaign.js 는 `{CAMPAIGN} from './notify'` 를 임포트하므로 같이 막혔다. advance.js 는 supabase 를 인자로
+    받아 스텁 주입이 됐지만, notify 는 싱글턴 직접 의존이라 다른 접근이 필요했다. **깨지면 선수가 엉뚱한
+    코트로 불려가거나(잘못된 court/body)·때 아닌 안내가 나가거나(campaign due 오판)·미참가자에게 발송
+    (수신자 오집계)** 되는 무인 커뮤니케이션의 핵심이라, 하드닝 모드 최고가치 슬라이스.
+    **해결(테스트 전용·소스/Vite 불변)**: ext-loader 에 두 훅 추가 — (a) `load` 훅이 `import.meta.env` 토큰을
+    가진 소스 .js 를 `(globalThis.__VITE_ENV__ ?? {})` 로 치환(실제 대상은 notify.js 하나, 토큰 없는 파일은
+    기본 로더 위임 → 기존 121 테스트 불변), (b) `resolve` 훅이 확장자 없는 `./supabase` 상대 임포트를
+    `tests/_supabase-singleton-stub.mjs`(신규, `makeSupabase({})`+채널 no-op)로 리다이렉트. notify 가 유일
+    싱글턴 임포터라(grep 확인) 다른 테스트에 영향 0. 커버(불변식): **notify**(notifyChannel 발신=수신 이름,
+    NOTICE_TYPES 지속형만·전송성 호출 제외, buildMatchCall court 인자>match.court_number 폴백>null 현장안내·
+    entryIds null 제거, buildMatchSoon aheadCount 숫자보존/비숫자 null·코트 유무 문구, buildWalkoverWarn
+    초→분 올림 90s=2분·30s=최소1분·음수 0클램프·secondsLeft 없음 "지금 바로"·코트 없음 폴백), **campaign**
+    (localDateStr 로컬자정, dayDiff 내일/오늘/어제·datetime 앞10자·슬래시/불가 null, planCampaigns 상태머신
+    open|closed+D1→전날/closed|in_progress+D0→당일/open+D0 무발송/D-2 무발송/completed→감사+설문 날짜무관/
+    sent 집합 표기/null 안전, pendingCampaigns sent 제외, markCampaignSent·loadSentCampaigns 중복안전·대회격리,
+    fetchCampaignRecipients approved만·player1/2 중복제거·빈ids []·실패 [] degrade). `npm test` → **150/150**
+    (기존 121 + 신규 29), `npx vite build` green(deps 설치 후). 신설 싱글턴 스텁·env shim 은 향후 UI/훅
+    레이어 테스트에도 재사용 가능. 다음 하드닝 후보: bwf.scoreSummary/serviceCourt 세부·notify send 경로
+    (broadcast/persist 채널 목)·UI 빈/로딩/에러 상태·실시간 구독 경쟁조건. (플로우 점수 불변 — 품질 하드닝)
 - 2026-07-11 · 하드닝(테스트 커버리지 확장 ④ — supabase 의존 엔진) · `tests/_supabase-stub.mjs`(신규)·`tests/advance.test.mjs`(신규)
   · 최고위험 엔진 `advance.js`(DB 변이 경로)에 회귀 테스트 23개 추가 — 직전 세 런이 순수 엔진
     (engines.test.mjs 36 + engines2 27 + engines3 35 = 98)을 덮었지만, **깨지면 조용히 잘못된 팀이 본선
