@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-11 — [C12] 통합 전적 뷰 — 전 대회 실경기 W/L·상대 전적 자동 집계 (프로필 대회 커리어)
+
+- **C12 대회 탐색·파트너 매칭·통합 전적 — 통합 전적 (선수 커리어 완주, 대진DB 개인화)**
+  - 파일: `src/lib/record.js`(신규), `src/pages/player/Profile.jsx`
+  - 요약: C12의 남은 비-human-gated 조각인 "통합 전적(전 대회 W/L·상대 전적)"을 채워 선수 플로우(84%, 공동 최저)를 끌어올렸다. 지금껏 프로필 "대회 커리어" 탭은 참가 대회의 목록·신청 상태만 나열했고 실제 경기 결과가 없었으며, 헤더의 승/패/승률은 `mmr_history`의 delta 부호(delta>0=승)로 세는 근사치라 "내가 실제 경기에서 몇 승 몇 패인지", "특정 상대에게 몇 승 몇 패인지(head-to-head)"를 볼 수 없었다(C12 백로그의 "통합 전적" 미구현 조각). 스키마·외부 키·LLM 없이 기존 `tournament_matches`(+`match_scores`, 양팀 선수 프로필 join)만으로 규칙 기반 완결. 순수 엔진 `record.js` 신설 — `opponentPlayers(entry, myPlayerId)`(팀 엔트리에서 나를 뺀 상대 선수 [{id,name}]를 뽑되 복식 2명·단식 1명·중복/누락 방어, 선수 프로필이 없는 게스트 팀은 `team:팀명` 단일 상대로 폴백), `computeCareerRecord({matches, myEntryIds, myPlayerId})`(내가 낀(myEntryIds Set에 든) 완료/부전/bye 경기만 훑어 `totals`(played 실경기·wins/losses·walkoverWins/Losses·setsWon/Lost·pointsFor/Against·fullSets)를 집계하고, 완료·부전 경기마다 상대 선수별 W/L을 `byOpponent` Map에 누적한다 — bye는 상대가 없어 head-to-head에서 제외, forfeited는 실제 상대가 있는 결과라 포함, 내가 안 낀 경기·양팀 모두 내 엔트리(방어)·승자 미정 완료는 스킵, matches/myEntryIds null 안전 — `winRate`(승패합 0이면 null)·`tournaments`(중복 제거 대회 수)·`byOpponent`(games desc→wins desc→이름 정렬) 반환), `hasCareerRecord(record)`(집계된 승패가 하나라도 있어야 카드 노출). Profile 배선: load()에서 내 엔트리 id 전량을 가볍게 조회(`.select('id').or(player1/2.eq.me).order(created_at desc).limit(300)` — 활성 선수도 통상 이하, URL 길이 방어)→`tournament_matches`를 `.or('team1_entry_id.in.(ids),team2_entry_id.in.(ids)')`로 배치 조회(카테고리·대회·양팀 선수 프로필·match_scores join)→`computeCareerRecord`로 `record` 상태 저장하되 전체를 try-catch로 감싸 테이블/RLS/조회 실패 시 전적 카드만 조용히 생략하고 프로필 자체는 정상 렌더(graceful degrade). "대회 커리어" 탭 상단에 (1) **통합 전적** 카드(전 N개 대회·실경기 기준, 승/패/승률 3칸 + 승/패 비율 게이지 + 세트 득실·점수 득실·풀세트 접전 세부지표 + 부전승/패 포함 표기), (2) **상대 전적** 카드(자주 만난 상대별 이름·N경기·N승 N패, 우세=초록/열세=빨강/동률=회색, 최대 8명 + "외 N명")를 추가하고, 기존 참가 대회 목록은 "참가한 대회" 소제목 아래로 그대로 유지했다(비파괴적 추가만 — 헤더의 mmr 근사 승/패, 기존 대회 목록·신청 상태 UI 불변). `tournament_matches` SELECT는 이미 공개 읽기(LiveScore·Results가 동일 데이터를 읽음)라 새 RLS/권한 불필요, 스키마 변경 없음. 엔진 20개 시나리오(승/패·부전승/패·bye 상대 제외·forfeited 상대 포함·세트/점수 득실·풀세트·승률·대회 수·head-to-head 집계와 정렬·내가 안 낀 경기 제외·미완료(scheduled) 제외·게스트 팀명 폴백·null/무인자 안전) esbuild(node) 자체 검증 통과, `npx vite build` green. 잔여: 대회 탐색 추천(급수·지역 맞춤 대회 추천)만 C12 다음 슬라이스로 남김. (자동화율 선수 84%→86%)
+
 ## 2026-07-11 — [C12] 파트너 추천 — 지난 대회에 함께 나간 파트너 원터치 재초대 (파트너 매칭 착수)
 
 - **C12 대회 탐색·파트너 매칭·통합 전적 — 파트너 매칭 (선수 신청 단계 마찰, AI/대진DB 개인화)**

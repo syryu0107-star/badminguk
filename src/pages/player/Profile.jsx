@@ -4,11 +4,12 @@ import { supabase } from '../../lib/supabase'
 import { getGradeInfo, getMMRPercentile, GRADES, promotionHint, UNITS, MODES, trackGrade, unitLabel } from '../../lib/grades'
 import { CERT_LEVELS } from '../../lib/mmr'
 import { calcReliability, MIN_RANKED_GAMES, MIN_RANKED_RELIABILITY, isRanked } from '../../lib/reliability'
+import { computeCareerRecord, hasCareerRecord } from '../../lib/record'
 import BottomNav from '../../components/BottomNav'
 import GradeChip from '../../components/GradeChip'
 import ReliabilityBadge from '../../components/ReliabilityBadge'
 import Spinner from '../../components/Spinner'
-import { LogOut, Upload, Award, Shield, TrendingUp, TrendingDown, ChevronsUp, PartyPopper } from 'lucide-react'
+import { LogOut, Upload, Award, Shield, TrendingUp, TrendingDown, ChevronsUp, PartyPopper, Swords } from 'lucide-react'
 
 // 미니 MMR 추이 차트 (SVG)
 function MiniChart({ history }) {
@@ -136,6 +137,7 @@ export default function Profile() {
   const [tourneys, setTourneys]   = useState([])
   const [gradeHistory, setGradeHistory] = useState([])   // 승급 이력 (grade_history)
   const [promos, setPromos] = useState({})               // 트랙별 승급 진행 (v2 RPC): { 'si:doubles': {...} }
+  const [record, setRecord] = useState(null)             // 통합 전적 (전 대회 실경기 W/L + 상대 전적)
   const [loading, setLoading]     = useState(true)
   const [uploading, setUploading] = useState(false)
   const [tab, setTab]             = useState('mmr')  // 'mmr' | 'career'
@@ -193,6 +195,48 @@ export default function Profile() {
       setTourneys(entries ?? [])
       setGradeHistory(gh ?? [])
       setPromos(promoMap)
+
+      // 통합 전적: 내가 낀 모든 엔트리의 완료 경기를 모아 실제 W/L·세트·상대 전적 집계.
+      // 헤더의 승/패(mmr_history delta 근사)와 달리 경기 결과 기반 정확 전적.
+      // 조회 실패/테이블 이슈에도 프로필 자체는 뜨도록 try-catch로 조용히 degrade.
+      try {
+        const { data: idRows } = await supabase
+          .from('tournament_entries')
+          .select('id')
+          .or(`player1_id.eq.${user.id},player2_id.eq.${user.id}`)
+          .order('created_at', { ascending: false })
+          .limit(300)                      // URL 길이 방어(활성 선수도 통상 이 이하)
+        const myEntryIds = (idRows ?? []).map(r => r.id)
+        if (myEntryIds.length) {
+          const idList = myEntryIds.join(',')
+          const { data: mrows } = await supabase
+            .from('tournament_matches')
+            .select(`
+              id, status, team1_entry_id, team2_entry_id, winner_entry_id,
+              category:tournament_categories!category_id(
+                sport_type, tournament:tournaments!tournament_id(id, title, date)
+              ),
+              team1:tournament_entries!team1_entry_id(
+                id, team_name,
+                player1:profiles!player1_id(id, name),
+                player2:profiles!player2_id(id, name)
+              ),
+              team2:tournament_entries!team2_entry_id(
+                id, team_name,
+                player1:profiles!player1_id(id, name),
+                player2:profiles!player2_id(id, name)
+              ),
+              scores:match_scores(set_number, team1_score, team2_score)
+            `)
+            .or(`team1_entry_id.in.(${idList}),team2_entry_id.in.(${idList})`)
+          setRecord(computeCareerRecord({
+            matches: mrows ?? [], myEntryIds: new Set(myEntryIds), myPlayerId: user.id,
+          }))
+        }
+      } catch (e) {
+        console.warn('[프로필] 통합 전적 조회 실패 — 전적 카드 생략:', e?.message || e)
+      }
+
       setLoading(false)
     }
     load()
@@ -429,6 +473,85 @@ export default function Profile() {
       {/* 대회 커리어 탭 */}
       {tab === 'career' && (
         <section className="px-4 py-4">
+          {/* 통합 전적 — 전 대회 실제 경기 기록 (C12) */}
+          {hasCareerRecord(record) && (() => {
+            const tt = record.totals
+            const decided = tt.wins + tt.losses
+            return (
+              <div className="bg-white rounded-2xl border border-gray-100 p-4 mb-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <Swords size={16} className="text-[#C60C30]" />
+                  <h3 className="font-bold text-sm">통합 전적</h3>
+                  <span className="text-[11px] text-gray-400 ml-auto">전 {record.tournaments}개 대회 · 실제 경기 기준</span>
+                </div>
+                {/* 승 / 패 / 승률 */}
+                <div className="grid grid-cols-3 gap-2 mt-3">
+                  {[
+                    { label: '승', value: tt.wins, color: 'text-emerald-600' },
+                    { label: '패', value: tt.losses, color: 'text-red-500' },
+                    { label: '승률', value: record.winRate == null ? '-' : `${record.winRate}%`, color: 'text-gray-800' },
+                  ].map(s => (
+                    <div key={s.label} className="bg-gray-50 rounded-xl p-2.5 text-center">
+                      <p className="text-gray-400 text-xs">{s.label}</p>
+                      <p className={`font-black text-xl tabular-nums ${s.color}`}>{s.value}</p>
+                    </div>
+                  ))}
+                </div>
+                {/* 승률 게이지 */}
+                {decided > 0 && (
+                  <div className="mt-3 h-2 rounded-full bg-red-100 overflow-hidden flex">
+                    <div className="h-full bg-emerald-500" style={{ width: `${Math.round((tt.wins / decided) * 100)}%` }} />
+                  </div>
+                )}
+                {/* 세부 지표 */}
+                <div className="grid grid-cols-3 gap-1 mt-3 text-center">
+                  {[
+                    { label: '세트 득실', v: `${tt.setsWon}-${tt.setsLost}` },
+                    { label: '점수 득실', v: `${tt.pointsFor}-${tt.pointsAgainst}` },
+                    { label: '풀세트 접전', v: `${tt.fullSets}회` },
+                  ].map(c => (
+                    <div key={c.label}>
+                      <p className="text-[10px] text-gray-400">{c.label}</p>
+                      <p className="text-xs font-bold tabular-nums text-gray-600">{c.v}</p>
+                    </div>
+                  ))}
+                </div>
+                {(tt.walkoverWins > 0 || tt.walkoverLosses > 0) && (
+                  <p className="mt-3 text-[11px] text-gray-400 text-center">
+                    부전승 {tt.walkoverWins}회 · 부전패 {tt.walkoverLosses}회 포함
+                  </p>
+                )}
+              </div>
+            )
+          })()}
+
+          {/* 상대 전적 — 자주 만난 상대별 W/L (head-to-head, C12) */}
+          {record?.byOpponent?.length > 0 && (
+            <div className="bg-white rounded-2xl border border-gray-100 p-4 mb-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Shield size={16} className="text-[#003478]" />
+                <h3 className="font-bold text-sm">상대 전적</h3>
+                <span className="text-[11px] text-gray-400 ml-auto">자주 만난 순</span>
+              </div>
+              <div className="space-y-1.5">
+                {record.byOpponent.slice(0, 8).map(o => {
+                  const lead = o.wins > o.losses ? 'text-emerald-600' : o.wins < o.losses ? 'text-red-500' : 'text-gray-500'
+                  return (
+                    <div key={o.id} className="flex items-center gap-3 bg-gray-50 rounded-xl px-3 py-2">
+                      <span className="flex-1 min-w-0 text-sm font-semibold text-gray-700 truncate">{o.name}</span>
+                      <span className="text-[11px] text-gray-400 tabular-nums">{o.games}경기</span>
+                      <span className={`text-sm font-black tabular-nums ${lead}`}>{o.wins}승 {o.losses}패</span>
+                    </div>
+                  )
+                })}
+              </div>
+              {record.byOpponent.length > 8 && (
+                <p className="mt-2 text-[11px] text-gray-400 text-center">외 {record.byOpponent.length - 8}명</p>
+              )}
+            </div>
+          )}
+
+          <p className="text-xs font-bold text-gray-400 mb-2 px-1">참가한 대회</p>
           {tourneys.length === 0 ? (
             <div className="text-center py-12 text-gray-400 text-sm">
               참가한 대회가 없습니다.
