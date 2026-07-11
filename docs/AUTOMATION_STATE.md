@@ -27,6 +27,32 @@
 | C12 | 대회 탐색·파트너·전적 | ✅ | `discover.js`+`partners.js`+`record.js` — **대회 탐색 추천** ✅ + **파트너 매칭** ✅ + **통합 전적 뷰** ✅. **대회 탐색 추천(`discover.js`)**: `regionTokens`(venue·주소에서 17시도+시/군/구 세밀 토큰 추출, 광역시/특별시 중복 제외)·`preferredRegions`(내 참가 이력 대회의 지역 빈도 집계)·`ddayOf`(로컬 자정 기준 D-day)·`recommendTournaments`(접수중·미신청·미래 대회 중 급수 참가 가능 종목이 있는 것만 골라 지역 매칭·마감 임박·대회일 근접으로 점수화, 근거 배열 반환). 자격 판정은 lib/grades.js로 승격한 공용 `checkEligibility`를 fitOf로 주입(신청 화면과 100% 동일 로직·중복 0). Tournaments.jsx가 로그인 선수의 프로필·참가 이력을 1회 로드→"🎯 나에게 맞는 대회" 카드+근거 칩(급수 파랑/지역 초록/마감 빨강·주황) 노출(전체 탭·검색 없을 때만, 실패 시 검색만 degrade). 파트너 매칭·통합 전적은 아래 유지. 통합 전적(`record.js`): `computeCareerRecord`가 내가 낀 전 대회 완료 경기(+세트)에서 총 승패·승률·세트/점수 득실·풀세트·부전 카운트와 상대 선수별 head-to-head(`byOpponent`)를 집계, `opponentPlayers`(팀에서 나 제외·게스트팀명 폴백)·`hasCareerRecord`. Profile "대회 커리어" 탭에 통합 전적 카드(승/패/승률 게이지·세부지표)+상대 전적 카드(자주 만난 상대별 W/L 최대 8명)를 추가, 내 엔트리 id 배치로 tournament_matches 조회(try-catch degrade, 헤더 mmr delta 근사와 달리 실경기 기준 정확 전적). 파트너 매칭: `collectPastPartners`(내가 낀 복식 신청 이력에서 상대를 모아 함께 출전 횟수·최근순 집계)+`rankPartnerSuggestions`(호출부 checkEligibility 주입 → 종목 자격 통과 먼저·횟수·최근순)+`partnerReason`. TournamentDetail 복식 신청 폼에 "추천 파트너 · 지난 대회에 함께 나간 분들" 카드(자격 통과 최대 4명, "다시 초대" 원터치→selectPartner). 대진DB 개인화 추천으로 검색-only 마찰 완화. 잔여: 대회 탐색 추천(급수·지역 맞춤 대회 추천)만 남음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-11 · 하드닝(테스트 커버리지 확장 ④ — supabase 의존 엔진) · `tests/_supabase-stub.mjs`(신규)·`tests/advance.test.mjs`(신규)
+  · 최고위험 엔진 `advance.js`(DB 변이 경로)에 회귀 테스트 23개 추가 — 직전 세 런이 순수 엔진
+    (engines.test.mjs 36 + engines2 27 + engines3 35 = 98)을 덮었지만, **깨지면 조용히 잘못된 팀이 본선
+    진출(=엉뚱한 시상)하거나 순위가 틀어지는** advance.js 의 DB 변이 로직(completeMatch·advanceWinner·
+    checkPoolStageComplete·seedKnockoutFromPools·finalizeRanks·finalizeTournament)은 supabase 의존이라
+    커밋된 테스트가 순수 `planTeamForfeit` 하나뿐이었다(직전 세 런 로그가 "다음 후보: advance.advanceWinner/
+    completeMatch(supabase 의존)"로 명시). 이 엔진이 승자 진출·조별→본선 시딩·최종 순위·시상 확정 전체를
+    구동하므로, 무인 실행이 리팩터하다 깨면 대회 결과 자체가 조용히 오염된다 — 하드닝 모드 최고가치 슬라이스.
+    supabase 의존 엔진을 테스트하려면 목이 필요해, 재사용 가능한 **인메모리 Supabase 스텁**(`_supabase-stub.mjs`)을
+    신설: PostgREST 체이닝 표면 중 엔진이 실제 쓰는 부분(from/select+임베디드조인 `alias:child(*)`/eq/in/order/
+    single/update/insert/delete/rpc)만 흉내내는 thenable 쿼리 빌더 + `_db`(상태 확인)·`_rpcCalls`(RPC 호출 검사).
+    이 스텁은 다음 하드닝 후보(notify/campaign·나머지 advance 함수)도 그대로 재사용 가능. `tests/*.test.mjs`
+    자동 발견 러너에 **새 파일 2개만 추가**(소스·기존 테스트 불변 → 회귀 위험 0), 각 단언은 tournament.js
+    (generatePools/calculatePoolStandings/determineAdvancements/generateKnockoutBracket) 조합을 실측 트레이스.
+    커버(불변식): **advanceWinner**(slot1→team1·slot2→team2·next 없거나 승자 없으면 false 무변이),
+    **completeMatch**(normal: status=completed·승수·라이브캐시(live_*) 리셋·3세트 저장·승자 다음경기 진출·
+    apply_match_mmr RPC 단일진입점·반환계약 / walkover: status=forfeited·forfeit_team·**walkover여도 RPC 무조건
+    호출**(제외판정은 RPC 전담)·상대 진출 / 게임 미제공 시 점수저장 생략·타경기 점수 불변 / **MMR RPC 실패해도
+    throw 안 하고 mmrError 반환**(점수·진출은 확정) / 없는 경기 throw), **checkPoolStageComplete**(미완료 false·
+    풀없음 false·pool_only 전부완료 true / **pool_knockout 전부완료 시 본선 시딩까지 실행**), **seedKnockoutFromPools**
+    (2조 각 1위(A1·B1) 본선 배정·pool_rank 기록 / **멱등: 이미 배정 시 alreadySeeded·pool_rank 불변**),
+    **finalizeRanks**(녹아웃 우승1·준우승2·준결승패자 공동3위·rank오름차순 반환 / 미완료 throw / 결승 승자없음 throw /
+    경기없음 [] / 리그전(풀테이블 없음) 조순위 순차), **finalizeTournament**(final_rank 확정+status=completed+
+    **공인대회(cert_level≠none)만 promote_grades_v2 RPC**·비공인 미호출·미완료 throw 시 상태전환 안 됨). `npm test`
+    → **121/121 통과**(기존 98 + 신규 23), `npx vite build` green(deps 설치 후). 다음 하드닝 후보: notify/campaign
+    (신설 스텁 재사용)·bwf.scoreSummary 세부 + UI 빈/로딩/에러 상태·실시간 구독 경쟁조건. (플로우 점수 불변 — 품질 하드닝)
 - 2026-07-11 · 하드닝(테스트 커버리지 확장 ③) · `tests/engines3.test.mjs`(신규)
   · 경쟁 무결성·레이팅·입금 매칭 3대 최고위험 엔진에 회귀 테스트 35개 추가 — 직전 두 런이 판정
     엔진(engines.test.mjs 36) + 나머지 순수 엔진(engines2.test.mjs 27)을 덮었지만, **깨지면 조용히
