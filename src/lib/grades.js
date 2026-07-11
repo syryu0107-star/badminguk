@@ -112,6 +112,34 @@ export function trackGradeOrBase(profile, unit, mode) {
   return trackGrade(profile, unit, mode) ?? GRADES[0].key
 }
 
+// ── 종목 참가 자격 검사 (급수 3축 × MMR 게이트) ─────────────────────
+// 대회 단위(gu/si/nat) × 종목의 선수 트랙 급수를 화이트리스트/레거시 범위와 대조하고
+// 종목별 MMR 상·하한을 확인한다. TournamentDetail(신청)·Tournaments(탐색 추천) 공용.
+// 반환: { ok, reason }. profile 없으면 로그인 필요.
+export function checkEligibility(profile, cat, tournament) {
+  if (!profile) return { ok: false, reason: '로그인 필요' }
+  const unit = tournament?.unit ?? 'gu'
+  const mode = modeForSport(cat.sport_type)
+  const myGrade = trackGradeOrBase(profile, unit, mode)   // 미보유 → 왕초심
+
+  // 1) 신규 화이트리스트(allowed_grades) 우선
+  const allowed = cat.allowed_grades ?? []
+  if (allowed.length && !allowed.includes(myGrade)) {
+    return { ok: false, reason: `${unitLabel(unit)} ${modeLabel(mode)} ${allowed.join('·')}만 참가 가능` }
+  }
+  // 2) 레거시 grade_min/max 폴백 (allowed 비었을 때만)
+  if (!allowed.length) {
+    const gi = getGradeIndex(myGrade)
+    if (cat.grade_min && gi < getGradeIndex(cat.grade_min)) return { ok: false, reason: `${cat.grade_min} 이상만 참가 가능` }
+    if (cat.grade_max && gi > getGradeIndex(cat.grade_max)) return { ok: false, reason: `${cat.grade_max} 이하만 참가 가능` }
+  }
+  // 3) MMR 게이트 (단위 무관, 종목별 MMR 컬럼 사용)
+  const mmr = mode === 'singles' ? (profile.singles_mmr ?? 1000) : (profile.mmr ?? 1000)
+  if (cat.min_mmr && mmr < cat.min_mmr) return { ok: false, reason: `MMR ${cat.min_mmr} 이상 필요 (현재 ${mmr})` }
+  if (cat.max_mmr && mmr > cat.max_mmr) return { ok: false, reason: `MMR ${cat.max_mmr} 이하만 참가 가능 (현재 ${mmr})` }
+  return { ok: true }
+}
+
 // ══════════════════════════════════════════════════════════════════
 // 급수 자동 승급 심사 (D · 감사 4-2)
 //

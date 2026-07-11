@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase'
 import {
   getGradeIndex, gradeRangeLabel, allowedGradesLabel,
   trackGrade, trackGradeOrBase, modeForSport, modeLabel, unitLabel,
+  checkEligibility,
 } from '../../lib/grades'
 import { getGradeFromMMR } from '../../lib/sandbag'
 import { PARTNER_COLS, collectPastPartners, rankPartnerSuggestions, partnerReason } from '../../lib/partners'
@@ -19,30 +20,7 @@ function isDoubles(cat) {
   return DOUBLES_TYPES.includes(cat?.sport_type)
 }
 
-// 급수+MMR 자격 검사 (급수 3축: 대회 단위 × 종목의 선수 트랙 급수를 대조)
-function checkEligibility(profile, cat, tournament) {
-  if (!profile) return { ok: false, reason: '로그인 필요' }
-  const unit = tournament?.unit ?? 'gu'
-  const mode = modeForSport(cat.sport_type)
-  const myGrade = trackGradeOrBase(profile, unit, mode)   // 미보유 → 왕초심
-
-  // 1) 신규 화이트리스트(allowed_grades) 우선
-  const allowed = cat.allowed_grades ?? []
-  if (allowed.length && !allowed.includes(myGrade)) {
-    return { ok: false, reason: `${unitLabel(unit)} ${modeLabel(mode)} ${allowed.join('·')}만 참가 가능` }
-  }
-  // 2) 레거시 grade_min/max 폴백 (allowed 비었을 때만)
-  if (!allowed.length) {
-    const gi = getGradeIndex(myGrade)
-    if (cat.grade_min && gi < getGradeIndex(cat.grade_min)) return { ok: false, reason: `${cat.grade_min} 이상만 참가 가능` }
-    if (cat.grade_max && gi > getGradeIndex(cat.grade_max)) return { ok: false, reason: `${cat.grade_max} 이하만 참가 가능` }
-  }
-  // 3) MMR 게이트 (단위 무관, 종목별 MMR 컬럼 사용)
-  const mmr = mode === 'singles' ? (profile.singles_mmr ?? 1000) : (profile.mmr ?? 1000)
-  if (cat.min_mmr && mmr < cat.min_mmr) return { ok: false, reason: `MMR ${cat.min_mmr} 이상 필요 (현재 ${mmr})` }
-  if (cat.max_mmr && mmr > cat.max_mmr) return { ok: false, reason: `MMR ${cat.max_mmr} 이하만 참가 가능 (현재 ${mmr})` }
-  return { ok: true }
-}
+// 급수+MMR 자격 검사는 lib/grades.js checkEligibility 로 공용화(탐색 추천과 동일 로직).
 
 // 대회 단위(구/시/전국) 배지 색
 const UNIT_BADGE = {
