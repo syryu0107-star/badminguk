@@ -112,6 +112,53 @@ export async function fetchMyCheckins(supabase, tournamentIds, playerId) {
   }
 }
 
+// 노쇼(호출 미응답) 자동 부전승 판정 (C7) — 체크인 데이터로 "누가 안 왔는지"를 확신할 수 있는가.
+// ──────────────────────────────────────────────────────────────────────
+// 지금껏 호출 후 유예가 지난(overdue) 경기는 사람이 "어느 팀이 안 왔는지"를 1탭으로
+// 골라야만 부전승 처리됐다("누가 안 왔는지"는 현장 판단이라 남겨둠). 하지만 셀프
+// 체크인(C4)으로 앱은 이미 "누가 대회장에 왔는지"를 안다. 한 팀은 전원 체크인(현장에
+// 있음)인데 상대 팀은 전원 미체크인(오지 않음)이면 누가 부전승인지 확신할 수 있으므로
+// 무인 확정한다. 애매한 경우 — 둘 다 체크인(대회장엔 왔는데 코트만 안 옴) / 둘 다
+// 미체크인(더블 노쇼, 어느 팀을 진출시킬지 불명) / 체크인 현황 불충분 — 은
+// resolvable=false 로 두고 사람이 최종 판단한다(near-zero touch, 예외만 사람).
+//
+//   match     : { team1:{player1,player2}, team2:{player1,player2} } (LiveDashboard 조인 형태)
+//   checkedIn : Set<player_id> 또는 배열 — 이 대회에 체크인한 선수 id
+// 반환 { resolvable, absentTeam(1|2|null), winnerTeam(1|2|null), t1, t2, reason }
+//   t1/t2 : { total, checkedCount, present, absent } 팀별 체크인 현황(UI 힌트용)
+export function assessNoShowResolution(match, checkedIn) {
+  const set = checkedIn instanceof Set ? checkedIn : new Set(checkedIn ?? [])
+  const idsOf = team => [team?.player1?.id, team?.player2?.id].filter(Boolean)
+  const statusOf = team => {
+    const ids = idsOf(team)
+    const checkedCount = ids.filter(pid => set.has(pid)).length
+    return {
+      total: ids.length,
+      checkedCount,
+      present: ids.length > 0 && checkedCount === ids.length, // 전원 체크인 = 현장에 있음
+      absent: ids.length > 0 && checkedCount === 0,           // 전원 미체크인 = 오지 않음
+    }
+  }
+  const t1 = statusOf(match?.team1)
+  const t2 = statusOf(match?.team2)
+
+  let resolvable = false, absentTeam = null, winnerTeam = null, reason = ''
+  if (t1.absent && t2.present) {
+    resolvable = true; absentTeam = 1; winnerTeam = 2
+    reason = '팀1 전원 미체크인 · 팀2 체크인 완료'
+  } else if (t2.absent && t1.present) {
+    resolvable = true; absentTeam = 2; winnerTeam = 1
+    reason = '팀2 전원 미체크인 · 팀1 체크인 완료'
+  } else if (t1.absent && t2.absent) {
+    reason = '양 팀 모두 미체크인 — 더블 노쇼(사람 확인)'
+  } else if (t1.present && t2.present) {
+    reason = '양 팀 모두 체크인 완료 — 코트 미입장(사람 확인)'
+  } else {
+    reason = '체크인 현황이 불충분 — 사람 확인'
+  }
+  return { resolvable, absentTeam, winnerTeam, t1, t2, reason }
+}
+
 // 체크인 요약 통계 (주최자 화면용). players: [{id, identity_verified}], checkins: rows
 export function summarizeCheckins(players, checkins) {
   const byId = new Map((checkins ?? []).map(c => [c.player_id, c]))

@@ -7,7 +7,7 @@ import { completeMatch, finalizeTournament, scoresToPairs } from '../../lib/adva
 import { callMatch, callMatchSoon, callWalkoverWarn } from '../../lib/notify'
 import { planAutoAdvance, planNoShow, analyzeDelay, planRebalance } from '../../lib/orchestrator'
 import { planAutoFinalize } from '../../lib/stateMachine'
-import { summarizeCheckins } from '../../lib/checkin'
+import { summarizeCheckins, assessNoShowResolution } from '../../lib/checkin'
 import { buildCertificates, printCertificates } from '../../lib/certificate'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
@@ -91,7 +91,11 @@ export default function LiveDashboard() {
   const [resolving, setResolving] = useState(null) // 부전승 처리 중인 match id
   const warnedRef = useRef({})   // { [matchId]: ts } 미입장 경고 중복 방지
   const recalledRef = useRef({}) // { [matchId]: { at, count } } 재알림(호출 반복) 중복·스팸 방지
+  const autoResolvedRef = useRef({}) // { [matchId]: ts } 노쇼 자동 부전승 중복 실행 방지
   const [nowTick, setNowTick] = useState(Date.now()) // 카운트다운 갱신용 틱
+
+  // 체크인한 선수 id 집합 (뷰와 무관하게 상시 유지) — 노쇼 자동 부전승 판정용.
+  const [checkinSet, setCheckinSet] = useState(() => new Set())
 
   // 체크인 상태
   const [entries, setEntries]         = useState([])
@@ -130,6 +134,21 @@ export default function LiveDashboard() {
     if (viewMode === 'checkin') loadCheckins()
     if (viewMode === 'standings') loadStandings()
   }, [viewMode, activeCat])
+
+  // ── 체크인 현황 상시 로드(뷰 무관) — 노쇼 자동 부전승이 "누가 왔는지"를 알아야 하므로 ──
+  //   체크인 뷰에 들어가지 않아도, 선수가 폰으로 셀프 체크인하면 실시간으로 반영된다.
+  useEffect(() => {
+    if (!id) return
+    loadCheckinSet()
+    const sub = supabase
+      .channel(`checkinset-${id}`)
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'tournament_checkins', filter: `tournament_id=eq.${id}` },
+        loadCheckinSet)
+      .subscribe()
+    return () => supabase.removeChannel(sub)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id])
 
   // ── 셀프 체크인 실시간 반영 (선수가 폰으로 체크인하면 무인으로 갱신) ──
   useEffect(() => {
@@ -212,8 +231,28 @@ export default function LiveDashboard() {
           .catch(() => {})
       })
     }
+    if (autoRun && plan.overdue.length) {
+      // 노쇼 자동 부전승 (C7) — 유예가 지난 경기 중 체크인 데이터로 "안 온 팀"을 확신할 수
+      //   있는 것만 무인 확정한다. 한 팀 전원 체크인(현장에 있음) + 상대 전원 미체크인(안 옴).
+      //   애매한 경우(둘 다 체크인=코트만 안 옴 / 둘 다 미체크인=더블 노쇼)는 사람 확인 패널로.
+      plan.overdue.forEach(m => {
+        if (autoResolvedRef.current[m.id]) return
+        const r = assessNoShowResolution(m, checkinSet)
+        if (!r.resolvable) return
+        autoResolvedRef.current[m.id] = Date.now() // 먼저 표시해 중복 실행 차단
+        const absentName = r.absentTeam === 1
+          ? ([m.team1?.player1?.name, m.team1?.player2?.name].filter(Boolean).join('/') || '팀A')
+          : ([m.team2?.player1?.name, m.team2?.player2?.name].filter(Boolean).join('/') || '팀B')
+        walkoverNoShow(m, r.absentTeam, `노쇼 자동 부전승 (${r.reason})`)
+          .then(() => {
+            pushAutoLog(`${m.court_number ?? '-'}번 코트 노쇼 자동 부전승 — ${absentName} 미체크인·미입장`)
+            loadMatches()
+          })
+          .catch(() => { delete autoResolvedRef.current[m.id] }) // 실패 시 재시도 허용
+      })
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [matches, calledIds, autoRun, nowTick])
+  }, [matches, calledIds, autoRun, nowTick, checkinSet])
 
   // ── 진행 페이스·지연 예측 (C6) — 계획 대비 실시간 지연을 예측(nowTick 로 라이브 갱신) ──
   const delay = useMemo(
@@ -331,6 +370,18 @@ export default function LiveDashboard() {
   }
 
   // ── 조별 순위표 로딩 ──────────────────────────────────────────
+  // 이 대회에 체크인한 선수 id 집합만 가볍게 조회(뷰 무관 상시). 테이블 미존재 시 빈 Set degrade.
+  async function loadCheckinSet() {
+    try {
+      const { data, error } = await supabase
+        .from('tournament_checkins')
+        .select('player_id')
+        .eq('tournament_id', id)
+      if (error) return
+      setCheckinSet(new Set((data ?? []).map(r => r.player_id)))
+    } catch { /* 체크인 테이블 미적용 등 — 빈 Set 유지(자동 부전승은 발화 안 함, 사람 확인) */ }
+  }
+
   async function loadStandings() {
     if (!activeCat) return
     setStandingsLoading(true)
@@ -455,6 +506,7 @@ export default function LiveDashboard() {
       setCalledIds(prev => ({ ...prev, [m.id]: Date.now() }))
       delete warnedRef.current[m.id] // 재호출 시 노쇼 경고 다시 보낼 수 있게 초기화
       delete recalledRef.current[m.id] // 새 호출이면 자동 재알림 시퀀스도 초기화
+      delete autoResolvedRef.current[m.id] // 다시 기다리므로 자동 부전승 판정도 초기화
       if (!res.persist.persisted && res.persist.reason === 'table_missing') {
         // 인앱 호출은 나갔지만 이력 저장은 아직(013 미적용). 진행은 막지 않음.
         console.info('[호출] 실시간 방송 완료 — 이력 저장은 013 마이그레이션 적용 후 활성화')
@@ -634,22 +686,28 @@ export default function LiveDashboard() {
   //   호출 후 유예 시간이 지나도 안 온 팀을 부전승 처리. "누가 안 왔는지" 는
   //   현장 판단이 필요한 예외라 사람이 한 번 확인한다(원터치). 나머지(감지·경고·
   //   카운트다운)는 전부 자동. resultType='walkover' → MMR 미반영(계약: RPC 내부 판정).
+  // 노쇼 부전승 처리 코어(수동·자동 공유). absentTeam(안 온 팀)의 상대가 승자로 진출.
+  async function walkoverNoShow(match, absentTeam, reason = '호출 미응답(노쇼)') {
+    const winningSide = absentTeam === 1 ? 2 : 1
+    const winnerEntryId = winningSide === 1 ? match.team1_entry_id : match.team2_entry_id
+    const res = await completeMatch(supabase, match.id, {
+      winnerEntryId,
+      resultType: 'walkover',
+      forfeitTeam: absentTeam,
+      forfeitReason: reason,
+    })
+    delete warnedRef.current[match.id]
+    delete recalledRef.current[match.id]
+    return res
+  }
+
   async function resolveNoShow(match, absentTeam) {
     if (resolving) return
     const label = absentTeam === 1 ? '팀1' : '팀2'
     if (!confirm(`${label}이 호출에 응답하지 않았어요.\n미입장(노쇼) 부전승으로 처리할까요? (되돌릴 수 없어요)`)) return
     setResolving(match.id)
-    const winningSide = absentTeam === 1 ? 2 : 1
-    const winnerEntryId = winningSide === 1 ? match.team1_entry_id : match.team2_entry_id
     try {
-      const res = await completeMatch(supabase, match.id, {
-        winnerEntryId,
-        resultType: 'walkover',
-        forfeitTeam: absentTeam,
-        forfeitReason: '호출 미응답(노쇼)',
-      })
-      delete warnedRef.current[match.id]
-      delete recalledRef.current[match.id]
+      const res = await walkoverNoShow(match, absentTeam)
       if (res?.mmrError) {
         alert('처리는 됐지만 MMR 반영에 실패했어요.\n주최자 계정으로 로그인돼 있는지 확인한 뒤 다시 시도해주세요.')
       }
@@ -961,7 +1019,7 @@ export default function LiveDashboard() {
                   <AlertTriangle size={16} /> 노쇼 확인 대기 {overdueMatches.length}건
                 </p>
                 <p className="text-[11px] text-amber-700/80 mt-0.5 leading-tight">
-                  호출 후 응답이 없는 경기예요. 안 온 팀을 눌러 부전승 처리하면 대진이 자동으로 이어져요.
+                  호출 후 응답이 없는 경기예요. {autoRun ? '체크인으로 안 온 팀이 분명하면 자동 부전승, 애매한 경우만 아래에서 확인하세요.' : '안 온 팀을 눌러 부전승 처리하면 대진이 자동으로 이어져요.'}
                 </p>
                 <div className="mt-3 space-y-2.5">
                   {overdueMatches.map(m => {
@@ -969,6 +1027,10 @@ export default function LiveDashboard() {
                     const elapsedMin = ns ? Math.max(1, Math.round(ns.elapsedSec / 60)) : null
                     const t1name = [m.team1?.player1?.name, m.team1?.player2?.name].filter(Boolean).join(' / ') || '팀 A'
                     const t2name = [m.team2?.player1?.name, m.team2?.player2?.name].filter(Boolean).join(' / ') || '팀 B'
+                    // 체크인 데이터 기반 "누가 안 왔는지" 판정 — 힌트/추천 버튼용.
+                    const rec = assessNoShowResolution(m, checkinSet)
+                    const chkLabel = t => t.total === 0 ? '체크인 정보 없음'
+                      : t.present ? '체크인 완료' : t.absent ? '미체크인' : `체크인 ${t.checkedCount}/${t.total}`
                     return (
                       <div key={m.id} className="bg-white rounded-xl border border-amber-200 p-3">
                         <p className="text-xs text-gray-500 flex items-center gap-1 flex-wrap">
@@ -976,7 +1038,22 @@ export default function LiveDashboard() {
                           <span className="text-amber-700 font-semibold">· 호출 {elapsedMin}분 경과 · 미응답</span>
                         </p>
                         <p className="text-sm font-bold mt-0.5">{t1name} <span className="text-gray-300">vs</span> {t2name}</p>
-                        <div className="flex gap-2 mt-2">
+                        {/* 체크인 현황 힌트 (누가 대회장에 왔는지) */}
+                        <div className="flex items-center gap-1.5 mt-1 text-[11px] flex-wrap">
+                          <span className={`px-1.5 py-0.5 rounded-md font-semibold ${rec.t1.present ? 'bg-green-100 text-green-700' : rec.t1.absent ? 'bg-red-100 text-[#C60C30]' : 'bg-gray-100 text-gray-500'}`}>
+                            {t1name}: {chkLabel(rec.t1)}
+                          </span>
+                          <span className={`px-1.5 py-0.5 rounded-md font-semibold ${rec.t2.present ? 'bg-green-100 text-green-700' : rec.t2.absent ? 'bg-red-100 text-[#C60C30]' : 'bg-gray-100 text-gray-500'}`}>
+                            {t2name}: {chkLabel(rec.t2)}
+                          </span>
+                        </div>
+                        {rec.resolvable && (
+                          <button onClick={() => resolveNoShow(m, rec.absentTeam)} disabled={resolving === m.id}
+                            className="w-full mt-2 py-2 rounded-lg bg-[#C60C30] text-white text-xs font-bold active:opacity-80 disabled:opacity-40">
+                            추천: {(rec.absentTeam === 1 ? t1name : t2name)} 노쇼 부전승 처리
+                          </button>
+                        )}
+                        <div className="flex gap-2 mt-1.5">
                           <button onClick={() => resolveNoShow(m, 1)} disabled={resolving === m.id}
                             className="flex-1 py-2 rounded-lg bg-amber-500 text-white text-xs font-bold active:opacity-80 disabled:opacity-40">
                             {t1name} 노쇼 (부전승)

@@ -8,7 +8,7 @@
 | 주최자 | 89% | **요강·설정 마법사(C8)** ✅ — 개설 시 정원(예상 팀 수)으로 대진 방식 자동 추천(규모→리그/조별+토너먼트·조 크기)·경기 수·예상 소요·예상 종료 시각 역산(코트 수 반영)·요강 문서(PDF) 자동 생성. 무통장 입금 자동 매칭 ✅ / 디지털 상장 ✅ / 사후 공지·리마인더·감사·설문(C11) ✅ / 정산 손익·원천징수 리포트(C10) ✅ / 시상 확정 무인(C2) ✅ / **AI 균형 추첨(C5)** ✅ — 조별 포맷 무작위 편성 시 후보 16개를 시뮬레이션해 조별 평균 MMR 편차 최소 대진 자동 선택 + "왜 균형적인지" 설명. 잔여: PG 실결제(human-gated)·draft→open 자동 개설(공개는 개설자 판단으로 남김)·클럽분리(프로필에 클럽 필드 없음) |
 | 선수   | 78% | 셀프 체크인·디지털 선수증 ✅, 입금 확인 자동화 ✅, 결과·급수·상장 ✅, 대회 안내·공지함 수신 ✅, **문의 챗봇(C9)** ✅ — 규정·일정·참가비·내신청 자동응답으로 단톡방 문의 대체, **호출 재알림(C1)** ✅ — 호출을 놓친 선수에게 경고 전 waiting 구간에서 45초 간격 최대 2회 자동 재호출(앱 잠깐 껐다 켠 선수도 다시 수신) / PG 카드결제 부재 |
 | 심판   | 78% | **코트별 심판 모드(도달 경로)** ✅ — 심판이 담당 코트를 고르면 그 코트의 현재/다음 경기가 나오고, 원터치로 BWF 점수판(/referee/:matchId) 진입, 경기 종료 시 다음 경기가 실시간 구독으로 자동 배포. BWF 자동판정 탭입력·종료 시 대진표 자동반영은 기존 ✅. 잔여: 무심판 코트 셀프스코어(선수 자가 점수 입력 — tournament_matches UPDATE RLS 확장 필요·human-gated) |
-| 운영   | 82% | 빈코트 자동투입·자동호출·사전알림·예상시각(관측 페이스 보정)·노쇼 타이머·**호출 재알림(무응답 자동 재호출)** ✅·지연 예측·**빈코트 실제 재배치 실행(C6)** ✅ — 유휴 코트로 과부하 코트 대기 경기를 실제 이동(court_number UPDATE)→자동 호출까지 무인. 잔여: 자동 부전승 확정(현장 예외로 사람 1탭 유지)·rescheduleAfterForfeit(사전스케줄용, 라이브 미적용) |
+| 운영   | 85% | 빈코트 자동투입·자동호출·사전알림·예상시각(관측 페이스 보정)·노쇼 타이머·**호출 재알림(무응답 자동 재호출)** ✅·지연 예측·**빈코트 실제 재배치 실행(C6)** ✅·**노쇼 자동 부전승 확정(C7)** ✅ — overdue 경기 중 체크인 데이터로 "안 온 팀"이 분명한 것(한 팀 전원 체크인+상대 전원 미체크인)은 무인 부전승 확정→대진 자동 진출. 잔여: 애매한 노쇼(둘 다 체크인=코트만 안 옴 / 더블 노쇼)만 사람 1탭·rescheduleAfterForfeit(사전스케줄용, 라이브 미적용) |
 
 ## 클러스터 상태 (C1~C12)
 | C | 클러스터 | 상태 | 비고(코드 근거) |
@@ -19,7 +19,7 @@
 | C4 | 셀프 체크인 | ✅ | `checkin.js` 엔진 신설 — 선수 MyMatches "디지털 선수증" 카드에서 대회 당일/진행중 원터치 셀프 체크인(verified_method='self'). 실명인증 선수는 무인 완료, 미인증은 "본인확인 권장" 예외로만 노출. LiveDashboard 체크인 패널 실시간 반영(tournament_checkins 구독)+셀프/본인확인권장/신고 요약. 운영자 수동 체크인 병존. QR/PIN 키오스크·대리스코어링만 잔여 |
 | C5 | AI 대진 최적화 | ⚠️ | `drawOptimizer.js` 신설 — 조별 포맷(2개 이상 조·MMR 있음) 무작위 편성 시 `optimizeDraw`가 후보 씨드 16개를 generatePools로 시뮬레이션→`scoreDraw`(조별 평균 MMR 편차 spread + 조크기 편차 페널티)로 채점→가장 고른 대진 자동 선택. `explainDraw`가 "왜 균형적인지"(가장 센/약한 조 평균·후보 대비 개선폭·조별 평균 배지) 초보용 설명 생성. BracketGenerator "AI 균형 추첨" 토글(기본 ON, 무작위 편성 시 노출)+완료 화면 설명 카드+조별 평균 MMR 배지. 고른 씨드 저장으로 공개추첨 재현성 유지. 시드 켜짐이면 스네이크가 이미 균형이라 seeded 설명만. 잔여: 클럽분리(프로필 클럽 필드 없음·human-gated)·부전승최소(pool 크기 균형은 반영, 녹아웃 시드 최적화는 미적용)·코트이동최소(C6 planRebalance가 별도 담당) |
 | C6 | 실시간 진행·지연 재조정 | ✅ | 빈코트 감시→다음경기 자동투입(planAutoAdvance) ✅. `analyzeDelay` 지연 예측·재배치안 배너 ✅. **`planRebalance` 신설(빈코트 실제 재배치)** ✅ — 유휴 코트(진행중·대기 없음+타종목 미사용)로 과부하 코트(진행중+대기≥1 또는 대기≥2)의 대기 경기를 court_number UPDATE로 실제 이동. 옮긴 경기는 유휴 코트 맨 앞이 돼 planAutoAdvance가 자동 호출→무인 완결. 중복 출전(팀이 경기 중) 방지·다종목 사용 코트 제외·경합 시 status='scheduled' 조건부 UPDATE. 무인 ON이면 runOrchestrator에서 자동, OFF면 추천 패널 원터치. rescheduleAfterForfeit(사전스케줄 전용)만 라이브 미적용(설계상 별개) |
-| C7 | 노쇼·기권·실격 자동처리 | ⚠️ | 노쇼 타이머 신설(orchestrator.planNoShow): 호출 후 미응답 경기를 waiting/warned/overdue 3단계로 판정 → 무인 진행 시 WALKOVER_WARN 자동 발송(선수 긴급 배너)+대시보드 카운트다운, overdue는 "노쇼 확인 대기" 패널 원터치 부전승(completeMatch walkover). "누가 안 왔는지"는 현장 예외라 사람 1탭 확인. 실격 출전권 무효·자동 부전승 확정은 미구현 |
+| C7 | 노쇼·기권·실격 자동처리 | ⚠️ | 노쇼 타이머(orchestrator.planNoShow): 호출 후 미응답 경기를 waiting/warned/overdue 3단계로 판정 → 무인 진행 시 WALKOVER_WARN 자동 발송(선수 긴급 배너)+대시보드 카운트다운. **자동 부전승 확정(checkin.assessNoShowResolution)** ✅ — C4 셀프 체크인 데이터로 "누가 안 왔는지"를 확신할 수 있으면(한 팀 전원 체크인=현장에 있음 + 상대 전원 미체크인=오지 않음) 무인 진행 ON일 때 overdue 진입 시 자동 부전승 확정(completeMatch walkover→승자 자동 진출·MMR 미반영), autoResolvedRef 중복차단·실패 시 재시도. 애매한 경우(둘 다 체크인=코트만 안 옴 / 둘 다 미체크인=더블 노쇼 / 부분 체크인)만 "노쇼 확인 대기" 패널에서 체크인 힌트 배지+추천 버튼과 함께 사람 1탭. 잔여: 실격(경기 중 부정)·출전권 무효 자동처리는 미구현 |
 | C8 | 요강·설정 마법사 | ✅ | `planWizard.js` 신설 — 규모→포맷/조크기 역산 + 예상종료 계산 + 요강 문서. `distributePools`(고른 조 분배)·`estimateMatches`(포맷별 실경기 수 역산: RR=nC2·SE=n-1+3위전·PK=조별합+advancers-1)·`defaultMatchMinutes`(점수제·판수 기반)·`estimateSchedule`(조별 코트 병렬+녹아웃 라운드 순차로 소요·예상 종료 시각)·`estimateTournament`(전 종목 합산)·`recommendSetup`(≤5 리그/≤8 4팀조/9+ 최적 조크기 자동)·`buildGuidelines`/`guidelinesHtml`/`printGuidelines`(요강 6섹션 인쇄=PDF·XSS 이스케이프). CreateTournament: 대진 설정 펼침에 "AI 대회 설계 도우미"(추천이 현재와 다르면 헤드라인·이유·"이 추천 적용"+정원 기준 예상 경기 수·소요·종료), 하단 "예상 진행·요강" 섹션(전 종목 합산+요강 PDF). 엔진 30개 시나리오 자체 검증 통과. 스키마·외부 키 불필요 |
 | C9 | 문의 챗봇 | ⚠️ | `chatbot.js`+`HelpChat.jsx` 신설 — 규정 FAQ(점수/부전승/노쇼/MMR/샌드배깅/파트너/신청/환불) + 대회 데이터 개인화(일정·장소·참가비·접수마감·내 신청상태·자격·시상) 18개 주제 규칙기반 검색 응답. TournamentDetail 우하단 "문의" 챗봇. 외부 LLM 키 없이 완결(실LLM 연동은 future·human-gated) |
 | C10 | 결과·시상·정산 | ✅ | 순위집계·급수승급 자동 + `certificate.js` 디지털 상장 + `settlement.js` 신설 — 정산·손익 완성. 참가비 입금(confirmed)만 수입 집계, 주최자 입력 경비·상금을 지출로 빼 순손익 자동 계산(환불·미수금은 손익 무영향·정보만), 상금 원천징수(4종 세율 프리셋: 없음/기타 22%/기타 4.4%/사업 3.3%)로 세무서 납부분·선수 실지급분 분리, TournamentManage "정산·손익" 패널(순손익 ▲▼·수입/지출·종목별·경비 입력 localStorage·정산 리포트 인쇄=PDF). 실PG 결제 연동만 human-gated |
@@ -27,6 +27,28 @@
 | C12 | 대회 탐색·파트너·전적 | ⚠️ | 파트너 초대·랭킹 있음, 추천/매칭 없음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-11 · C7 · `src/lib/checkin.js`(assessNoShowResolution 신규)·`src/pages/organizer/LiveDashboard.jsx`
+  · 노쇼 자동 부전승 확정 — 운영 완주를 막던 마지막 사람 1탭(overdue 경기의 "누가 안 왔는지"
+    확인)을, 이미 앱이 가진 셀프 체크인(C4) 데이터로 확신할 수 있는 경우 무인화. 지금껏 노쇼
+    타이머는 감지·경고·카운트다운까지만 자동이고, "어느 팀이 안 왔는지"는 현장 판단이라 매 노쇼마다
+    사람이 부전승 버튼을 눌러야 해 무인 진행이 그 지점에서 멈췄다. 하지만 체크인은 "누가 대회장에
+    왔는지"를 이미 안다 — 한 팀 전원 체크인(현장에 있음)이고 상대 팀 전원 미체크인(오지 않음)이면
+    누가 부전승인지 확신할 수 있다. 순수 함수 `assessNoShowResolution(match, checkedInSet)` 신설
+    (checkin.js) — 팀별 체크인 현황(present=전원 체크인/absent=전원 미체크인/partial)을 계산해,
+    (t1.absent && t2.present) 또는 (t2.absent && t1.present)일 때만 `resolvable=true`+absentTeam
+    +winnerTeam+reason 반환, 애매한 경우(둘 다 present=코트만 안 옴 / 둘 다 absent=더블 노쇼 /
+    부분 체크인)는 resolvable=false로 사람에게 남긴다(near-zero touch, 예외만 사람). LiveDashboard
+    배선: 체크인한 선수 id 집합 `checkinSet`을 뷰와 무관하게 상시 로드(loadCheckinSet)+
+    tournament_checkins 실시간 구독(선수가 폰으로 체크인하면 즉시 반영, 테이블 미존재 시 빈 Set
+    degrade), 노쇼 useEffect의 overdue 경기에 대해 무인 진행 ON이면 `assessNoShowResolution`이
+    resolvable인 것만 `walkoverNoShow`(수동 resolveNoShow와 공유하는 코어)로 자동 확정
+    (autoResolvedRef 중복차단·먼저 마킹, 실패 시 ref 삭제로 재시도 허용, calledIds/warnedRef는
+    completeMatch가 대진 진출까지 처리). 다시 호출(handleCall) 시 autoResolvedRef도 초기화.
+    "노쇼 확인 대기" 패널엔 각 경기의 체크인 힌트 배지(팀별 체크인 완료/미체크인/부분, 초록/빨강/
+    회색)와 resolvable이면 "추천: N팀 노쇼 부전승 처리" 원터치 버튼을 추가해 무인 OFF·애매한
+    경우에도 사람 판단을 돕는다. 스키마·외부 키 불필요(기존 tournament_checkins·completeMatch 재사용).
+    엔진 12개 시나리오(팀1/팀2 미체크인·둘다 체크인/미체크인·부분 체크인·단식·배열입력·null 안전)
+    자체 검증 통과, `npx vite build` green. (자동화율 운영 82%→85%)
 - 2026-07-11 · C1 · `src/lib/orchestrator.js`(planNoShow 확장)·`src/pages/organizer/LiveDashboard.jsx`
   · 호출 재알림 타이머 — 진단이 "가장 큰 공백"으로 지목한 C1의 남은 조각(재알림)을 채움. 지금껏
     호출(callMatch)은 인앱 실시간 방송이라 그 순간 앱을 안 보던 선수는 놓쳤고, 다음 접점은 2분 뒤
