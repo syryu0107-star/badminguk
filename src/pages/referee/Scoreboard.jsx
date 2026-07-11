@@ -11,16 +11,43 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import {
-  initMatchState, applyPoint, applyForfeit, foldEvents, serviceCourt, scoreSummary,
+  initMatchState, applyPoint, applyForfeit, foldEvents, serviceCourt, scoreSummary, matchCall,
 } from '../../lib/bwf'
 import { completeMatch } from '../../lib/advance'
 import Spinner from '../../components/Spinner'
 import ConnectionStatus from '../../components/ConnectionStatus'
 import { useOnline } from '../../lib/useOnline'
-import { ChevronLeft, Undo2, Flag, AlertTriangle, Trophy, Play } from 'lucide-react'
+import { ChevronLeft, Undo2, Flag, AlertTriangle, Trophy, Play, Volume2, VolumeX } from 'lucide-react'
 
 const RED = '#C60C30'
 const BLUE = '#003478'
+
+// ── 음성 콜(TTS): 브라우저 SpeechSynthesis, 키·서버 불필요. 미지원 시 조용히 무시 ──
+function speak(text) {
+  try {
+    const synth = window.speechSynthesis
+    if (!synth || !text) return
+    synth.cancel() // 직전 콜이 밀리지 않게 취소 후 최신 콜만
+    const u = new SpeechSynthesisUtterance(text)
+    u.lang = 'ko-KR'
+    u.rate = 1.05
+    synth.speak(u)
+  } catch { /* 무시 */ }
+}
+
+// 이름이 길면(복식 등) 첫 사람만 — 음성이 장황해지지 않게
+function shortName(n) {
+  if (!n) return ''
+  return n.length > 8 ? n.split(' · ')[0] : n
+}
+
+// 심판 콜 → 화면 배너 스타일 (동적 클래스 대신 정적 매핑)
+const CALL_STYLE = {
+  golden:     { bg: '#FBBF24', fg: '#111827' },
+  matchPoint: { bg: RED,       fg: '#fff' },
+  gamePoint:  { bg: BLUE,      fg: '#fff' },
+  deuce:      { bg: 'rgba(255,255,255,.14)', fg: '#E5E7EB' },
+}
 
 const NO_FLAGS = { intervalNow: false, gameJustEnded: false, matchJustEnded: false, goldenPoint: false }
 
@@ -51,14 +78,28 @@ export default function Scoreboard() {
   const [saving, setSaving] = useState(false)
   const [firstServer, setFirstServer] = useState(1) // 경기 시작 전 첫 서브 팀 선택
   const [forfeitInfo, setForfeitInfo] = useState(null) // { team, type, reason }
+  const [voiceOn, setVoiceOn] = useState(() => {
+    try { return localStorage.getItem('bmg_ref_voice') === '1' } catch { return false }
+  })
 
   const online = useOnline() // 네트워크 상태 상시 표시 (7-6)
 
   const stateRef = useRef(null)
   const eventsRef = useRef([])
   const userIdRef = useRef(null)
+  const voiceOnRef = useRef(voiceOn)
   stateRef.current = state
   eventsRef.current = events
+  voiceOnRef.current = voiceOn
+
+  function toggleVoice() {
+    setVoiceOn(v => {
+      const next = !v
+      try { localStorage.setItem('bmg_ref_voice', next ? '1' : '0') } catch { /* 무시 */ }
+      if (!next) { try { window.speechSynthesis?.cancel() } catch { /* 무시 */ } }
+      return next
+    })
+  }
 
   const config = {
     gamesPerMatch: match?.category?.games_per_match ?? 3,
@@ -206,6 +247,32 @@ export default function Scoreboard() {
     setSaving(false)
   }
 
+  // ── 음성 콜: 상황(점수+게임/매치 포인트·듀스·게임/경기 종료)을 읽어준다 ──
+  function announce(next) {
+    if (!voiceOnRef.current || !next) return
+    const t1 = teamLabel(match?.team1, '팀 1')
+    const t2 = teamLabel(match?.team2, '팀 2')
+    if (next.flags?.matchJustEnded) {
+      speak(`경기 종료. ${shortName(next.winnerTeam === 1 ? t1 : t2)} 팀 승리.`)
+      return
+    }
+    if (next.flags?.gameJustEnded) {
+      const g = next.completedGames[next.completedGames.length - 1]
+      speak(`${g.gameNo}게임 종료. ${g.score[0]} 대 ${g.score[1]}, ${shortName(g.winnerTeam === 1 ? t1 : t2)} 팀.`)
+      return
+    }
+    // 진행 중: 서버 팀 점수를 먼저 부르는 BWF 관례 + 상황 콜
+    const srv = next.serverTeam
+    let phrase = `${next.score[srv - 1]} 대 ${next.score[2 - srv]}`
+    const call = matchCall(next)
+    if (call) {
+      phrase += call.team ? `. ${call.label}, ${shortName(call.team === 1 ? t1 : t2)} 팀` : `. ${call.label}`
+    } else if (next.flags?.intervalNow) {
+      phrase += '. 인터벌'
+    }
+    speak(phrase)
+  }
+
   // ── 득점 (초대형 탭 영역) ──
   async function scorePoint(teamNo) {
     const cur = stateRef.current
@@ -226,6 +293,7 @@ export default function Scoreboard() {
       event_type: 'point', team_no: teamNo, game_no: evGameNo,
       score_t1: evScore[0], score_t2: evScore[1], server_team: next.serverTeam,
     }])
+    announce(next) // 음성 콜 (켜져 있을 때만)
 
     // 오버레이: 매치 종료 > 게임 종료(120초) > 인터벌(60초)
     if (next.flags.matchJustEnded) {
@@ -300,6 +368,11 @@ export default function Scoreboard() {
     setForfeitInfo({ team, type, reason })
     setState(next)
     setOverlay(null)
+    if (voiceOnRef.current) {
+      const t1 = teamLabel(match?.team1, '팀 1')
+      const t2 = teamLabel(match?.team2, '팀 2')
+      speak(`${RESULT_LABEL[type] ?? '경기 종료'}. ${shortName(next.winnerTeam === 1 ? t1 : t2)} 팀 승리.`)
+    }
     await insertEvent({
       event_type: type === 'walkover' ? 'walkover' : 'retired',
       team_no: team,
@@ -374,6 +447,8 @@ export default function Scoreboard() {
   const done = ['completed', 'forfeited', 'bye'].includes(match.status)
   const sc = state && !state.finished ? serviceCourt(state) : null
   const gamesToWin = Math.ceil(config.gamesPerMatch / 2)
+  // 심판 콜 배너: 현재 점수에서 파생(새로고침 복원에도 유지). 오버레이 중엔 숨김.
+  const liveCall = state && !state.finished && !overlay ? matchCall(state) : null
 
   return (
     <div className="fixed inset-0 z-50 bg-gray-950 text-white flex flex-col select-none" style={{ touchAction: 'manipulation' }}>
@@ -393,6 +468,13 @@ export default function Scoreboard() {
             {state.finished ? '경기 끝' : `${state.gameNo}번째 게임 · ${config.pointsPerGame}점제`}
           </span>
         )}
+        <button onClick={toggleVoice}
+          title={voiceOn ? '음성 콜 끄기' : '음성 콜 켜기 (점수·게임/매치 포인트 자동 안내)'}
+          aria-label={voiceOn ? '음성 콜 끄기' : '음성 콜 켜기'} aria-pressed={voiceOn}
+          className={`p-1.5 rounded-full active:bg-white/10 ${voiceOn ? 'text-emerald-400' : 'text-gray-500'}`}
+        >
+          {voiceOn ? <Volume2 size={18} /> : <VolumeX size={18} />}
+        </button>
         <ConnectionStatus online={online} live={null} dark />
         {syncError && (
           <span className="text-[11px] font-bold px-2 py-1 rounded-full bg-amber-500/20 text-amber-300 flex items-center gap-1">
@@ -459,9 +541,22 @@ export default function Scoreboard() {
             />
           </div>
 
-          {state.flags.goldenPoint && (
-            <div className="shrink-0 text-center py-1.5 bg-amber-400 text-gray-900 text-sm font-bold">
-              골든 포인트! 다음 1점으로 이 게임이 끝납니다
+          {liveCall && (
+            <div className="shrink-0 text-center py-1.5 text-sm font-bold flex items-center justify-center gap-2"
+              style={{ background: CALL_STYLE[liveCall.key].bg, color: CALL_STYLE[liveCall.key].fg }}
+            >
+              {liveCall.key === 'golden'
+                ? '골든 포인트! 다음 1점으로 이 게임이 끝납니다'
+                : liveCall.key === 'deuce'
+                  ? `듀스 — ${config.pointsPerGame - 1}점 이후 2점 차로 승부`
+                  : (
+                    <>
+                      <span className="uppercase tracking-wide">{liveCall.label}</span>
+                      <span className="opacity-90 break-keep">
+                        {(liveCall.team === 1 ? t1name : t2name)}
+                      </span>
+                    </>
+                  )}
             </div>
           )}
 

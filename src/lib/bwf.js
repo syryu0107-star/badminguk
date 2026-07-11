@@ -203,6 +203,48 @@ export function foldEvents(events, config, firstServerTeam = 1) {
   return state
 }
 
+/**
+ * 심판 콜(BWF 관례) 판정 — 순수 함수, 화면 배너·음성 안내용.
+ * 진행 중(!finished)인 현재 점수에서 골든포인트·매치포인트·게임포인트·듀스 상황을
+ * 자동 판정한다. 게임 종료·인터벌·매치 종료는 flags/오버레이가 담당하므로 제외.
+ * 비전문가(동호인) 심판이 "지금이 게임 포인트인지" 스스로 판단하지 않아도 되게 한다.
+ * @returns {{ key:'golden'|'matchPoint'|'gamePoint'|'deuce', team:(1|2|null), label:string }|null}
+ */
+export function matchCall(state) {
+  if (!state || state.finished || !state.config) return null
+  const [a, b] = state.score
+  const { pointsPerGame, cap } = state.config
+  const gamesToWin = Math.ceil(state.config.gamesPerMatch / 2)
+  const gamesWon = state.gamesWon ?? [0, 0]
+
+  // 골든 포인트: cap-1 동점 (예: 29-29) — 다음 1점이 곧 게임·경기 승부
+  if (a === cap - 1 && b === cap - 1) {
+    return { key: 'golden', team: null, label: '골든 포인트' }
+  }
+
+  // 게임 포인트: 이 팀이 1점 더 내면 이번 게임을 가져가는가 (엔진 재사용)
+  const gpTeam =
+    isGameOver([a + 1, b], state.config) === 1 ? 1 :
+    isGameOver([a, b + 1], state.config) === 2 ? 2 : null
+
+  if (gpTeam) {
+    // 이 게임을 이기면 매치까지 끝나면 '매치 포인트'
+    const matchPoint = gamesWon[gpTeam - 1] + 1 >= gamesToWin
+    return {
+      key: matchPoint ? 'matchPoint' : 'gamePoint',
+      team: gpTeam,
+      label: matchPoint ? '매치 포인트' : '게임 포인트',
+    }
+  }
+
+  // 듀스: pointsPerGame-1 이상에서 동점 (예: 20-20). 골든 직전은 위에서 처리.
+  if (a === b && a >= pointsPerGame - 1) {
+    return { key: 'deuce', team: null, label: '듀스' }
+  }
+
+  return null
+}
+
 /** UI 라벨: 끝난 게임 스코어 문자열 — "21-18, 19-21, 21-15" */
 export function scoreSummary(state) {
   return (state.completedGames ?? [])
