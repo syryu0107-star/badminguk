@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-11 — [하드닝·운영] 무인 진행 실시간 복원력 — LiveDashboard matches 구독 필터·재연결 따라잡기·폴링 폴백·연결 상태 표시
+
+- **운영 무인 진행 신뢰성 — realtime 구독 경쟁조건 하드닝(라이브 화면 정렬)**
+  - 파일: `src/pages/organizer/LiveDashboard.jsx`
+  - 요약: 직전 다섯 런이 전부 회귀 테스트 확장(36→150개)이라, 안티스톨 규칙(동일 항목 2연속 금지)에 따라 원장이 매 런 "다음 후보"로 미뤄 온 **"실시간 구독 경쟁조건"**을 코드 실측으로 잡았다. **진단**: 라이브 화면 4곳(LiveScore·CourtView·CourtReferee·LiveDashboard) 중 앞 3곳은 구독 핸들러에서 `catIdsRef.has(row.category_id)` 클라이언트 필터를 걸고 CourtReferee 는 rtState·hadDropRef·15초 폴링으로 재연결 따라잡기까지 갖췄는데, **무인 자동 진행의 핵심 화면인 LiveDashboard** 만 (1)matches 구독이 `{event:'*', table:'tournament_matches'}` 로 필터가 없어 동시 진행되는 **타 대회·타 종목의 모든 점수 변경마다** 무거운 조인 `loadMatches` 를 재실행(재조회 폭주)하고, (2)재연결 복구가 전혀 없었다. LiveDashboard 의 무인 오케스트레이터는 `[matches]` 이펙트의 `if(autoRun) runOrchestrator(matches)` 로 도는데 그 트리거가 오직 realtime matches 갱신이라 — 랩톱 절전·모바일 네트워크로 채널이 조용히 끊기면 **자동 호출·빈코트 투입·노쇼 타이머·시상 확정이 아무 신호 없이 영구 정지**했다(무인 near-zero touch 의 치명적 구멍, 하드닝 목록 "race conditions in realtime"). **구현**: 다른 라이브 화면과 동일 패턴으로 정렬 — (a) 구독 핸들러가 `payload.new ?? payload.old` 의 category_id 가 activeCat 이 아니면 무시(재조회 폭주 제거, 이펙트가 activeCat 에 재구독하므로 클로저 activeCat 이 항상 최신), (b) `.subscribe(status=>…)` 에서 SUBSCRIBED 시 rtState='connected' + 끊겼다 복귀(hadDropRef)면 loadMatches 로 따라잡기, CHANNEL_ERROR/TIMED_OUT/CLOSED 시 'connecting' + hadDropRef 표시, (c) 15초 폴링 폴백(REFRESH_MS — realtime 이 죽어도 오케스트레이터가 계속 도는 안전망, CourtView/CourtReferee 와 동일 주기), (d) `useOnline` 로 오프라인→온라인 복구 시 loadMatches·loadCheckinSet 재조회, (e) loadMatches 가 lastSync 스탬프. 무인 자동 진행 패널에 재사용 `ConnectionStatus`(실시간 연결됨/재연결 중…/오프라인·마지막 동기화 시각) 상시 표시 + 재연결 중엔 "15초마다 자동 새로고침 중" 안내로 무인 진행이 실제로 연결돼 있는지 운영자가 눈으로 확인. 비파괴적(기존 orchestrator·노쇼·시상 확정 트리거 배선·checkinset/checkins 구독 전부 불변, matches 구독 내부만 강화). `npm test` **150/150 통과**, `npx vite build` green. 다음 하드닝 후보: checkinset/checkins 구독에도 재연결 따라잡기 확장·UI 빈/로딩/에러 상태·notify broadcast 순차 send 2초 대기 직렬 지연. (자동화율 운영 87%→88%, 주최자 93%·선수 88% 불변)
+
 ## 2026-07-11 — [하드닝] 회귀 테스트 커버리지 확장 ⑤ — 커뮤니케이션 레이어(C1 notify + C11 campaign)에 29개 테스트 + env shim·싱글턴 스텁 신설
 
 - **품질 하드닝 — 무인 커뮤니케이션 엔진 회귀 그물(notify.js·campaign.js)**

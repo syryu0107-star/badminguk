@@ -11,7 +11,14 @@ import { summarizeCheckins, assessNoShowResolution } from '../../lib/checkin'
 import { buildCertificates, printCertificates } from '../../lib/certificate'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
+import ConnectionStatus from '../../components/ConnectionStatus'
+import { useOnline } from '../../lib/useOnline'
 import { Clock, Shield, UserCheck, Flag, CheckCircle, Gavel, Trophy, ListOrdered, Megaphone, Zap, Timer, AlertTriangle, TrendingUp, Award } from 'lucide-react'
+
+// 실시간이 끊겨도 최신 데이터를 유지하는 폴링 폴백 주기(다른 라이브 화면과 동일 15초).
+// 무인 자동 진행은 realtime matches 갱신이 트리거이므로, 연결이 조용히 끊겨도
+// 이 폴링이 loadMatches 를 계속 돌려 오케스트레이터가 영구 정지하지 않게 한다.
+const REFRESH_MS = 15_000
 
 // 초 → "m:ss" 카운트다운 표기
 function fmtCountdown(sec) {
@@ -80,6 +87,17 @@ export default function LiveDashboard() {
   const orchestrating = useRef(false)
   const rebalancing   = useRef(false) // 재배치 실행 중복 방지
 
+  // ── 실시간 연결 상태 (무인 진행 신뢰성) ─────────────────────────────
+  //   무인 자동 진행은 realtime matches 갱신으로 트리거되므로, 연결이 끊긴 채
+  //   방치되면 호출·진출이 조용히 멈춘다. 연결 상태를 표시하고, 재연결 시 즉시
+  //   따라잡기(loadMatches)해 무인 흐름이 복구되게 한다(코트 심판 화면과 동일 패턴).
+  const [rtState, setRtState]   = useState('connecting') // 'connecting' | 'connected'
+  const [lastSync, setLastSync] = useState(null)         // 마지막으로 서버 데이터 받은 시각
+  const hadDropRef = useRef(false)  // 실시간이 한 번이라도 끊겼는가(재연결 시 따라잡기)
+
+  // 브라우저 네트워크 복구 시(오프라인→온라인) 즉시 데이터 따라잡기.
+  const online = useOnline(() => { loadMatches(); loadCheckinSet() })
+
   // ── 무인 시상 확정 (C2) 상태 ───────────────────────────────────────
   const [autoFinalize, setAutoFinalize] = useState(null) // { allDone, ready, remainingSec } 무인 확정 대기 표시
   const [promotions, setPromotions]     = useState(null) // 시상 확정 후 급수 승급 결과(축하 배너)
@@ -125,11 +143,28 @@ export default function LiveDashboard() {
   useEffect(() => {
     if (!activeCat) return
     loadMatches()
+    // 폴링 폴백 — 실시간이 조용히 끊겨도 최신 경기 상태를 유지해 무인 진행이 멈추지 않게 한다.
+    const poll = setInterval(loadMatches, REFRESH_MS)
     const sub = supabase
       .channel(`matches-${activeCat}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tournament_matches' }, loadMatches)
-      .subscribe()
-    return () => supabase.removeChannel(sub)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tournament_matches' }, (payload) => {
+        // 다른 종목·다른 대회의 변경으로 무거운 전체 재조회가 폭주하지 않도록 현재 종목만 반영.
+        const row = payload.new ?? payload.old
+        if (row && row.category_id !== activeCat) return
+        loadMatches()
+      })
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          setRtState('connected')
+          // 끊겼다 돌아왔으면 놓친 변경을 따라잡아 무인 흐름을 복구한다.
+          if (hadDropRef.current) { hadDropRef.current = false; loadMatches() }
+        } else if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) {
+          setRtState('connecting')
+          hadDropRef.current = true
+        }
+      })
+    return () => { clearInterval(poll); supabase.removeChannel(sub) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeCat])
 
   useEffect(() => {
@@ -349,6 +384,7 @@ export default function LiveDashboard() {
       .eq('category_id', activeCat)
       .order('scheduled_time', { ascending: true })
     setMatches(data ?? [])
+    setLastSync(new Date())
   }
 
   async function loadCheckins() {
@@ -943,6 +979,15 @@ export default function LiveDashboard() {
                   <span className={`absolute top-0.5 left-0.5 w-6 h-6 rounded-full bg-white shadow transition-transform
                     ${autoRun ? 'translate-x-5' : ''}`} />
                 </button>
+              </div>
+
+              {/* 실시간 연결 상태 — 무인 진행은 실시간 갱신이 트리거라 연결이 끊기면 멈춘다.
+                  끊김/재연결 중을 항상 보여 주고, 재연결되면 자동으로 따라잡는다. */}
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <ConnectionStatus online={online} live={online ? rtState === 'connected' : null} lastSync={lastSync} />
+                {online && rtState !== 'connected' && (
+                  <span className="text-[11px] text-amber-600">15초마다 자동 새로고침 중</span>
+                )}
               </div>
 
               {autoRun && (
