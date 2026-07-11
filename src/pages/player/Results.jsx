@@ -3,9 +3,10 @@ import { useParams } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { prizeLabel } from '../../lib/tournament'
 import { certRankInfo, buildCertificate, buildCertificates, printCertificates } from '../../lib/certificate'
+import { buildPlayerHighlight, highlightShareText } from '../../lib/highlight'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
-import { Trophy, Hourglass, Users, GitBranch, Medal, Award } from 'lucide-react'
+import { Trophy, Hourglass, Users, GitBranch, Medal, Award, Sparkles, Share2 } from 'lucide-react'
 
 // ─── 헬퍼 ────────────────────────────────────────────────────────
 
@@ -43,12 +44,27 @@ export default function Results() {
   const [matches, setMatches]       = useState([])
   const [activeCat, setActiveCat]   = useState(null)
   const [userId, setUserId]         = useState(null)
+  const [mmrDelta, setMmrDelta]     = useState(null) // 이 대회 내 MMR 총 변동
   const [loading, setLoading]       = useState(true)
 
   useEffect(() => {
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
       setUserId(user?.id ?? null)
+
+      // 내 이번 대회 MMR 총 변동(하이라이트용, 없거나 미적용이면 조용히 null)
+      if (user?.id) {
+        try {
+          const { data: hist } = await supabase
+            .from('mmr_history')
+            .select('delta')
+            .eq('player_id', user.id)
+            .eq('tournament_id', id)
+          if (hist && hist.length) {
+            setMmrDelta(hist.reduce((sum, h) => sum + (h.delta ?? 0), 0))
+          }
+        } catch { /* mmr_history 조회 실패 시 하이라이트에서 MMR 줄만 생략 */ }
+      }
 
       const [{ data: t }, { data: cats }] = await Promise.all([
         supabase.from('tournaments').select('*').eq('id', id).single(),
@@ -135,6 +151,28 @@ export default function Results() {
         .filter(e => certRankInfo(e.final_rank, prizeSpots))
         .map(e => ({ recipient: teamLabel(e), rank: e.final_rank }))
     : []
+
+  // ── 개인 하이라이트 요약 (C11) ────────────────────────────────
+  const highlight = isCompleted && myEntry
+    ? buildPlayerHighlight({ tournament, category: cat, myEntry, matches, entryById, mmrDelta })
+    : null
+
+  async function shareHighlight() {
+    const text = highlightShareText(highlight, { tournament, category: cat })
+    if (!text) return
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: `${tournament.title} 결과`, text })
+        return
+      }
+    } catch { /* 사용자가 공유 취소 — 무시 */ }
+    try {
+      await navigator.clipboard?.writeText(text)
+      alert('하이라이트를 복사했어요. 원하는 곳에 붙여넣어 공유하세요!')
+    } catch {
+      alert(text)
+    }
+  }
 
   function printMyCertificate() {
     const ok = printCertificates(
@@ -231,6 +269,59 @@ export default function Results() {
                   <Award size={15} /> 내 상장 받기 · 인쇄
                 </button>
               )}
+            </div>
+          )}
+
+          {/* 개인 하이라이트 요약 (C11) */}
+          {highlight && (
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+              <div className="flex items-center gap-1.5 mb-2">
+                <Sparkles size={16} className="text-[#C60C30]" />
+                <h2 className="font-bold">내 대회 하이라이트</h2>
+              </div>
+              <div className="flex items-start gap-3">
+                <span className="text-3xl leading-none shrink-0">{highlight.medal}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="font-black text-[15px]" style={{ color: highlight.rankColor }}>
+                    {highlight.headline}
+                  </p>
+                  <div className="mt-2 space-y-1">
+                    {highlight.lines.map((line, i) => (
+                      <p key={i} className="text-xs text-gray-600 leading-relaxed">{line}</p>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* 요약 스탯 칩 */}
+              {(highlight.stats.wins + highlight.stats.losses > 0) && (
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  <Stat label="전적" value={`${highlight.stats.wins}승 ${highlight.stats.losses}패`} />
+                  {highlight.winRate !== null && <Stat label="승률" value={`${highlight.winRate}%`} />}
+                  {(highlight.stats.setsWon + highlight.stats.setsLost > 0) && (
+                    <Stat label="세트" value={`${highlight.stats.setsWon}-${highlight.stats.setsLost}`} />
+                  )}
+                  {typeof highlight.mmrDelta === 'number' && highlight.mmrDelta !== 0 && (
+                    <Stat
+                      label="MMR"
+                      value={`${highlight.mmrDelta > 0 ? '+' : ''}${highlight.mmrDelta}`}
+                      color={highlight.mmrDelta > 0 ? '#059669' : '#C60C30'}
+                    />
+                  )}
+                </div>
+              )}
+
+              <div className="mt-3 rounded-xl bg-blue-50/70 px-3 py-2.5">
+                <p className="text-xs text-[#003478] font-semibold leading-relaxed">🎯 {highlight.nextGoal}</p>
+              </div>
+
+              <button
+                onClick={shareHighlight}
+                className="w-full mt-3 flex items-center justify-center gap-1.5 py-2.5 rounded-xl
+                           bg-gray-100 text-gray-700 text-sm font-bold active:scale-[.98] transition"
+              >
+                <Share2 size={15} /> 하이라이트 공유하기
+              </button>
             </div>
           )}
 
@@ -418,6 +509,17 @@ export default function Results() {
 
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── 하이라이트 스탯 칩 ──────────────────────────────────────────
+
+function Stat({ label, value, color }) {
+  return (
+    <div className="rounded-xl bg-gray-50 px-2 py-2 text-center">
+      <p className="text-[10px] text-gray-400 font-semibold">{label}</p>
+      <p className="text-sm font-black mt-0.5" style={color ? { color } : undefined}>{value}</p>
     </div>
   )
 }

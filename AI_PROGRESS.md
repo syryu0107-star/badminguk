@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-11 — [C11] 개인 대회 하이라이트 요약 — 종료 후 내 경기 회고 자동 생성 (선수 플로우 감정적 종점)
+
+- **C11 사후 커뮤니케이션 — 개인 하이라이트 요약 (필수/중, 선수 완주 종점, AI 요약 레이어)**
+  - 파일: `src/lib/highlight.js`(신규), `src/pages/player/Results.jsx`
+  - 요약: 공동 최저(78%)이던 선수 플로우의 마지막 감정적 종점을 채웠다. 북극성 DoD "선수: …결과·급수·상장까지 화면 하나로 완결"에서 상장까지는 이미 있었지만, "내 대회가 어땠나"를 돌아볼 회고가 앱에 없어 대회가 끝나면 선수 경험이 순위표에서 툭 끊겼다(C11 백로그의 "하이라이트 요약"이 미구현으로 남아 있던 조각). 외부 키·LLM·스키마 없이 기존 데이터(tournament_matches+match_scores, mmr_history 합산 delta)만으로 규칙 기반 완결. 순수 엔진 `highlight.js` 신설 — `computePlayerStats(matches, entryId, entryById)`가 내 팀(entryId)이 낀 완료/부전 경기를 훑어 played(실제 점수 겨룬 경기·부전 제외)·wins/losses(부전승/부전패 별도 카운트)·setsWon/setsLost·pointsFor/pointsAgainst·fullSetCount(3세트 접전)·closest(가장 접전이던 결판 세트)·bestWin(내가 이긴 세트 중 최다 점수차)을 집계(부전승/부전패는 승패만·세트 미집계, 점수 미입력 완료는 승패만, 미참여/빈·null 안전), `winRate`(승패합 0이면 null), `buildPlayerHighlight`가 거기에 순위(기존 `certRankInfo` 재사용)·MMR 총변동을 얹어 순위/전적 기반 헤드라인(우승/준우승/3위/입상/전승/과반/1승 이상/최선), 있는 정보만 담은 본문 줄, 격려 다음 목표, 메달·색을 만든다(집계할 내용 전무 시 null 반환→카드 숨김), `highlightShareText`가 공유·복사용 한 줄 요약을 만든다. Results 배선: 대회 종료(completed)+내 참가(myEntry)일 때 "내 대회 하이라이트" 카드 — 메달·헤드라인(순위 색)·본문 줄·요약 스탯 칩(전적/승률/세트/MMR ▲초록▼빨강)·"🎯 다음 목표" 박스·"하이라이트 공유하기"(navigator.share 우선, 없거나 취소 시 클립보드 복사 폴백, 최후 alert). MMR 총변동은 load()에서 mmr_history(player_id·tournament_id) delta 합산으로 조회하되 테이블 미적용/실패 시 try-catch로 MMR 줄만 조용히 생략(하이라이트 자체는 정상 표시). matches는 전 종목이 담겨 있어도 entryId 필터가 활성 종목 경기만 집계하므로 안전. 엔진 31개 시나리오(승패·세트 득실·풀세트·명장면 margin·부전승/부전패 카운트·미참여 0·null/빈 안전·우승/무순위/전승 헤드라인·MMR 유무·명장면 vs 완승 분기·순위 없이 경기만·완전 빈→null·myEntry 없음→null·공유 텍스트) 자체 검증(esbuild 번들) 통과, `npx vite build` green. 실외부발송(문자·알림톡)만 human-gated 유지. (자동화율 선수 78%→80%)
+
 ## 2026-07-11 — [C7] 노쇼 자동 부전승 확정 — 체크인 데이터로 "안 온 팀"이 분명하면 무인 부전승 (운영 완주 마지막 사람 1탭 제거)
 
 - **C7 노쇼·기권·실격 자동처리 — 자동 부전승 확정 (필수/중, 운영 완주 잔여 갭, AI 판단 레이어)**
