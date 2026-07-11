@@ -7,7 +7,8 @@ import Spinner from '../../components/Spinner'
 import { assessSandbag, worseLevel, SANDBAG_STYLE } from '../../lib/sandbag'
 import { planAutoApprovals } from '../../lib/stateMachine'
 import { parseDeposits, matchDeposits } from '../../lib/payment'
-import { Check, X, ShieldAlert, Trophy, Clock, Sparkles, Banknote, ChevronDown } from 'lucide-react'
+import { buildNoShowIndex, recommendWaitlist, predictNoShow, NOSHOW_STYLE } from '../../lib/noshowPredict'
+import { Check, X, ShieldAlert, Trophy, Clock, Sparkles, Banknote, ChevronDown, UserX } from 'lucide-react'
 
 // 신청 상태별 표시(라벨·색). 011에서 partner_pending/partner_rejected 추가됨.
 const ENTRY_STATUS_META = {
@@ -36,6 +37,7 @@ export default function EntryManagement() {
   const [entries, setEntries]       = useState([])
   const [activeCat, setActiveCat]   = useState(null)
   const [podium, setPodium]         = useState({}) // playerId → { champ, medal }
+  const [noshowIdx, setNoshowIdx]   = useState({}) // playerId → { appearances, noShows } (노쇼 예측)
   const [loading, setLoading]       = useState(true)
   const [approving, setApproving]   = useState(false)
 
@@ -97,6 +99,32 @@ export default function EntryManagement() {
       setPodium(map)
       setActiveCat(cats?.[0]?.id ?? null)
       setLoading(false)
+
+      // 노쇼(불참) 예측 — 신청자들의 과거 대회 부전승(walkover) 이력을 집계(advisory).
+      // 데이터/권한 없으면 조용히 예측 없이 진행(비파괴).
+      try {
+        if (ids.size) {
+          const list = [...ids].join(',')
+          const { data: hEntries } = await supabase
+            .from('tournament_entries')
+            .select('id,player1_id,player2_id')
+            .or(`player1_id.in.(${list}),player2_id.in.(${list})`)
+            .limit(1000)
+          const entryIds = (hEntries ?? []).map(e => e.id).slice(0, 600)
+          const matchRows = []
+          for (let i = 0; i < entryIds.length; i += 150) {
+            const chunk = entryIds.slice(i, i + 150).join(',')
+            const { data: ms } = await supabase
+              .from('tournament_matches')
+              .select('team1_entry_id,team2_entry_id,result_type,forfeit_team,status,category:tournament_categories!category_id(tournament_id)')
+              .or(`team1_entry_id.in.(${chunk}),team2_entry_id.in.(${chunk})`)
+              .in('status', ['completed', 'forfeited'])
+            if (ms?.length) matchRows.push(...ms)
+          }
+          const idx = buildNoShowIndex({ historyEntries: hEntries ?? [], matches: matchRows })
+          setNoshowIdx(Object.fromEntries(idx))
+        }
+      } catch { /* 무시 — 예측 없이 진행 */ }
     }
     load()
   }, [id])
@@ -121,6 +149,16 @@ export default function EntryManagement() {
   const buckets = useMemo(
     () => planAutoApprovals(entries, catById, { counts: approvedCounts }),
     [entries, catById, approvedCounts],
+  )
+
+  // 노쇼 예측 — 활성 종목 신청 기준 예비명단(오버부킹) 추천
+  const noshowRec = useMemo(
+    () => recommendWaitlist(entries.filter(e => e.category_id === activeCat), noshowIdx),
+    [entries, activeCat, noshowIdx],
+  )
+  const flaggedEntryIds = useMemo(
+    () => new Set(noshowRec.flagged.map(f => f.entryId)),
+    [noshowRec],
   )
 
   // 입금 자동 매칭 — 참가비 있는 대회에서만 노출
@@ -411,6 +449,44 @@ export default function EntryManagement() {
         </div>
       )}
 
+      {/* 노쇼(불참) 예측 · 예비명단 추천 (AI 차별화) — 위험 신청이 있을 때만 노출 */}
+      {noshowRec.headline && (
+        <div className="px-4 pt-3">
+          <div className="bg-white rounded-2xl border border-amber-200 shadow-sm p-4">
+            <div className="flex items-start gap-2">
+              <UserX size={18} className="text-amber-600 mt-0.5 shrink-0" />
+              <div className="min-w-0">
+                <p className="font-bold text-sm">불참 예측 · 예비팀 추천</p>
+                <p className="text-xs text-gray-500 leading-relaxed mt-0.5">
+                  과거 대회 <b>불참(부전승) 이력</b>으로 당일 안 나올 가능성이 있는 신청을 짚어 줘요.
+                  {noshowRec.waitlist > 0
+                    ? <> 정원이 차면 <b className="text-amber-700">예비팀 {noshowRec.waitlist}팀</b>을 대기시켜
+                        두면 빈자리를 바로 채울 수 있어요.</>
+                    : <> 예방 차원에서 참고만 하세요.</>}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-1.5 mt-3 text-center">
+              {[
+                { n: noshowRec.highCount,   label: '위험 높음', cls: 'text-red-500' },
+                { n: noshowRec.mediumCount, label: '불참 이력', cls: 'text-amber-600' },
+                { n: noshowRec.waitlist,    label: '예비팀 권장', cls: 'text-[#003478]' },
+              ].map(b => (
+                <div key={b.label} className="bg-gray-50 rounded-xl py-2">
+                  <p className={`text-lg font-black ${b.cls}`}>{b.n}</p>
+                  <p className="text-[11px] text-gray-400">{b.label}</p>
+                </div>
+              ))}
+            </div>
+
+            <p className="mt-2 text-[11px] text-gray-400 leading-relaxed">
+              참고용 예측이에요 — 승인을 막지 않아요. 각 신청 카드에 불참 위험 배지로 표시됩니다.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* 신청 목록 */}
       <div className="px-4 py-4 space-y-3">
         {catEntries.length === 0 ? (
@@ -433,6 +509,7 @@ export default function EntryManagement() {
             if (!p) return null
             const pod = podium[p.id]
             const flagged = assess.level !== 'none'
+            const noshow = predictNoShow(noshowIdx[p.id]) // 불참 위험(medium/high만 표시)
             return (
               <div className="mb-1.5">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -459,6 +536,12 @@ export default function EntryManagement() {
                       {SANDBAG_STYLE[assess.level].label}
                     </span>
                   )}
+                  {(noshow.level === 'high' || noshow.level === 'medium') && (
+                    <span className={`ml-1.5 font-bold px-1.5 py-0.5 rounded ${NOSHOW_STYLE[noshow.level].badge}`}
+                      title={noshow.label}>
+                      {NOSHOW_STYLE[noshow.level].label}
+                    </span>
+                  )}
                 </p>
               </div>
             )
@@ -468,7 +551,10 @@ export default function EntryManagement() {
             <div
               key={e.id}
               className={`bg-white rounded-2xl border p-4 transition
-                          ${blocked ? 'opacity-60 border-dashed border-gray-300' : risk.level === 'high' ? 'border-red-200' : 'border-gray-100'}`}
+                          ${blocked ? 'opacity-60 border-dashed border-gray-300'
+                            : risk.level === 'high' ? 'border-red-200'
+                            : flaggedEntryIds.has(e.id) ? 'border-amber-200'
+                            : 'border-gray-100'}`}
             >
               {/* 파트너 미확정 → 대진 편성 제외 안내 리본 */}
               {blocked && (
