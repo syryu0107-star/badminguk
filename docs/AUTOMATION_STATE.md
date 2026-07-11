@@ -8,7 +8,7 @@
 | 주최자 | 89% | **요강·설정 마법사(C8)** ✅ — 개설 시 정원(예상 팀 수)으로 대진 방식 자동 추천(규모→리그/조별+토너먼트·조 크기)·경기 수·예상 소요·예상 종료 시각 역산(코트 수 반영)·요강 문서(PDF) 자동 생성. 무통장 입금 자동 매칭 ✅ / 디지털 상장 ✅ / 사후 공지·리마인더·감사·설문(C11) ✅ / 정산 손익·원천징수 리포트(C10) ✅ / 시상 확정 무인(C2) ✅ / **AI 균형 추첨(C5)** ✅ — 조별 포맷 무작위 편성 시 후보 16개를 시뮬레이션해 조별 평균 MMR 편차 최소 대진 자동 선택 + "왜 균형적인지" 설명. 잔여: PG 실결제(human-gated)·draft→open 자동 개설(공개는 개설자 판단으로 남김)·클럽분리(프로필에 클럽 필드 없음) |
 | 선수   | 80% | 셀프 체크인·디지털 선수증 ✅, 입금 확인 자동화 ✅, 결과·급수·상장 ✅, 대회 안내·공지함 수신 ✅, **문의 챗봇(C9)** ✅ — 규정·일정·참가비·내신청 자동응답으로 단톡방 문의 대체, **호출 재알림(C1)** ✅ — 호출을 놓친 선수에게 경고 전 waiting 구간에서 45초 간격 최대 2회 자동 재호출(앱 잠깐 껐다 켠 선수도 다시 수신), **개인 하이라이트 요약(C11)** ✅ — 대회 종료 후 결과 화면에서 내 경기 회고(총 경기·승패·세트/점수 득실·명장면·MMR 변동+격려·다음 목표·공유)를 앱이 자동 생성해 선수 완주에 "회고" 종점 추가 / PG 카드결제 부재 |
 | 심판   | 78% | **코트별 심판 모드(도달 경로)** ✅ — 심판이 담당 코트를 고르면 그 코트의 현재/다음 경기가 나오고, 원터치로 BWF 점수판(/referee/:matchId) 진입, 경기 종료 시 다음 경기가 실시간 구독으로 자동 배포. BWF 자동판정 탭입력·종료 시 대진표 자동반영은 기존 ✅. 잔여: 무심판 코트 셀프스코어(선수 자가 점수 입력 — tournament_matches UPDATE RLS 확장 필요·human-gated) |
-| 운영   | 85% | 빈코트 자동투입·자동호출·사전알림·예상시각(관측 페이스 보정)·노쇼 타이머·**호출 재알림(무응답 자동 재호출)** ✅·지연 예측·**빈코트 실제 재배치 실행(C6)** ✅·**노쇼 자동 부전승 확정(C7)** ✅ — overdue 경기 중 체크인 데이터로 "안 온 팀"이 분명한 것(한 팀 전원 체크인+상대 전원 미체크인)은 무인 부전승 확정→대진 자동 진출. 잔여: 애매한 노쇼(둘 다 체크인=코트만 안 옴 / 더블 노쇼)만 사람 1탭·rescheduleAfterForfeit(사전스케줄용, 라이브 미적용) |
+| 운영   | 87% | 빈코트 자동투입·자동호출·사전알림·예상시각(관측 페이스 보정)·노쇼 타이머·**호출 재알림(무응답 자동 재호출)** ✅·지연 예측·**빈코트 실제 재배치 실행(C6)** ✅·**노쇼 자동 부전승 확정(C7)** ✅·**팀 대회 이탈·실격 일괄 부전 처리(C7)** ✅ — 실격·부상으로 빠지는 팀을 1번 고르면 남은 경기(조별 잔여+녹아웃 현재)를 모두 walkover(MMR 미반영)로 자동 확정+상대 자동 진출→미완료 경기가 남아 finalize를 막던 반복 수작업 제거. 잔여: 애매한 노쇼(둘 다 체크인=코트만 안 옴 / 더블 노쇼)만 사람 1탭·rescheduleAfterForfeit(사전스케줄용, 라이브 미적용) |
 
 ## 클러스터 상태 (C1~C12)
 | C | 클러스터 | 상태 | 비고(코드 근거) |
@@ -19,7 +19,7 @@
 | C4 | 셀프 체크인 | ✅ | `checkin.js` 엔진 신설 — 선수 MyMatches "디지털 선수증" 카드에서 대회 당일/진행중 원터치 셀프 체크인(verified_method='self'). 실명인증 선수는 무인 완료, 미인증은 "본인확인 권장" 예외로만 노출. LiveDashboard 체크인 패널 실시간 반영(tournament_checkins 구독)+셀프/본인확인권장/신고 요약. 운영자 수동 체크인 병존. QR/PIN 키오스크·대리스코어링만 잔여 |
 | C5 | AI 대진 최적화 | ⚠️ | `drawOptimizer.js` 신설 — 조별 포맷(2개 이상 조·MMR 있음) 무작위 편성 시 `optimizeDraw`가 후보 씨드 16개를 generatePools로 시뮬레이션→`scoreDraw`(조별 평균 MMR 편차 spread + 조크기 편차 페널티)로 채점→가장 고른 대진 자동 선택. `explainDraw`가 "왜 균형적인지"(가장 센/약한 조 평균·후보 대비 개선폭·조별 평균 배지) 초보용 설명 생성. BracketGenerator "AI 균형 추첨" 토글(기본 ON, 무작위 편성 시 노출)+완료 화면 설명 카드+조별 평균 MMR 배지. 고른 씨드 저장으로 공개추첨 재현성 유지. 시드 켜짐이면 스네이크가 이미 균형이라 seeded 설명만. 잔여: 클럽분리(프로필 클럽 필드 없음·human-gated)·부전승최소(pool 크기 균형은 반영, 녹아웃 시드 최적화는 미적용)·코트이동최소(C6 planRebalance가 별도 담당) |
 | C6 | 실시간 진행·지연 재조정 | ✅ | 빈코트 감시→다음경기 자동투입(planAutoAdvance) ✅. `analyzeDelay` 지연 예측·재배치안 배너 ✅. **`planRebalance` 신설(빈코트 실제 재배치)** ✅ — 유휴 코트(진행중·대기 없음+타종목 미사용)로 과부하 코트(진행중+대기≥1 또는 대기≥2)의 대기 경기를 court_number UPDATE로 실제 이동. 옮긴 경기는 유휴 코트 맨 앞이 돼 planAutoAdvance가 자동 호출→무인 완결. 중복 출전(팀이 경기 중) 방지·다종목 사용 코트 제외·경합 시 status='scheduled' 조건부 UPDATE. 무인 ON이면 runOrchestrator에서 자동, OFF면 추천 패널 원터치. rescheduleAfterForfeit(사전스케줄 전용)만 라이브 미적용(설계상 별개) |
-| C7 | 노쇼·기권·실격 자동처리 | ⚠️ | 노쇼 타이머(orchestrator.planNoShow): 호출 후 미응답 경기를 waiting/warned/overdue 3단계로 판정 → 무인 진행 시 WALKOVER_WARN 자동 발송(선수 긴급 배너)+대시보드 카운트다운. **자동 부전승 확정(checkin.assessNoShowResolution)** ✅ — C4 셀프 체크인 데이터로 "누가 안 왔는지"를 확신할 수 있으면(한 팀 전원 체크인=현장에 있음 + 상대 전원 미체크인=오지 않음) 무인 진행 ON일 때 overdue 진입 시 자동 부전승 확정(completeMatch walkover→승자 자동 진출·MMR 미반영), autoResolvedRef 중복차단·실패 시 재시도. 애매한 경우(둘 다 체크인=코트만 안 옴 / 둘 다 미체크인=더블 노쇼 / 부분 체크인)만 "노쇼 확인 대기" 패널에서 체크인 힌트 배지+추천 버튼과 함께 사람 1탭. 잔여: 실격(경기 중 부정)·출전권 무효 자동처리는 미구현 |
+| C7 | 노쇼·기권·실격 자동처리 | ✅ | 노쇼 타이머(orchestrator.planNoShow): 호출 후 미응답 경기를 waiting/warned/overdue 3단계로 판정 → 무인 진행 시 WALKOVER_WARN 자동 발송(선수 긴급 배너)+대시보드 카운트다운. **자동 부전승 확정(checkin.assessNoShowResolution)** ✅ — C4 셀프 체크인 데이터로 "누가 안 왔는지"를 확신할 수 있으면(한 팀 전원 체크인=현장에 있음 + 상대 전원 미체크인=오지 않음) 무인 진행 ON일 때 overdue 진입 시 자동 부전승 확정(completeMatch walkover→승자 자동 진출·MMR 미반영), autoResolvedRef 중복차단·실패 시 재시도. 애매한 경우(둘 다 체크인=코트만 안 옴 / 둘 다 미체크인=더블 노쇼 / 부분 체크인)만 "노쇼 확인 대기" 패널에서 체크인 힌트 배지+추천 버튼과 함께 사람 1탭. **실격·출전권 무효 자동처리(advance.planTeamForfeit/forfeitTeamRemaining)** ✅ — LiveDashboard "팀 대회 이탈·실격 처리" 패널에서 빠질 팀 1탭→그 팀이 낀 미완료 경기를 상대 정해진 것은 walkover 부전패(MMR·득실 미반영, completeMatch로 상대 자동 진출), 상대 미정(녹아웃 TBD 슬롯)은 슬롯 비우기로 분류해 일괄 처리. |
 | C8 | 요강·설정 마법사 | ✅ | `planWizard.js` 신설 — 규모→포맷/조크기 역산 + 예상종료 계산 + 요강 문서. `distributePools`(고른 조 분배)·`estimateMatches`(포맷별 실경기 수 역산: RR=nC2·SE=n-1+3위전·PK=조별합+advancers-1)·`defaultMatchMinutes`(점수제·판수 기반)·`estimateSchedule`(조별 코트 병렬+녹아웃 라운드 순차로 소요·예상 종료 시각)·`estimateTournament`(전 종목 합산)·`recommendSetup`(≤5 리그/≤8 4팀조/9+ 최적 조크기 자동)·`buildGuidelines`/`guidelinesHtml`/`printGuidelines`(요강 6섹션 인쇄=PDF·XSS 이스케이프). CreateTournament: 대진 설정 펼침에 "AI 대회 설계 도우미"(추천이 현재와 다르면 헤드라인·이유·"이 추천 적용"+정원 기준 예상 경기 수·소요·종료), 하단 "예상 진행·요강" 섹션(전 종목 합산+요강 PDF). 엔진 30개 시나리오 자체 검증 통과. 스키마·외부 키 불필요 |
 | C9 | 문의 챗봇 | ⚠️ | `chatbot.js`+`HelpChat.jsx` 신설 — 규정 FAQ(점수/부전승/노쇼/MMR/샌드배깅/파트너/신청/환불) + 대회 데이터 개인화(일정·장소·참가비·접수마감·내 신청상태·자격·시상) 18개 주제 규칙기반 검색 응답. TournamentDetail 우하단 "문의" 챗봇. 외부 LLM 키 없이 완결(실LLM 연동은 future·human-gated) |
 | C10 | 결과·시상·정산 | ✅ | 순위집계·급수승급 자동 + `certificate.js` 디지털 상장 + `settlement.js` 신설 — 정산·손익 완성. 참가비 입금(confirmed)만 수입 집계, 주최자 입력 경비·상금을 지출로 빼 순손익 자동 계산(환불·미수금은 손익 무영향·정보만), 상금 원천징수(4종 세율 프리셋: 없음/기타 22%/기타 4.4%/사업 3.3%)로 세무서 납부분·선수 실지급분 분리, TournamentManage "정산·손익" 패널(순손익 ▲▼·수입/지출·종목별·경비 입력 localStorage·정산 리포트 인쇄=PDF). 실PG 결제 연동만 human-gated |
@@ -27,6 +27,27 @@
 | C12 | 대회 탐색·파트너·전적 | ⚠️ | 파트너 초대·랭킹 있음, 추천/매칭 없음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-11 · C7 · `src/lib/advance.js`(planTeamForfeit·forfeitTeamRemaining 신규)·`src/pages/organizer/LiveDashboard.jsx`
+  · 팀 대회 이탈·실격 일괄 부전 처리(C7 ⚠️→✅) — 운영 무인 완주를 막던 마지막 반복 수작업을 제거.
+    지금껏 한 팀이 실격당하거나 부상·개인 사정으로 대회 중 빠지면, 그 팀의 남은 경기를 주최자가
+    하나씩 손으로 부전 처리해야 했고(조별리그면 남은 상대 경기가 여러 개), finalizeRanks는 미완료
+    경기가 하나라도 있으면 throw하므로 그 반복 처리를 끝낼 때까지 시상 확정이 막혔다(북극성 DoD
+    "실격 시 출전권 무효" 미충족). 순수 함수 `planTeamForfeit(matches, entryId)` 신설 — 그 팀이 낀
+    미완료(≠completed/forfeited/bye) 경기를 훑어 상대가 정해진 것은 `toForfeit`(상대=승자·팀번호),
+    상대 미정(녹아웃 TBD 슬롯=null)은 `toVacate`(슬롯번호)로 분류(null 안전). 녹아웃은 진출로
+    슬롯이 점진 채워져 보통 현재 경기 1건, 조별은 사전 편성돼 남은 상대 경기 여러 건이 잡힌다.
+    실행 `forfeitTeamRemaining(supabase, categoryId, entryId, {reason})` — toForfeit는 각각
+    completeMatch(resultType='walkover', forfeitTeam, forfeitReason)로 처리(미실시 경기라 MMR·득실
+    미반영은 apply_match_mmr RPC가 walkover 제외로 판정, 상대는 advanceWinner로 자동 진출·조별이면
+    checkPoolStageComplete까지 재사용), toVacate는 그 팀 슬롯을 null로 비워 이후 진출에서 제외,
+    {forfeited, vacated, errors} 반환. LiveDashboard 배선: `activeTeams` useMemo(catMatches에서 미완료
+    경기가 남은 팀·남은 경기 수 집계)+진행 중 대회에서만 노출되는 "팀 대회 이탈·실격 처리" 접이식
+    패널(팀별 남은 경기 수+"대회에서 제외" 버튼), `handleTeamForfeit`가 confirm+사유 prompt(기본 "실격")
+    후 forfeitTeamRemaining 호출→자동 조치 로그 기록, 상대 미정 slot이 있으면 확인 안내. 스키마·외부
+    키 불필요(기존 completeMatch/advanceWinner 재사용, 로직 중복 0). entry_status는 건드리지 않아
+    정산(withdrawn/rejected 제외 규칙)에 영향 없음. 엔진 11개 시나리오(조별 다건 부전·팀번호·상대
+    승자·녹아웃 현재+TBD vacate·완료건/무관팀 제외·null 안전) 자체 검증 통과, `npx vite build` green.
+    (자동화율 운영 85%→87%)
 - 2026-07-11 · C11 · `src/lib/highlight.js`(신규)·`src/pages/player/Results.jsx`
   · 개인 대회 하이라이트 요약 — 선수 플로우(78%, 공동 최저)의 마지막 감정적 종점을 채움. 북극성
     DoD "선수: …결과·급수·상장까지 화면 하나로 완결"에서 상장까지는 있었지만 "내 대회가 어땠나"를

@@ -136,6 +136,86 @@ export async function completeMatch(supabase, matchId, {
   }
 }
 
+// ── 1b. 팀 대회 중도 이탈·실격 (출전권 무효) ──────────────────────
+
+/**
+ * 한 팀(엔트리)이 대회에서 빠질 때 처리할 남은 경기를 계획한다(순수 함수).
+ * 실격·부상 중도 이탈 등으로 "이 팀은 더 못 뛴다"가 결정되면, 그 팀이 낀
+ * 아직 안 끝난 경기를 전부 훑어:
+ *   - 상대가 정해진 경기 → 상대 부전승(toForfeit)
+ *   - 상대가 아직 미정(TBD, 슬롯 비어 있음)인 경기 → 그 팀 슬롯 비우기(toVacate)
+ * 로 분류한다. (녹아웃은 진출로 슬롯이 점진 채워지므로 보통 현재 경기 1개,
+ *  조별리그는 사전 편성돼 남은 상대 경기 여러 개가 잡힌다.)
+ *
+ * @param {Array} matches [{id,status,team1_entry_id,team2_entry_id}]
+ * @param {string} entryId 빠질 팀의 엔트리 id
+ * @returns {{ toForfeit:[{matchId,winnerEntryId,forfeitTeam}], toVacate:[{matchId,slot}] }}
+ */
+export function planTeamForfeit(matches, entryId) {
+  const out = { toForfeit: [], toVacate: [] }
+  if (!entryId) return out
+  for (const m of matches ?? []) {
+    if (!m || DONE_STATUSES.includes(m.status)) continue
+    const isT1 = m.team1_entry_id === entryId
+    const isT2 = m.team2_entry_id === entryId
+    if (!isT1 && !isT2) continue
+    const forfeitTeam = isT1 ? 1 : 2
+    const opponentId = isT1 ? m.team2_entry_id : m.team1_entry_id
+    if (opponentId) {
+      out.toForfeit.push({ matchId: m.id, winnerEntryId: opponentId, forfeitTeam })
+    } else {
+      out.toVacate.push({ matchId: m.id, slot: forfeitTeam })
+    }
+  }
+  return out
+}
+
+/**
+ * 팀 대회 중도 이탈·실격 일괄 처리 — 남은 경기 부전패 + 상대 자동 진출.
+ * 각 부전 경기는 completeMatch(resultType='walkover')로 처리한다: 실제로 치르지 않은
+ * 경기이므로 MMR·득실을 남기지 않는다(출전권 무효 = 결과 반영 없음). forfeit_reason 에
+ * 사유(실격/중도 이탈)를 남겨 대진표·순위표에 표시된다. 상대 미정 경기는 이 팀 슬롯만
+ * 비워 이후 진출에서 제외한다.
+ *
+ * @returns {{ forfeited:number, vacated:number, errors:string[] }}
+ */
+export async function forfeitTeamRemaining(supabase, categoryId, entryId, {
+  reason = '대회 중도 이탈',
+} = {}) {
+  const { data: rows } = await supabase
+    .from('tournament_matches')
+    .select('id, status, team1_entry_id, team2_entry_id')
+    .eq('category_id', categoryId)
+  const plan = planTeamForfeit(rows ?? [], entryId)
+  const errors = []
+
+  for (const f of plan.toForfeit) {
+    try {
+      await completeMatch(supabase, f.matchId, {
+        winnerEntryId: f.winnerEntryId,
+        resultType: 'walkover',       // 미실시 경기 → MMR 미반영(RPC 판정)
+        forfeitTeam: f.forfeitTeam,
+        forfeitReason: reason,
+      })
+    } catch (e) {
+      errors.push(e?.message || String(e))
+    }
+  }
+  for (const v of plan.toVacate) {
+    const col = v.slot === 1 ? 'team1_entry_id' : 'team2_entry_id'
+    try {
+      const { error } = await supabase
+        .from('tournament_matches')
+        .update({ [col]: null })
+        .eq('id', v.matchId)
+      if (error) errors.push(error.message)
+    } catch (e) {
+      errors.push(e?.message || String(e))
+    }
+  }
+  return { forfeited: plan.toForfeit.length, vacated: plan.toVacate.length, errors }
+}
+
 // ── 2. checkPoolStageComplete ────────────────────────────────────
 
 /**

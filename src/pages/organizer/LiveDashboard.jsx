@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { resolveMatchMMR, CERT_LEVELS } from '../../lib/mmr'
 import { calculatePoolStandings, prizeLabel } from '../../lib/tournament'
-import { completeMatch, finalizeTournament, scoresToPairs } from '../../lib/advance'
+import { completeMatch, finalizeTournament, scoresToPairs, forfeitTeamRemaining } from '../../lib/advance'
 import { callMatch, callMatchSoon, callWalkoverWarn } from '../../lib/notify'
 import { planAutoAdvance, planNoShow, analyzeDelay, planRebalance } from '../../lib/orchestrator'
 import { planAutoFinalize } from '../../lib/stateMachine'
@@ -89,6 +89,8 @@ export default function LiveDashboard() {
   // ── 노쇼(호출 미응답) 타이머 상태 (C7) ─────────────────────────────
   const [noShow, setNoShow]   = useState({})   // { [matchId]: { phase, secondsLeft, elapsedSec, ... } }
   const [resolving, setResolving] = useState(null) // 부전승 처리 중인 match id
+  const [teamForfeiting, setTeamForfeiting] = useState(null) // 대회 이탈 처리 중인 entry id
+  const [showForfeitPanel, setShowForfeitPanel] = useState(false) // 팀 이탈 패널 열림
   const warnedRef = useRef({})   // { [matchId]: ts } 미입장 경고 중복 방지
   const recalledRef = useRef({}) // { [matchId]: { at, count } } 재알림(호출 반복) 중복·스팸 방지
   const autoResolvedRef = useRef({}) // { [matchId]: ts } 노쇼 자동 부전승 중복 실행 방지
@@ -719,6 +721,36 @@ export default function LiveDashboard() {
     loadMatches()
   }
 
+  // ── 팀 대회 중도 이탈·실격 (C7, 출전권 무효) ───────────────────────
+  //   실격·부상 등으로 한 팀이 더 못 뛰게 되면, 남은 경기를 하나씩 손으로 부전
+  //   처리하지 않아도 앱이 그 팀의 잔여 경기를 모두 부전패로 확정하고 상대를 자동
+  //   진출시킨다(무인 완주를 막던 사람 반복 작업 제거). resultType='walkover' → 미실시
+  //   경기라 MMR·득실 미반영. "누가 빠지는지"만 사람이 한 번 고른다(near-zero touch).
+  async function handleTeamForfeit(team) {
+    if (teamForfeiting) return
+    if (!confirm(
+      `${team.name} 팀을 대회에서 제외할까요?\n남은 ${team.remaining}경기가 모두 부전패로 처리되고, 상대 팀은 자동으로 다음 라운드에 진출합니다.\n(치르지 않은 경기라 MMR·기록에는 반영되지 않아요. 되돌릴 수 없습니다.)`
+    )) return
+    const reason = prompt('사유를 입력해주세요 (예: 실격, 부상 기권, 개인 사정):', '실격')
+    if (reason === null) return // 취소
+    setTeamForfeiting(team.entryId)
+    try {
+      const res = await forfeitTeamRemaining(supabase, activeCat, team.entryId, {
+        reason: reason.trim() || '대회 중도 이탈',
+      })
+      pushAutoLog(`${team.name} 대회 제외 — 남은 ${res.forfeited}경기 부전 처리${res.vacated ? ` (상대 미정 ${res.vacated}경기 슬롯 정리)` : ''}`)
+      if (res.errors.length) {
+        alert(`일부 경기 처리에 실패했어요 (${res.errors.length}건). 남은 경기를 확인해주세요.\n${res.errors[0]}`)
+      } else if (res.vacated > 0) {
+        alert(`처리 완료 — ${res.forfeited}경기 부전패. 상대가 아직 정해지지 않은 ${res.vacated}경기는 상대 확정 후 한 번 확인해주세요.`)
+      }
+    } catch (e) {
+      alert('대회 제외 처리 중 문제가 생겼어요: ' + e.message)
+    }
+    setTeamForfeiting(null)
+    loadMatches()
+  }
+
   // ── 대회 종료 · 시상 확정 ─────────────────────────────────────
   async function finishTournament() {
     if (finishing) return
@@ -785,6 +817,25 @@ export default function LiveDashboard() {
   const overdueMatches = catMatches.filter(m => noShow[m.id]?.phase === 'overdue')
   const done = catMatches.filter(m => DONE_STATUSES.includes(m.status)).length
   const isCompleted = tournament?.status === 'completed'
+
+  // 아직 남은 경기가 있는 팀(실격·중도 이탈 처리 후보). 남은 경기 수 내림차순.
+  const activeTeams = useMemo(() => {
+    const map = new Map()
+    for (const m of catMatches) {
+      if (DONE_STATUSES.includes(m.status)) continue
+      for (const side of [1, 2]) {
+        const eid = side === 1 ? m.team1_entry_id : m.team2_entry_id
+        if (!eid) continue
+        const team = side === 1 ? m.team1 : m.team2
+        const name = [team?.player1?.name, team?.player2?.name].filter(Boolean).join(' / ') || '팀'
+        const cur = map.get(eid) || { entryId: eid, name, remaining: 0 }
+        cur.remaining += 1
+        if (cur.name === '팀' && name !== '팀') cur.name = name
+        map.set(eid, cur)
+      }
+    }
+    return [...map.values()].sort((a, b) => b.remaining - a.remaining)
+  }, [catMatches])
 
   return (
     <div className="safe-bottom">
@@ -1071,6 +1122,48 @@ export default function LiveDashboard() {
                     )
                   })}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── 팀 대회 중도 이탈·실격 처리 (C7, 출전권 무효) ─────────── */}
+          {!isCompleted && activeTeams.length > 0 && (
+            <div className="px-4 pt-4">
+              <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
+                <button
+                  onClick={() => setShowForfeitPanel(v => !v)}
+                  className="w-full flex items-center justify-between px-4 py-3 active:bg-gray-50"
+                >
+                  <span className="flex items-center gap-1.5 font-bold text-sm text-gray-700">
+                    <Flag size={15} className="text-[#C60C30]" /> 팀 대회 이탈·실격 처리
+                  </span>
+                  <span className="text-xs text-gray-400">{showForfeitPanel ? '접기' : '열기'}</span>
+                </button>
+                {showForfeitPanel && (
+                  <div className="px-4 pb-4">
+                    <p className="text-[11px] text-gray-500 leading-tight mb-3">
+                      실격·부상·개인 사정으로 더 못 뛰는 팀을 고르면, 남은 경기를 모두 부전패로 확정하고
+                      상대 팀을 자동으로 다음 라운드에 진출시켜요. 치르지 않은 경기라 MMR·기록에는 반영되지 않습니다.
+                    </p>
+                    <div className="space-y-2">
+                      {activeTeams.map(team => (
+                        <div key={team.entryId} className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2.5">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-semibold text-gray-800 truncate">{team.name}</p>
+                            <p className="text-[11px] text-gray-500">남은 경기 {team.remaining}개</p>
+                          </div>
+                          <button
+                            onClick={() => handleTeamForfeit(team)}
+                            disabled={teamForfeiting === team.entryId}
+                            className="shrink-0 px-3 py-2 rounded-lg bg-[#C60C30] text-white text-xs font-bold active:opacity-80 disabled:opacity-40"
+                          >
+                            {teamForfeiting === team.entryId ? '처리 중…' : '대회에서 제외'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

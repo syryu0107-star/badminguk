@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-11 — [C7] 팀 대회 이탈·실격 일괄 부전 처리 — 남은 경기 자동 부전패 + 상대 자동 진출 (C7 ⚠️→✅)
+
+- **C7 노쇼·기권·실격 자동처리 — 실격·출전권 무효 자동처리 (필수/중, 운영 완주 마지막 반복 수작업)**
+  - 파일: `src/lib/advance.js`(planTeamForfeit·forfeitTeamRemaining 신규), `src/pages/organizer/LiveDashboard.jsx`
+  - 요약: 북극성 DoD의 C7 마지막 잔여였던 "실격 시 출전권 무효 자동처리"를 채워 C7을 ✅로 마감했다. 지금까지는 단일 경기 기권/부전(`forfeitMatch`)과 노쇼 자동 부전승만 있었고, 한 팀이 실격당하거나 부상·개인 사정으로 대회 도중 완전히 빠질 때 그 팀의 남은 경기를 주최자가 하나씩 손으로 부전 처리해야 했다 — 조별리그라면 남은 상대 경기가 여러 개라 반복 작업이 컸고, `finalizeRanks`는 미완료 경기가 하나라도 있으면 throw하므로 그 잔여 경기를 전부 정리하기 전에는 시상 확정(무인 완주)이 막혔다. 순수 함수 `planTeamForfeit(matches, entryId)` 신설 — 빠질 팀이 낀 미완료(≠completed/forfeited/bye) 경기를 훑어 상대가 정해진 경기는 `toForfeit`{matchId, winnerEntryId(=상대), forfeitTeam(1|2)}, 상대가 아직 미정(녹아웃 TBD 슬롯=null)인 경기는 `toVacate`{matchId, slot}로 분류한다(matches/entryId null 안전). 녹아웃은 진출로 슬롯이 점진 채워져 보통 그 팀의 현재 경기 1건만 잡히고, 조별리그는 사전 편성돼 남은 상대 경기 여러 건이 잡힌다. 실행 함수 `forfeitTeamRemaining(supabase, categoryId, entryId, {reason})` — toForfeit 각 경기를 `completeMatch(resultType='walkover', forfeitTeam, forfeitReason=사유)`로 처리해 (1) 미실시 경기이므로 MMR·득실 미반영(apply_match_mmr RPC가 walkover를 제외 판정), (2) 상대를 `advanceWinner`로 다음 라운드 자동 진출, (3) 조별이면 `checkPoolStageComplete`까지 기존 경로 재사용, toVacate 각 경기는 그 팀 슬롯을 null로 비워 이후 진출에서 제외하고, {forfeited, vacated, errors}를 반환한다(개별 실패는 errors에 모아 부분 성공 허용). LiveDashboard 배선: `activeTeams` useMemo(현재 종목의 미완료 경기에 남아 있는 팀과 각 팀의 남은 경기 수를 집계, 남은 수 내림차순) + 진행 중 대회에서만(!isCompleted) 노출되는 "팀 대회 이탈·실격 처리" 접이식 패널(팀명·남은 경기 수·"대회에서 제외" 버튼), `handleTeamForfeit(team)`가 confirm(남은 N경기 부전패+상대 자동 진출, MMR 미반영, 되돌릴 수 없음 안내) + 사유 prompt(기본값 '실격') 후 `forfeitTeamRemaining`을 호출하고 자동 조치 로그에 "팀명 대회 제외 — 남은 N경기 부전 처리"를 남긴다(상대 미정 slot이 있으면 상대 확정 후 확인 안내). 처리 후 loadMatches로 대진표·순위표가 자동 갱신되고, 상대가 진출한 경기는 실시간 구독으로 전파된다. `entry_status`는 건드리지 않아 정산(withdrawn/rejected 제외 규칙)에 영향이 없다 — 참가비를 낸 실격 팀의 입금은 수입에 그대로 남는다(무환불 정책과 일치). 스키마 변경·외부 키 불필요(기존 completeMatch/advanceWinner/checkPoolStageComplete 재사용, 대진·부전승 로직 중복 0). 엔진 11개 시나리오(조별 다건 부전·팀번호 판정·상대 승자·완료(in_progress 포함) 판정·녹아웃 현재 경기 vs TBD 슬롯 vacate·bye/forfeited 완료건 제외·무관 팀 제외·null matches/entryId 안전) esbuild 번들 자체 검증 통과, `npx vite build` green. (자동화율 운영 85%→87%)
+
 ## 2026-07-11 — [C11] 개인 대회 하이라이트 요약 — 종료 후 내 경기 회고 자동 생성 (선수 플로우 감정적 종점)
 
 - **C11 사후 커뮤니케이션 — 개인 하이라이트 요약 (필수/중, 선수 완주 종점, AI 요약 레이어)**
