@@ -5,7 +5,7 @@
 ## 플로우 자동화율 (0~100%)
 | 플로우 | 점수 | 완주 막는 잔여 갭 |
 |--------|:---:|------------------|
-| 주최자 | 89% | **요강·설정 마법사(C8)** ✅ — 개설 시 정원(예상 팀 수)으로 대진 방식 자동 추천(규모→리그/조별+토너먼트·조 크기)·경기 수·예상 소요·예상 종료 시각 역산(코트 수 반영)·요강 문서(PDF) 자동 생성. 무통장 입금 자동 매칭 ✅ / 디지털 상장 ✅ / 사후 공지·리마인더·감사·설문(C11) ✅ / 정산 손익·원천징수 리포트(C10) ✅ / 시상 확정 무인(C2) ✅ / **AI 균형 추첨(C5)** ✅ — 조별 포맷 무작위 편성 시 후보 16개를 시뮬레이션해 조별 평균 MMR 편차 최소 대진 자동 선택 + "왜 균형적인지" 설명. 잔여: PG 실결제(human-gated)·draft→open 자동 개설(공개는 개설자 판단으로 남김)·클럽분리(프로필에 클럽 필드 없음) |
+| 주최자 | 92% | **자동 대진 생성(C2/C5)** ✅ — 접수 마감·승인·입금·상태전환·시상확정 사이에 유일하게 남아 있던 수작업 "추첨(대진표 생성)"을 무인화. 무인 진행 ON이면 대회 당일 대진표가 없어 대회가 못 시작하고 막힐 때(stateMachine closed→in_progress가 "대진표 존재"를 조건으로 걸어 막던 지점) 앱이 공개 추첨과 동일한 로직(재현 가능한 씨드·AI 균형 편성)으로 대진표를 자동 생성→대회 자동 시작(이미 대진표 있는 종목은 절대 덮어쓰지 않음). OFF여도 막힘 배너에 "대진표 자동 생성" 원터치. **요강·설정 마법사(C8)** ✅ — 개설 시 정원(예상 팀 수)으로 대진 방식 자동 추천(규모→리그/조별+토너먼트·조 크기)·경기 수·예상 소요·예상 종료 시각 역산(코트 수 반영)·요강 문서(PDF) 자동 생성. 무통장 입금 자동 매칭 ✅ / 디지털 상장 ✅ / 사후 공지·리마인더·감사·설문(C11) ✅ / 정산 손익·원천징수 리포트(C10) ✅ / 시상 확정 무인(C2) ✅ / **AI 균형 추첨(C5)** ✅ — 조별 포맷 무작위 편성 시 후보 16개를 시뮬레이션해 조별 평균 MMR 편차 최소 대진 자동 선택 + "왜 균형적인지" 설명. 잔여: PG 실결제(human-gated)·draft→open 자동 개설(공개는 개설자 판단으로 남김)·클럽분리(프로필에 클럽 필드 없음) |
 | 선수   | 88% | **대회 탐색 추천(C12)** ✅ — "대회 찾기" 화면 상단에 "🎯 나에게 맞는 대회" 개인화 추천(로그인 시): 내 급수로 참가 가능한 접수중 대회를 자주 가던 지역·접수 마감 임박순으로 골라, 근거 칩(참가 가능 종목 수·자주 가던 지역·마감 D-day)과 함께 노출(검색-only였던 탐색에 개인화 추가로 C12 마지막 조각 마감). **통합 전적(C12)** ✅ — 프로필 "대회 커리어" 탭에 전 대회 실제 경기 기반 통합 전적(총 승패·승률 게이지·세트/점수 득실·풀세트 접전·부전 포함)과 "상대 전적"(자주 만난 상대별 W/L, head-to-head) 자동 집계. 셀프 체크인·디지털 선수증 ✅, **파트너 추천(C12)** ✅ — 복식 신청 시 지난 대회에 함께 나간 파트너 중 이 종목 자격을 통과하는 사람을 "다시 초대" 원터치 카드로 추천(전화번호·이름 검색만 있던 신청 마찰 완화), **입금 안내(C3)** ✅ — 참가비 있는 미입금 신청에 MyMatches "입금 안내" 카드(금액·본인 실명 입금자명 복사·단계 안내)로 "얼마를 어떤 이름으로 넣어야 앱이 자동 확인하는지"를 처음으로 화면에 명시(주최자 C3 자동매칭이 player1/2 실명 대조 → 선수가 실명으로 넣게 유도해 무인 입금확인율↑), 입금 확인 자동화 ✅, 결과·급수·상장 ✅, 대회 안내·공지함 수신 ✅, **문의 챗봇(C9)** ✅ — 규정·일정·참가비·내신청 자동응답으로 단톡방 문의 대체, **호출 재알림(C1)** ✅ — 호출을 놓친 선수에게 경고 전 waiting 구간에서 45초 간격 최대 2회 자동 재호출(앱 잠깐 껐다 켠 선수도 다시 수신), **개인 하이라이트 요약(C11)** ✅ — 대회 종료 후 결과 화면에서 내 경기 회고(총 경기·승패·세트/점수 득실·명장면·MMR 변동+격려·다음 목표·공유)를 앱이 자동 생성해 선수 완주에 "회고" 종점 추가 / 잔여: 계좌번호 직접 표시(주최자 계좌 필드 스키마 부재·human-gated)·PG 카드결제 부재 |
 | 심판   | 82% | **코트별 심판 모드(도달 경로)** ✅ — 심판이 담당 코트를 고르면 그 코트의 현재/다음 경기가 나오고, 원터치로 BWF 점수판(/referee/:matchId) 진입, 경기 종료 시 다음 경기가 실시간 구독으로 자동 배포. BWF 자동판정 탭입력·종료 시 대진표 자동반영은 기존 ✅. **자동 심판 콜(판정 자동화)** ✅ — `bwf.matchCall`이 현재 점수에서 골든포인트/매치포인트/게임포인트/듀스를 자동 판정해 점수판에 상황 배너를 띄우고(새로고침에도 점수 파생이라 유지), 헤더 스피커 토글을 켜면 매 득점마다 SpeechSynthesis(브라우저 TTS·키 불필요)로 "서버 점수 대 리시버 점수 + 매치 포인트/듀스…", 게임/경기 종료·인터벌·기권까지 한국어로 읽어 준다(비전문가 동호인 심판이 규칙을 몰라도 정확한 콜). 잔여: 무심판 코트 셀프스코어(선수 자가 점수 입력 — tournament_matches UPDATE RLS 확장 필요·human-gated) |
 | 운영   | 87% | 빈코트 자동투입·자동호출·사전알림·예상시각(관측 페이스 보정)·노쇼 타이머·**호출 재알림(무응답 자동 재호출)** ✅·지연 예측·**빈코트 실제 재배치 실행(C6)** ✅·**노쇼 자동 부전승 확정(C7)** ✅·**팀 대회 이탈·실격 일괄 부전 처리(C7)** ✅ — 실격·부상으로 빠지는 팀을 1번 고르면 남은 경기(조별 잔여+녹아웃 현재)를 모두 walkover(MMR 미반영)로 자동 확정+상대 자동 진출→미완료 경기가 남아 finalize를 막던 반복 수작업 제거. 잔여: 애매한 노쇼(둘 다 체크인=코트만 안 옴 / 더블 노쇼)만 사람 1탭·rescheduleAfterForfeit(사전스케줄용, 라이브 미적용) |
@@ -14,7 +14,7 @@
 | C | 클러스터 | 상태 | 비고(코드 근거) |
 |---|----------|:---:|----------------|
 | C1 | 경기 호출·알림 인프라 | ⚠️ | notify.js+orchestrator.js — 자동호출·사전알림(곧 호출)·예상 호출시각·**WO 카운트다운(planNoShow warned/overdue)**·**호출 재알림 타이머** ✅ end-to-end(LiveDashboard→MyMatches). 재알림: `planNoShow`가 waiting 구간(경고 전)에서 무응답 경기를 `toRecall`로 분류(recallAfterSec 45s·recallEverySec 45s·recallMaxCount 2), 무인 진행 ON이면 callMatch를 자동 반복(recalledRef 중복차단, calledIds 원 호출시각 불변→부전승 카운트다운 그대로). 잔여: 웹푸시/알림톡/SMS 실발송만 human-gated 스텁 |
-| C2 | 대회 상태 오케스트레이션 | ⚠️ | stateMachine.js 순수 판정 엔진. TournamentManage "무인 자동 진행": open→closed(마감/정원)·closed→in_progress(당일+대진표) 자동. EntryManagement "무인 자동 승인": 정상 신청 자동, 예외만 큐. **in_progress→completed 무인 확정** ✅ — `planAutoFinalize`(순수·유예 판정) + LiveDashboard 무인 진행 ON이면 전 종목 종료 후 3분 유예(점수정정 창) 지나 finalizeTournament 자동 실행(순위·급수·상장 데이터 확정)+승급 축하 배너, "지금 시상 확정" 원터치. 잔여: draft→open(개설 공개)만 수동(개설자 의도적 판단으로 보류) |
+| C2 | 대회 상태 오케스트레이션 | ⚠️ | stateMachine.js 순수 판정 엔진. TournamentManage "무인 자동 진행": open→closed(마감/정원)·closed→in_progress(당일+대진표) 자동. EntryManagement "무인 자동 승인": 정상 신청 자동, 예외만 큐. **in_progress→completed 무인 확정** ✅ — `planAutoFinalize`(순수·유예 판정) + LiveDashboard 무인 진행 ON이면 전 종목 종료 후 3분 유예(점수정정 창) 지나 finalizeTournament 자동 실행(순위·급수·상장 데이터 확정)+승급 축하 배너, "지금 시상 확정" 원터치. **자동 대진 생성** ✅ — closed→in_progress를 막던 "대진표 없음"을 `autoDraw.js`(autoGenerateAllBrackets)가 자동 해소: 무인 ON이고 대회 당일 대진표가 없어 plan.blockReason이 뜨면 TournamentManage가 autoDrawnRef 1회 잠금으로 대진표를 자동 생성→reloadMatches→다음 틱에 closed→in_progress 자동 전환. 이미 대진표 있는 종목은 count 체크로 스킵(주최자 직접 추첨 보호), 승인<2팀은 not_enough 안내. 공개 추첨(BracketGenerator)과 buildDrawPlan/persistDrawPlan 단일 소스 공유(중복 0). 잔여: draft→open(개설 공개)만 수동(개설자 의도적 판단으로 보류) |
 | C3 | 입금·결제·환불 | ⚠️ | `payment.js`(주최자 자동매칭)+`deposit.js`(선수 입금 안내) — 무통장 입금 루프가 양쪽에서 완결. 주최자: 입금 내역 붙여넣기→신청자명 퍼지매칭(Levenshtein+정규화)+금액 대조→`payment_status='confirmed'` 자동, EntryManagement "입금 자동 매칭" 패널(자동확인/확인권장/미매칭, 1탭). 선수: `deposit.js`+MyMatches "입금 안내" 카드 — 참가비 있는 미입금 신청에 금액·**본인 실명 입금자명(복사 버튼)**·3단계 안내 노출로 "실명으로 입금→앱이 자동 확인"을 처음 명시(matchDeposits가 player1/2 실명 대조하므로 매칭율 직결). 입금 확인이 auto-approval 입금대기 버킷을 비워 무인 승인까지 연결. 잔여: 주최자 계좌번호 표시(tournaments에 계좌 필드 없음·마이그레이션 human-gated)·PG 실결제(토스)·가상계좌·환불규정 코드화 |
 | C4 | 셀프 체크인 | ✅ | `checkin.js` 엔진 신설 — 선수 MyMatches "디지털 선수증" 카드에서 대회 당일/진행중 원터치 셀프 체크인(verified_method='self'). 실명인증 선수는 무인 완료, 미인증은 "본인확인 권장" 예외로만 노출. LiveDashboard 체크인 패널 실시간 반영(tournament_checkins 구독)+셀프/본인확인권장/신고 요약. 운영자 수동 체크인 병존. QR/PIN 키오스크·대리스코어링만 잔여 |
 | C5 | AI 대진 최적화 | ⚠️ | `drawOptimizer.js` 신설 — 조별 포맷(2개 이상 조·MMR 있음) 무작위 편성 시 `optimizeDraw`가 후보 씨드 16개를 generatePools로 시뮬레이션→`scoreDraw`(조별 평균 MMR 편차 spread + 조크기 편차 페널티)로 채점→가장 고른 대진 자동 선택. `explainDraw`가 "왜 균형적인지"(가장 센/약한 조 평균·후보 대비 개선폭·조별 평균 배지) 초보용 설명 생성. BracketGenerator "AI 균형 추첨" 토글(기본 ON, 무작위 편성 시 노출)+완료 화면 설명 카드+조별 평균 MMR 배지. 고른 씨드 저장으로 공개추첨 재현성 유지. 시드 켜짐이면 스네이크가 이미 균형이라 seeded 설명만. 잔여: 클럽분리(프로필 클럽 필드 없음·human-gated)·부전승최소(pool 크기 균형은 반영, 녹아웃 시드 최적화는 미적용)·코트이동최소(C6 planRebalance가 별도 담당) |
@@ -27,6 +27,29 @@
 | C12 | 대회 탐색·파트너·전적 | ✅ | `discover.js`+`partners.js`+`record.js` — **대회 탐색 추천** ✅ + **파트너 매칭** ✅ + **통합 전적 뷰** ✅. **대회 탐색 추천(`discover.js`)**: `regionTokens`(venue·주소에서 17시도+시/군/구 세밀 토큰 추출, 광역시/특별시 중복 제외)·`preferredRegions`(내 참가 이력 대회의 지역 빈도 집계)·`ddayOf`(로컬 자정 기준 D-day)·`recommendTournaments`(접수중·미신청·미래 대회 중 급수 참가 가능 종목이 있는 것만 골라 지역 매칭·마감 임박·대회일 근접으로 점수화, 근거 배열 반환). 자격 판정은 lib/grades.js로 승격한 공용 `checkEligibility`를 fitOf로 주입(신청 화면과 100% 동일 로직·중복 0). Tournaments.jsx가 로그인 선수의 프로필·참가 이력을 1회 로드→"🎯 나에게 맞는 대회" 카드+근거 칩(급수 파랑/지역 초록/마감 빨강·주황) 노출(전체 탭·검색 없을 때만, 실패 시 검색만 degrade). 파트너 매칭·통합 전적은 아래 유지. 통합 전적(`record.js`): `computeCareerRecord`가 내가 낀 전 대회 완료 경기(+세트)에서 총 승패·승률·세트/점수 득실·풀세트·부전 카운트와 상대 선수별 head-to-head(`byOpponent`)를 집계, `opponentPlayers`(팀에서 나 제외·게스트팀명 폴백)·`hasCareerRecord`. Profile "대회 커리어" 탭에 통합 전적 카드(승/패/승률 게이지·세부지표)+상대 전적 카드(자주 만난 상대별 W/L 최대 8명)를 추가, 내 엔트리 id 배치로 tournament_matches 조회(try-catch degrade, 헤더 mmr delta 근사와 달리 실경기 기준 정확 전적). 파트너 매칭: `collectPastPartners`(내가 낀 복식 신청 이력에서 상대를 모아 함께 출전 횟수·최근순 집계)+`rankPartnerSuggestions`(호출부 checkEligibility 주입 → 종목 자격 통과 먼저·횟수·최근순)+`partnerReason`. TournamentDetail 복식 신청 폼에 "추천 파트너 · 지난 대회에 함께 나간 분들" 카드(자격 통과 최대 4명, "다시 초대" 원터치→selectPartner). 대진DB 개인화 추천으로 검색-only 마찰 완화. 잔여: 대회 탐색 추천(급수·지역 맞춤 대회 추천)만 남음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-11 · C2 · `src/lib/autoDraw.js`(신규)·`src/pages/organizer/BracketGenerator.jsx`(리팩터)·`src/pages/organizer/TournamentManage.jsx`
+  · 자동 대진 생성(추첨 무인화) — 주최자 완주 체인(마감·승인·입금·상태전환·시상확정)에서 유일하게
+    남아 있던 수작업 "추첨(대진표 생성)"을 채워, 완주를 막던 지점을 제거했다. stateMachine의
+    closed→in_progress는 "대진표 존재(matches.length>0)"를 조건으로 걸어, 대회 당일이 와도 주최자가
+    BracketGenerator에서 직접 추첨하지 않으면 대회가 시작되지 못하고 blockReason으로 멈춰 있었다(북극성
+    DoD가 명시한 "앱이 추첨을 dridve"의 미충족 고리). 공개 추첨 화면에 잠겨 있던 대진 생성 로직을 순수/공용
+    엔진으로 승격: `autoDraw.js` 신설 — `uuid`·`knockoutLabel`·`makeMatchRow`·`buildKnockoutRows`(BracketGenerator에서
+    이동)·`enrichEntries`(신청행→대진 엔트리 정규화)·`buildDrawPlan`(startDraw의 순수 계획 수립: single_elim
+    표준 시드/부전승·pool_only·pool_knockout·round_robin, AI 균형 optimizeDraw 포함, 씨드 고정 반환으로
+    재현성 유지)·`persistDrawPlan`(saveSchedule의 DB 저장: 기존 삭제→조·조별참가팀·조별경기·본선 스켈레톤
+    삽입)·`autoGenerateBracket`(한 종목: 이미 대진표 있으면 count 체크로 스킵해 절대 덮어쓰지 않음, 승인<2팀
+    not_enough, makeSeed→buildDrawPlan→persistDrawPlan)·`autoGenerateAllBrackets`(대회 전 종목 루프,
+    created/skipped/notEnough/errors 집계). BracketGenerator는 로컬 글루를 전부 지우고 이 엔진을 import(startDraw→
+    buildDrawPlan, saveSchedule→persistDrawPlan, loadEntries→enrichEntries)해 공개 추첨·자동 추첨이 대진 로직
+    단일 소스를 공유(중복 0, UI·애니메이션·씨드 공개 검증 불변). TournamentManage 배선: `runAutoDraw`(전 종목
+    autoGenerateAllBrackets→성공 시 reloadMatches로 matches 갱신→다음 상태머신 틱이 hasBracket=true로 보고
+    기존 무인 전환 useEffect가 closed→in_progress 자동 실행), 무인 ON+status='closed'+plan.blockReason(당일+
+    대진표 없음)일 때 autoDrawnRef 1회 잠금으로 자동 실행하는 useEffect, blockReason 배너에 "대진표 자동 생성"
+    원터치 버튼(무인 OFF에서도)+결과 안내(생성 N개/승인 부족/오류). categories select를 '*'로 확장(대진에 필요한
+    format·pool_size·seeding_enabled 등 컬럼 확보). 스키마·외부 키 불필요(기존 tournament_matches·pools 재사용).
+    엔진 23개 시나리오(enrichEntries·single_elim 크기/부전승/시퀀스·pool_only 2조 균형·round_robin·녹아웃 링크/
+    부전승 진출·makeMatchRow 기본값) node 자체 검증 통과, `npx vite build` green. 잔여: draft→open만 의도적 수동.
+    (자동화율 주최자 89%→92%)
 - 2026-07-11 · 심판(판정 자동화) · `src/lib/bwf.js`(matchCall 신규)·`src/pages/referee/Scoreboard.jsx`
   · 자동 심판 콜 + 음성 안내(TTS) — 4개 플로우 중 최저(심판 78%)의 유일한 비-human-gated 잔여를 채움.
     지금껏 점수판은 인터벌·게임종료·골든포인트 오버레이만 있고, "지금이 게임 포인트/매치 포인트/듀스인지"를

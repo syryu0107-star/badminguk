@@ -1,118 +1,23 @@
 import { useEffect, useState, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
-import { seededShuffle, makeSeed, scheduleMatches, buildRoundRobin } from '../../lib/scheduler'
-import { generatePools, generateKnockoutBracket, knockoutSkeletonSize } from '../../lib/tournament'
-import { optimizeDraw, explainDraw, poolMeanMmr } from '../../lib/drawOptimizer'
+import { makeSeed } from '../../lib/scheduler'
+import { knockoutSkeletonSize } from '../../lib/tournament'
+import { poolMeanMmr } from '../../lib/drawOptimizer'
+import { buildDrawPlan, persistDrawPlan, enrichEntries } from '../../lib/autoDraw'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
 import { Shuffle, RotateCcw, Check, Copy, Trophy, Sparkles, Scale } from 'lucide-react'
 
 // ── 유틸 ─────────────────────────────────────────────────────────
-
-function uuid() {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-    const r = (Math.random() * 16) | 0
-    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16)
-  })
-}
-
-// 라운드 라벨: 1=1라운드 … 마지막=결승 (round_number 기준, DB round_type용)
-function knockoutLabel(round, totalRounds) {
-  const teams = Math.pow(2, totalRounds - round + 1)
-  if (teams === 2) return 'final'
-  if (teams === 4) return 'semi'
-  if (teams === 8) return 'quarter'
-  return `r${teams}`
-}
+// 대진 생성 글루(uuid·makeMatchRow·buildKnockoutRows·buildDrawPlan·persistDrawPlan)는
+// lib/autoDraw.js 로 승격해 공개 추첨(이 화면)과 자동 추첨(TournamentManage)이 공유한다.
 
 const FORMAT_INFO = {
   round_robin:   { name: '리그전',          desc: '참가팀 모두와 한 번씩 경기해요' },
   single_elim:   { name: '토너먼트',        desc: '지면 탈락하는 방식이에요' },
   pool_knockout: { name: '조별리그 + 본선', desc: '조에서 좋은 성적을 내면 본선 토너먼트에 올라가요' },
   pool_only:     { name: '조별리그만',      desc: '조 안에서 경기해 순위를 정해요' },
-}
-
-// tournament_matches 한 줄 (모든 행이 같은 키를 갖도록 통일 — 일괄 저장용)
-function makeMatchRow(base) {
-  return {
-    id: base.id ?? uuid(),
-    category_id: base.category_id,
-    pool_id: base.pool_id ?? null,
-    match_phase: base.match_phase,
-    round_type: base.round_type,
-    round_number: base.round_number ?? null,
-    bracket_pos: base.bracket_pos ?? null,
-    match_number: base.match_number,
-    team1_entry_id: base.team1_entry_id ?? null,
-    team2_entry_id: base.team2_entry_id ?? null,
-    winner_entry_id: base.winner_entry_id ?? null,
-    court_number: base.court_number ?? null,
-    scheduled_time: base.scheduled_time ?? null,
-    status: base.status ?? 'scheduled',
-    draw_seed: base.draw_seed ?? null,
-    next_match_id: base.next_match_id ?? null,
-    next_match_slot: base.next_match_slot ?? null,
-  }
-}
-
-/**
- * 녹아웃 전 라운드 스켈레톤 생성 + 승자 진출 링크 연결.
- * round1Teams: [[entryId|null, entryId|null], ...] (null이면 자리만 예약)
- * 부전승(한 팀만 있는 1라운드 경기)은 status='bye' + winner 기록 + 다음 라운드 슬롯 선진출.
- */
-function buildKnockoutRows({ catId, seed, size, round1Teams, startMatchNo }) {
-  const totalRounds = Math.round(Math.log2(size))
-  const byRound = []
-  let matchNo = startMatchNo
-
-  for (let r = 1; r <= totalRounds; r++) {
-    const count = size / Math.pow(2, r)
-    const arr = []
-    for (let pos = 1; pos <= count; pos++) {
-      arr.push(makeMatchRow({
-        category_id: catId,
-        match_phase: 'knockout',
-        round_type: knockoutLabel(r, totalRounds),
-        round_number: r,
-        bracket_pos: pos,
-        match_number: matchNo++,
-        draw_seed: seed,
-      }))
-    }
-    byRound.push(arr)
-  }
-
-  // 승자 진출 링크: round r의 pos p → round r+1의 ceil(p/2), 홀수p=슬롯1 / 짝수p=슬롯2
-  for (let r = 0; r < byRound.length - 1; r++) {
-    byRound[r].forEach((m, idx) => {
-      const pos = idx + 1
-      m.next_match_id = byRound[r + 1][Math.ceil(pos / 2) - 1].id
-      m.next_match_slot = pos % 2 === 1 ? 1 : 2
-    })
-  }
-
-  // 1라운드 팀 배치 + 부전승 선진출 처리
-  if (round1Teams) {
-    byRound[0].forEach((m, idx) => {
-      const [t1, t2] = round1Teams[idx] ?? [null, null]
-      m.team1_entry_id = t1
-      m.team2_entry_id = t2
-      const only = t1 && !t2 ? t1 : !t1 && t2 ? t2 : null
-      if (only) {
-        m.status = 'bye'
-        m.winner_entry_id = only
-        if (m.next_match_id && byRound[1]) {
-          const next = byRound[1][Math.ceil((idx + 1) / 2) - 1]
-          if (m.next_match_slot === 1) next.team1_entry_id = only
-          else next.team2_entry_id = only
-        }
-      }
-    })
-  }
-
-  return { rows: byRound.flat(), byRound }
 }
 
 export default function BracketGenerator() {
@@ -161,15 +66,7 @@ export default function BracketGenerator() {
       .select('id, team_name, player1:profiles!player1_id(id,name,mmr), player2:profiles!player2_id(id,name,mmr)')
       .eq('category_id', activeCat)
       .eq('entry_status', 'approved')
-    const enriched = (data ?? []).map(e => {
-      const mmrs = [e.player1?.mmr, e.player2?.mmr].filter(v => v != null)
-      return {
-        ...e,
-        label: [e.player1?.name, e.player2?.name].filter(Boolean).join(' / ') || e.team_name || '이름 없음',
-        mmr: mmrs.length ? mmrs.reduce((a, b) => a + b, 0) / mmrs.length : null,
-      }
-    })
-    setAllEntries(enriched)
+    setAllEntries(enrichEntries(data))
   }
 
   function resetDraw() {
@@ -199,62 +96,14 @@ export default function BracketGenerator() {
   const useOptimizer = isPoolFormat && numPools >= 2 && hasMmrData && (seedingOn || aiBalance)
 
   // ── 추첨 계획 수립 (씨드 고정 → 저장 시 그대로 사용, 재현 가능) ──
+  // 계획 로직은 lib/autoDraw.buildDrawPlan 공용(공개 추첨·자동 추첨 단일 소스).
   function startDraw() {
     if (allEntries.length < 2) return
     const s = makeSeed()
-    const cat = activeCategory
-    const hasMmr = seedingOn && allEntries.some(e => e.mmr != null)
-
-    if (format === 'single_elim') {
-      // 시드 켜짐: MMR 상위 = 낮은 시드 번호 → 대진 반대편 배치 / 꺼짐: 씨드 셔플 순서
-      const entryMap = Object.fromEntries(allEntries.map(e => [e.id, e]))
-      const ordered = hasMmr
-        ? [...allEntries].sort((a, b) => (b.mmr ?? -Infinity) - (a.mmr ?? -Infinity))
-        : seededShuffle(allEntries, s)
-      const direct = ordered.map((e, i) => ({ entryId: e.id, label: e.label, rank: i + 1, poolIndex: 0 }))
-      const bracket = generateKnockoutBracket({ direct, wildcards: [] }, s)
-      const round1 = bracket.filter(m => m.round === 1).sort((a, b) => a.slot - b.slot)
-      const size = round1.length * 2
-      const sequence = []
-      round1.forEach(m => {
-        for (const eid of [m.team1EntryId, m.team2EntryId]) {
-          sequence.push(eid
-            ? { type: 'slot', entryId: eid, label: entryMap[eid]?.label ?? '', bye: false }
-            : { type: 'slot', entryId: null, label: '부전승', bye: true })
-        }
-      })
-      setPlan({ format, seed: s, pools: null, round1, size, sequence })
-    } else {
-      // round_robin = 전원 한 조 / pool_only·pool_knockout = pool_size씩 조 편성
-      const poolSize = format === 'round_robin'
-        ? Math.max(allEntries.length, 1)
-        : Math.max(cat?.pool_size ?? 4, 1)
-      // AI 균형 추첨: 후보 대진을 비교해 조별 실력이 가장 고른 대진을 고른다(재현성 유지).
-      let pools, effSeed = s, optimization = null
-      if (useOptimizer) {
-        const res = optimizeDraw({ entries: allEntries, poolSize, baseSeed: s, seedingEnabled: seedingOn, candidates: 16 })
-        pools = res.pools
-        effSeed = res.seed
-        optimization = {
-          method: res.method, tried: res.tried,
-          bestSpread: res.bestSpread, worstSpread: res.worstSpread, avgSpread: res.avgSpread,
-          explanation: explainDraw(res, res.pools),
-        }
-      } else {
-        pools = generatePools(allEntries, poolSize, s, { seeding_enabled: seedingOn })
-      }
-      // 배정 순서대로 공개 (시드 배정 시 스네이크 순서 그대로 재현)
-      const sequence = []
-      const maxLen = Math.max(...pools.map(p => p.entries.length))
-      for (let k = 0; k < maxLen; k++) {
-        const order = hasMmr && k % 2 === 1 ? [...pools].reverse() : pools
-        for (const p of order) {
-          const e = p.entries[k]
-          if (e) sequence.push({ type: 'pool', entryId: e.id, label: e.label, poolIndex: p.poolIndex, poolName: p.poolName })
-        }
-      }
-      setPlan({ format, seed: effSeed, pools, round1: null, size: null, sequence, optimization })
-    }
+    setPlan(buildDrawPlan({
+      format, entries: allEntries, category: activeCategory,
+      seed: s, useOptimizer, seedingOn,
+    }))
 
     setDrawnCount(0)
     setJustDrawn(null)
@@ -290,128 +139,20 @@ export default function BracketGenerator() {
   }
 
   // ── 저장: 조 + 조별 경기 + 녹아웃 전 라운드(진출 링크 포함) ──
+  // 저장 로직은 lib/autoDraw.persistDrawPlan 공용(공개 추첨·자동 추첨 단일 소스).
   async function saveSchedule() {
     if (phase !== 'done' || !activeCat || !plan) return
     setSaving(true)
-    try {
-      const cat = activeCategory
-      const courts = Array.from({ length: tournament?.court_count ?? 4 }, (_, i) => i + 1)
-      const startDate = new Date(`${tournament.date}T${tournament?.start_time ?? '09:00'}`)
-      const matchMinutes = cat?.match_duration_min ?? 30
-
-      // 기존 대진 삭제 (경기 → 조 순서: FK 때문)
-      const delM = await supabase.from('tournament_matches').delete().eq('category_id', activeCat)
-      if (delM.error) throw delM.error
-      const delP = await supabase.from('tournament_pools').delete().eq('category_id', activeCat)
-      if (delP.error) throw delP.error
-
-      const matchRows = []
-      let matchNo = 1
-
-      if (plan.pools) {
-        // 1) 조 저장
-        const poolRows = plan.pools.map(p => ({
-          id: uuid(),
-          category_id: activeCat,
-          pool_name: p.poolName,
-          pool_index: p.poolIndex,
-          draw_seed: plan.seed,
-        }))
-        const poolIdByIndex = {}
-        poolRows.forEach(r => { poolIdByIndex[r.pool_index] = r.id })
-        const insPools = await supabase.from('tournament_pools').insert(poolRows)
-        if (insPools.error) throw insPools.error
-
-        // 2) 조별 참가팀 (시드 켜짐이면 MMR 순위 기록)
-        const mmrRank = {}
-        ;[...allEntries]
-          .sort((a, b) => (b.mmr ?? -Infinity) - (a.mmr ?? -Infinity))
-          .forEach((e, i) => { mmrRank[e.id] = i + 1 })
-        const peRows = []
-        plan.pools.forEach(p => p.entries.forEach(e => {
-          peRows.push({
-            pool_id: poolIdByIndex[p.poolIndex],
-            entry_id: e.id,
-            seeding_rank: seedingOn ? mmrRank[e.id] ?? null : null,
-          })
-        }))
-        const insPe = await supabase.from('tournament_pool_entries').insert(peRows)
-        if (insPe.error) throw insPe.error
-
-        // 3) 조별 리그전 경기 (홀수 조의 부전승 슬롯 = 그 라운드 휴식이라 경기 없음)
-        const raw = []
-        plan.pools.forEach(p => {
-          buildRoundRobin(p.entries)
-            .filter(m => m.entryA && m.entryB)
-            .forEach(m => raw.push({ ...m, poolIndex: p.poolIndex }))
-        })
-        raw.sort((a, b) => a.round - b.round || a.poolIndex - b.poolIndex)
-        const scheduledPool = scheduleMatches({
-          matches: raw, courts, startTime: startDate, matchMinutes, breakMinutes: 5,
-        })
-        scheduledPool.forEach(m => {
-          matchRows.push(makeMatchRow({
-            category_id: activeCat,
-            pool_id: poolIdByIndex[m.poolIndex],
-            match_phase: 'pool',
-            round_type: 'group',
-            match_number: matchNo++,
-            team1_entry_id: m.entryA.id,
-            team2_entry_id: m.entryB.id,
-            court_number: m.court,
-            scheduled_time: m.scheduledTime?.toISOString() ?? null,
-            draw_seed: plan.seed,
-          }))
-        })
-
-        // 4) 본선 스켈레톤 (pool_knockout): 참가자 미정(null) 자리 예약 + 진출 링크
-        //    조별리그가 끝나면 advancement.js#seedKnockoutFromPools가 1라운드를 채운다.
-        //    ⚠️ 스켈레톤 크기는 계획값(조수×진출+와일드카드)이 아니라 "실제 진출 가능 수"로
-        //    잡아야 한다. 조가 진출 인원보다 작으면 실제 진출이 더 적어(seedKnockoutFromPools가
-        //    산출하는 값), 계획값으로 만들면 팀이 안 채워지는 빈 경기가 영구 잔존해 대회 종료가
-        //    막힌다(M3). 조 팀 수 기반으로 seed 시점과 동일하게 계산한다.
-        if (plan.format === 'pool_knockout') {
-          const poolSizes = plan.pools.map(p => p.entries.length)
-          const size = knockoutSkeletonSize(
-            poolSizes, cat?.advancement_per_pool ?? 2, cat?.wildcard_count ?? 0
-          )
-          if (size >= 2) {
-            const { rows } = buildKnockoutRows({
-              catId: activeCat, seed: plan.seed, size, round1Teams: null, startMatchNo: matchNo,
-            })
-            matchNo += rows.length
-            matchRows.push(...rows)
-          }
-        }
-      } else {
-        // single_elim: 전 라운드 생성 + 부전승 선진출 + 1라운드 실경기만 코트/시간 배정
-        const round1Teams = plan.round1.map(m => [m.team1EntryId, m.team2EntryId])
-        const { rows, byRound } = buildKnockoutRows({
-          catId: activeCat, seed: plan.seed, size: plan.size, round1Teams, startMatchNo: matchNo,
-        })
-        const real = byRound[0].filter(r => r.status !== 'bye')
-        const raw = real.map(r => ({ entryA: { id: r.team1_entry_id }, entryB: { id: r.team2_entry_id }, _row: r }))
-        const sched = scheduleMatches({
-          matches: raw, courts, startTime: startDate, matchMinutes, breakMinutes: 5,
-        })
-        sched.forEach(m => {
-          m._row.court_number = m.court
-          m._row.scheduled_time = m.scheduledTime?.toISOString() ?? null
-        })
-        matchRows.push(...rows)
-      }
-
-      if (matchRows.length > 0) {
-        const insM = await supabase.from('tournament_matches').insert(matchRows)
-        if (insM.error) throw insM.error
-      }
+    const res = await persistDrawPlan(supabase, {
+      plan, categoryId: activeCat, tournament, category: activeCategory, entries: allEntries,
+    })
+    if (res.ok) {
       setSaved(true)
-    } catch (err) {
-      console.error('대진 저장 실패:', err)
-      alert('저장에 실패했어요. 잠시 후 다시 시도해주세요.\n' + (err?.message ?? ''))
-    } finally {
-      setSaving(false)
+    } else {
+      console.error('대진 저장 실패:', res.error)
+      alert('저장에 실패했어요. 잠시 후 다시 시도해주세요.\n' + (res.error?.message ?? ''))
     }
+    setSaving(false)
   }
 
   function copySeed() {

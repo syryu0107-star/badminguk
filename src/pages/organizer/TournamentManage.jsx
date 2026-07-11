@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
 import { planTournamentState } from '../../lib/stateMachine'
+import { autoGenerateAllBrackets } from '../../lib/autoDraw'
 import {
   planCampaigns, pendingCampaigns, loadSentCampaigns, markCampaignSent,
   fetchCampaignRecipients,
@@ -307,7 +308,7 @@ export default function TournamentManage() {
         supabase.from('tournaments').select('*').eq('id', id).single(),
         supabase
           .from('tournament_categories')
-          .select('id, max_teams, min_teams, sport_type, entry_fee')
+          .select('*')
           .eq('tournament_id', id),
       ])
 
@@ -363,6 +364,56 @@ export default function TournamentManage() {
     await supabase.from('tournaments').update({ status }).eq('id', id)
     setTournament(prev => ({ ...prev, status }))
   }
+
+  // 대진표 존재 판정용 경기 상태 재조회 (자동 추첨 후 갱신)
+  async function reloadMatches() {
+    const catIds = categories.map(c => c.id)
+    if (!catIds.length) { setMatches([]); return }
+    const { data } = await supabase
+      .from('tournament_matches').select('id, status').in('category_id', catIds)
+    setMatches(data ?? [])
+  }
+
+  // ── 자동 대진 생성 (추첨 자동화) ──────────────────────────────────
+  // 대회 당일 대진표가 없어 대회가 시작되지 못하고 막혔을 때, 앱이 공개 추첨과
+  // 동일한 로직(재현 가능한 씨드·AI 균형 편성)으로 대진표를 자동 생성한다.
+  // 이미 대진표가 있는 종목은 절대 덮어쓰지 않는다(주최자가 직접 뽑은 것 보호).
+  const autoDrawnRef = useRef(false)  // 무인 자동 추첨 1회 시도 잠금
+  const [drawing, setDrawing] = useState(false)
+  const [drawMsg, setDrawMsg] = useState(null)  // { ok, text }
+
+  async function runAutoDraw() {
+    if (!tournament || !categories.length || drawing) return
+    setDrawing(true)
+    setDrawMsg(null)
+    try {
+      const res = await autoGenerateAllBrackets(supabase, { tournament, categories })
+      if (res.created > 0) {
+        await reloadMatches()
+        setDrawMsg({ ok: true, text: `대진표 ${res.created}개 종목을 자동으로 만들었어요 — 곧 대회가 시작돼요.` })
+      } else if (res.notEnough > 0) {
+        setDrawMsg({ ok: false, text: '승인된 팀이 2팀 미만인 종목이 있어 대진표를 만들 수 없어요. 참가 신청을 먼저 확인해 주세요.' })
+      } else if (res.errors > 0) {
+        setDrawMsg({ ok: false, text: '대진표 자동 생성 중 오류가 있었어요. 잠시 후 다시 시도해 주세요.' })
+      } else {
+        // 전부 이미 존재 — 판정 어긋남 보정
+        await reloadMatches()
+      }
+    } finally {
+      setDrawing(false)
+    }
+  }
+
+  // 무인 자동 진행 ON + 대회 당일 대진표 없음(막힘) → 스스로 대진표 생성 (1회)
+  useEffect(() => {
+    if (!autoState) return
+    if (tournament?.status !== 'closed') return
+    if (!plan.blockReason) return          // "대진표 없음"으로 막힌 상태에서만
+    if (autoDrawnRef.current) return
+    autoDrawnRef.current = true
+    runAutoDraw()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoState, tournament?.status, plan.blockReason])
 
   function toggleAuto() {
     setAutoState(v => {
@@ -587,7 +638,7 @@ export default function TournamentManage() {
                   <p className="font-bold text-sm">무인 자동 진행</p>
                   <p className="text-xs text-gray-400 leading-relaxed mt-0.5">
                     켜두면 <b>접수 마감 시각</b>이 지나거나 <b>정원이 차면</b> 앱이 스스로 접수를
-                    마감하고, 대회 당일 대진표가 준비되면 자동으로 대회를 시작해요.
+                    마감하고, 대회 당일이 되면 <b>대진표까지 자동으로 만들어</b> 대회를 시작해요.
                   </p>
                 </div>
               </div>
@@ -639,11 +690,36 @@ export default function TournamentManage() {
               </div>
             )}
 
-            {/* 전환이 막힌 이유 */}
+            {/* 전환이 막힌 이유 — 대진표 없음이면 자동 생성으로 해결 */}
             {plan.blockReason && (
-              <div className="mt-3 rounded-xl bg-orange-50 px-3 py-2.5 text-sm text-orange-800 flex items-start gap-1.5">
-                <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-                <span>{plan.blockReason}</span>
+              <div className="mt-3 rounded-xl bg-orange-50 px-3 py-2.5 text-sm text-orange-800">
+                <div className="flex items-start gap-1.5">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                  <span>{plan.blockReason}</span>
+                </div>
+                <div className="flex items-center justify-between mt-2 gap-2">
+                  <span className="text-xs text-orange-700">
+                    {autoState
+                      ? '무인 자동 진행이 켜져 있어 앱이 대진표를 자동으로 만들어요.'
+                      : '지금 바로 대진표를 자동 생성할 수 있어요. (직접 공개 추첨을 원하면 아래 AI 대진표 생성 메뉴를 이용하세요)'}
+                  </span>
+                  <button
+                    onClick={runAutoDraw}
+                    disabled={drawing}
+                    className="shrink-0 text-xs font-bold text-white bg-[#C60C30] px-3 py-1.5 rounded-lg active:scale-95 disabled:opacity-60"
+                  >
+                    {drawing ? '생성 중...' : '대진표 자동 생성'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 자동 추첨 결과 안내 */}
+            {drawMsg && (
+              <div className={`mt-3 rounded-xl px-3 py-2.5 text-sm flex items-start gap-1.5
+                ${drawMsg.ok ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
+                {drawMsg.ok ? <Check size={14} className="mt-0.5 shrink-0" /> : <AlertTriangle size={14} className="mt-0.5 shrink-0" />}
+                <span>{drawMsg.text}</span>
               </div>
             )}
           </div>
