@@ -6,6 +6,7 @@ import {
   trackGrade, trackGradeOrBase, modeForSport, modeLabel, unitLabel,
 } from '../../lib/grades'
 import { getGradeFromMMR } from '../../lib/sandbag'
+import { PARTNER_COLS, collectPastPartners, rankPartnerSuggestions, partnerReason } from '../../lib/partners'
 import TopBar from '../../components/TopBar'
 import GradeChip from '../../components/GradeChip'
 import Spinner from '../../components/Spinner'
@@ -70,6 +71,8 @@ export default function TournamentDetail() {
   const [searched, setSearched]               = useState(false)
   const [searchError, setSearchError]         = useState('')
   const [selectedPartner, setSelectedPartner] = useState(null)
+  // C12 파트너 매칭 — 지난 대회에 함께 나간 파트너 추천 데이터(대회 무관, 1회 로드)
+  const [pastPartners, setPastPartners]       = useState([])
 
   // 파트너 관련 상태 초기화 (종목 전환 시)
   function resetPartner() {
@@ -115,6 +118,24 @@ export default function TournamentDetail() {
         if (c?.length) {
           setMyEntries(await fetchMyEntries(user.id, c))
         }
+        // C12 파트너 매칭 — 내가 낀 복식 신청 이력에서 과거 파트너를 모아 추천 후보로 로드
+        try {
+          const { data: pe } = await supabase
+            .from('tournament_entries')
+            .select('player1_id, player2_id, created_at')
+            .not('player2_id', 'is', null)
+            .or(`player1_id.eq.${user.id},player2_id.eq.${user.id}`)
+          const agg = collectPastPartners(pe ?? [], user.id)
+          if (agg.length) {
+            const ids = agg.slice(0, 20).map(a => a.partnerId)
+            const { data: profs } = await supabase.from('profiles').select(PARTNER_COLS).in('id', ids)
+            const byId = new Map((profs ?? []).map(pr => [pr.id, pr]))
+            setPastPartners(
+              agg.map(a => ({ profile: byId.get(a.partnerId), count: a.count, lastAt: a.lastAt }))
+                 .filter(x => x.profile)
+            )
+          }
+        } catch { /* 이력 조회 실패 시 추천 없이 검색만 제공 */ }
       }
 
       setTournament(t)
@@ -135,8 +156,7 @@ export default function TournamentDetail() {
     setSelectedPartner(null)
 
     const digits = q.replace(/\D/g, '')
-    const cols = 'id,name,phone,official_grade,grade_verified,mmr,singles_mmr,mmr_games_played,'
-      + 'grade_gu_dbl,grade_si_dbl,grade_nat_dbl,grade_gu_sgl,grade_si_sgl,grade_nat_sgl'
+    const cols = PARTNER_COLS
     let rows = []
 
     if (digits.length >= 10) {
@@ -311,6 +331,12 @@ export default function TournamentDetail() {
               const hasMMRGate = cat.min_mmr || cat.max_mmr
               const doubles = isDoubles(cat)
               const partnerElig = selectedPartner ? checkEligibility(selectedPartner, cat, tournament) : null
+              // C12 파트너 매칭 — 이 종목 자격을 통과하는 과거 파트너만 추천(최대 4명)
+              const partnerSuggestions = doubles
+                ? rankPartnerSuggestions(pastPartners, pm => checkEligibility(pm, cat, tournament))
+                    .filter(s => s.eligible)
+                    .slice(0, 4)
+                : []
 
               return (
                 <div key={cat.id} className={`bg-white rounded-2xl p-4 border transition
@@ -406,6 +432,40 @@ export default function TournamentDetail() {
                           ) : (
                             /* 검색 입력 + 결과 */
                             <>
+                              {/* C12 파트너 매칭 — 지난 대회에 함께 나간 파트너 원터치 재초대 */}
+                              {partnerSuggestions.length > 0 && (
+                                <div className="mb-2.5">
+                                  <p className="text-[11px] font-semibold text-gray-500 flex items-center gap-1 mb-1.5">
+                                    <Users size={11} className="text-[#003478]" /> 추천 파트너 · 지난 대회에 함께 나간 분들
+                                  </p>
+                                  <div className="space-y-1.5">
+                                    {partnerSuggestions.map(s => (
+                                      <button
+                                        key={s.profile.id}
+                                        onClick={() => selectPartner(s.profile)}
+                                        className="w-full text-left border border-blue-100 bg-blue-50/60 rounded-xl px-3 py-2
+                                                   flex items-center justify-between gap-2 active:bg-blue-50"
+                                      >
+                                        <div className="min-w-0">
+                                          <div className="flex items-center gap-2 flex-wrap">
+                                            <span className="font-semibold text-sm truncate">{s.profile.name || '이름없음'}</span>
+                                            <GradeChip grade={s.profile.official_grade} size="sm" />
+                                            {s.profile.grade_verified && (
+                                              <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full">인증</span>
+                                            )}
+                                          </div>
+                                          <p className="text-[11px] text-[#003478] mt-0.5">{partnerReason(s.count)}</p>
+                                        </div>
+                                        <span className="text-[11px] font-semibold text-[#003478] bg-white border border-blue-100 px-2 py-1 rounded-full shrink-0">
+                                          다시 초대
+                                        </span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <p className="text-[11px] text-gray-400 mt-1.5">또는 아래에서 전화번호·이름으로 검색하세요.</p>
+                                </div>
+                              )}
+
                               <div className="flex gap-2">
                                 <input
                                   value={partnerQuery}

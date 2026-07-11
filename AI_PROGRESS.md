@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-11 — [C12] 파트너 추천 — 지난 대회에 함께 나간 파트너 원터치 재초대 (파트너 매칭 착수)
+
+- **C12 대회 탐색·파트너 매칭·통합 전적 — 파트너 매칭 (선수 신청 단계 마찰, AI/대진DB 개인화)**
+  - 파일: `src/lib/partners.js`(신규), `src/pages/player/TournamentDetail.jsx`
+  - 요약: C1~C12 중 마지막으로 남은 비-human-gated ⚠️ 클러스터 C12를 착수했다. 복식 종목은 파트너가 필수인데, 지금껏 파트너 지정은 "전화번호 또는 이름으로 검색"만 있어 예전에 같이 나간 파트너의 번호·정확한 이름을 기억 못 하면 신청 자체가 막혔다(선수 완주의 신청 단계 friction, C12 백로그의 "추천/매칭 없음"). 이번 런은 대진DB(내 복식 신청 이력)에서 개인화한 "지난 대회에 함께 나간 파트너 다시 초대" 추천을 얹어 원터치 재초대를 제공한다. 스키마·외부 키·LLM 불필요, 자격 검사는 호출부 checkEligibility를 주입받아 종목별 급수·MMR 게이트를 그대로 재사용(중복 로직 0). 순수 엔진 `partners.js` 신설 — `PARTNER_COLS`(파트너 프로필의 자격 검사+표시+신청 삽입용 컬럼 집합, 기존 searchPartner의 지역 `cols`를 모듈 상수로 승격해 검색·추천 두 경로가 같은 컬럼을 쓰게 통일), `collectPastPartners(entries, myId)`(내가 player1 또는 player2로 낀 복식(player2_id 존재) 신청 이력을 훑어 "상대" id를 모아 함께 출전 횟수(count)와 최근 출전 시각(lastAt=max created_at)을 집계, 단식·내가 안 낀 행·자기자신은 방어적으로 제외, 함께 출전 횟수 내림차순 → 최근순 정렬, entries/myId null 안전), `rankPartnerSuggestions(candidates, isEligible)`(candidates=[{profile,count,lastAt}]에 주입된 isEligible(profile)={ok,reason}을 적용해 {eligible,reason}을 부여하고 자격 통과 먼저 → 횟수 → 최근순 정렬, isEligible 미주입 시 전원 통과로 안전), `partnerReason(count)`(3회 이상=단골 파트너/2회/1회 사유 문구). TournamentDetail 배선: (1) load()에서 로그인 사용자면 `tournament_entries`에서 내 복식 신청 이력을 조회(`.select('player1_id,player2_id,created_at').not('player2_id','is',null).or(player1_id.eq.me,player2_id.eq.me)`, RLS/테이블 조회 실패 시 try-catch로 추천 없이 검색만 degrade)→collectPastPartners로 집계→상위 20명 파트너 프로필을 PARTNER_COLS로 배치 조회(profiles는 기존 파트너 검색에서 이미 읽기 가능)→`pastPartners` 상태에 {profile,count,lastAt}로 저장(대회 무관·1회 로드), (2) 각 복식 카테고리 신청 폼에서 per-cat `partnerSuggestions`=rankPartnerSuggestions(pastPartners, pm => checkEligibility(pm, cat, tournament))의 자격 통과 항목 최대 4명 계산(종목마다 급수·MMR 게이트가 다르므로 카테고리별 재평가), (3) 파트너 미선택·검색 결과 없는 상태의 검색 프래그먼트 상단에 "추천 파트너 · 지난 대회에 함께 나간 분들" 파란 카드 목록(이름·GradeChip·인증 배지·"함께 N번 출전한 단골 파트너" 사유·"다시 초대" 버튼)을 추가하고, 버튼은 기존 `selectPartner(profile)`를 그대로 호출해 선택 카드로 이어지며 제출 시 기존 파트너 자격 재검증(pElig)·초대(partner_pending) 경로가 불변으로 동작한다. 비파괴적 추가만(기존 전화/이름 검색·선택·자격 경고 UI·submitEntry 로직 그대로). 엔진 18개 시나리오(집계·횟수 정렬·최근순 tiebreak·null/garbage 안전·자격 필터·정렬 3키·프로필 없음 필터·사유 3분기) esbuild(node) 자체 검증 통과, `npx vite build` green. 잔여: 대회 탐색 추천(급수·지역 맞춤 대회 추천)·통합 전적 뷰(전 대회 W/L·상대 전적)는 C12 다음 슬라이스로 남김. (자동화율 선수 82%→84%)
+
 ## 2026-07-11 — [C3] 선수 입금 안내 — 참가비 금액·본인 실명 입금자명·자동확인 안내 (무통장 결제 루프 선수측 완결)
 
 - **C3 입금·결제·환불 — 선수 입금 안내 (필수/중, 선수 결제 단계 완주 공백, 접수→입금→승인 무인 체인)**
