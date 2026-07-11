@@ -90,6 +90,7 @@ export default function LiveDashboard() {
   const [noShow, setNoShow]   = useState({})   // { [matchId]: { phase, secondsLeft, elapsedSec, ... } }
   const [resolving, setResolving] = useState(null) // 부전승 처리 중인 match id
   const warnedRef = useRef({})   // { [matchId]: ts } 미입장 경고 중복 방지
+  const recalledRef = useRef({}) // { [matchId]: { at, count } } 재알림(호출 반복) 중복·스팸 방지
   const [nowTick, setNowTick] = useState(Date.now()) // 카운트다운 갱신용 틱
 
   // 체크인 상태
@@ -183,9 +184,22 @@ export default function LiveDashboard() {
   //   1회 자동 발송(warnedRef 중복 차단). 부전승 최종 처리는 사람이 확인(overdue 패널).
   useEffect(() => {
     const plan = planNoShow(matches, {
-      calledAt: calledIds, warnedAt: warnedRef.current, now: nowTick,
+      calledAt: calledIds, warnedAt: warnedRef.current, recalledAt: recalledRef.current, now: nowTick,
     })
     setNoShow(plan.status)
+    if (autoRun && plan.toRecall.length) {
+      // 부드러운 재알림 (C1) — 경고 전 waiting 구간에서 호출을 반복해 놓친 선수를 다시 부른다.
+      //   calledIds(원 호출 시각)는 건드리지 않아 부전승 카운트다운은 그대로 흐른다.
+      plan.toRecall.forEach(m => {
+        const prev = recalledRef.current[m.id]
+        recalledRef.current[m.id] = { at: Date.now(), count: (prev?.count ?? 0) + 1 } // 먼저 표시해 중복 차단
+        callMatch({
+          match: m, tournamentId: id, court: m.court_number, sport: sportOf(m), recipients: recipientsOf(m),
+        })
+          .then(() => pushAutoLog(`${m.court_number}번 코트 재호출 — ${teamNamesOf(m)} (응답 없음)`))
+          .catch(() => {})
+      })
+    }
     if (autoRun && plan.toWarn.length) {
       plan.toWarn.forEach(m => {
         warnedRef.current[m.id] = Date.now() // 먼저 표시해 중복 발송 차단
@@ -440,6 +454,7 @@ export default function LiveDashboard() {
       })
       setCalledIds(prev => ({ ...prev, [m.id]: Date.now() }))
       delete warnedRef.current[m.id] // 재호출 시 노쇼 경고 다시 보낼 수 있게 초기화
+      delete recalledRef.current[m.id] // 새 호출이면 자동 재알림 시퀀스도 초기화
       if (!res.persist.persisted && res.persist.reason === 'table_missing') {
         // 인앱 호출은 나갔지만 이력 저장은 아직(013 미적용). 진행은 막지 않음.
         console.info('[호출] 실시간 방송 완료 — 이력 저장은 013 마이그레이션 적용 후 활성화')
@@ -486,6 +501,7 @@ export default function LiveDashboard() {
           await callMatch({ match: m, tournamentId: id, court: m.court_number, sport: sportOf(m), recipients: recipientsOf(m) })
           setCalledIds(prev => ({ ...prev, [m.id]: Date.now() }))
           delete warnedRef.current[m.id]
+          delete recalledRef.current[m.id]
           pushAutoLog(`${m.court_number}번 코트 자동 호출 — ${teamNamesOf(m)}`)
         } catch { /* 다음 틱에 재시도 */ }
       }
@@ -633,6 +649,7 @@ export default function LiveDashboard() {
         forfeitReason: '호출 미응답(노쇼)',
       })
       delete warnedRef.current[match.id]
+      delete recalledRef.current[match.id]
       if (res?.mmrError) {
         alert('처리는 됐지만 MMR 반영에 실패했어요.\n주최자 계정으로 로그인돼 있는지 확인한 뒤 다시 시도해주세요.')
       }
@@ -1011,6 +1028,9 @@ export default function LiveDashboard() {
                         <span className={`flex items-center gap-0.5 font-bold
                           ${noShow[m.id].phase === 'warned' ? 'text-[#C60C30]' : 'text-amber-600'}`}>
                           <AlertTriangle size={10} /> 미응답 부전승까지 {fmtCountdown(noShow[m.id].secondsLeft)}
+                          {noShow[m.id].recallCount > 0 && (
+                            <span className="text-gray-400 font-semibold">· 재호출 {noShow[m.id].recallCount}회</span>
+                          )}
                         </span>
                       )}
                     </div>

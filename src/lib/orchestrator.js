@@ -89,28 +89,41 @@ export function planAutoAdvance(matches, {
   return { toCall, toSoon, estimates, queues }
 }
 
-// 노쇼(호출 미응답) 타이머 (C7) — 호출됐지만 시작 안 된 경기의 경과 시간으로 단계 산출.
+// 노쇼(호출 미응답) 타이머 (C7·C1) — 호출됐지만 시작 안 된 경기의 경과 시간으로 단계 산출.
 // ──────────────────────────────────────────────────────────────────────
 // 호출(callMatch) 이후에도 선수가 코트로 오지 않으면 대회가 멈춘다. 이 함수가
 // "호출 후 얼마나 지났는지"만 순수하게 계산해 3단계로 나눈다:
-//   waiting  — 아직 유예 시간 안 (기다리는 중)
+//   waiting  — 아직 유예 시간 안 (기다리는 중) → 이 구간에서 무응답이면 부드러운 재알림(toRecall)
 //   warned   — warnAfterSec 경과 → 선수에게 "곧 부전승" 경고 1회 발송 대상(toWarn)
 //   overdue  — forfeitAfterSec 경과 → 부전승 처리 대상(overdue), 사람이 최종 확인
 // 실제 발송·부전승 처리·DB 변경은 호출부(LiveDashboard)가 담당한다(순수 함수 유지).
 //   calledAt   : { [matchId]: ts } 호출 시각 (재호출 시 갱신됨)
 //   warnedAt   : { [matchId]: ts } 이미 경고 보낸 경기 (중복 경고 방지)
+//   recalledAt : { [matchId]: { at, count } } 이미 보낸 재알림 (중복·스팸 방지)
 //   warnAfterSec / forfeitAfterSec : 유예 임계 (기본 2분 / 5분)
+//   recallAfterSec  : 첫 재알림까지의 무응답 대기 (기본 45초)
+//   recallEverySec  : 이후 재알림 간격 (기본 45초)
+//   recallMaxCount  : 경고 전까지 최대 재알림 횟수 (기본 2회 — 스팸 방지)
 //   now        : 기준 시각(ms)
+//
+// C1 재알림: 호출은 인앱 실시간 방송이라 그 순간 앱을 안 보고 있던 선수는 놓친다.
+// warned(곧 부전승)로 넘어가기 전 waiting 구간에서 몇 번 더 부드럽게 호출을 반복해,
+// 화면을 잠깐 껐다 켠 선수도 "지금 몇 번 코트" 를 다시 받게 한다(무인 진행 시 자동).
 export function planNoShow(matches, {
   calledAt = {},
   warnedAt = {},
+  recalledAt = {},
   warnAfterSec = 120,
   forfeitAfterSec = 300,
+  recallAfterSec = 45,
+  recallEverySec = 45,
+  recallMaxCount = 2,
   now = Date.now(),
 } = {}) {
   const toWarn = []      // 지금 "곧 부전승" 경고 보낼 경기
+  const toRecall = []    // 지금 부드러운 재알림(호출 반복) 보낼 경기
   const overdue = []     // 부전승 처리 대상 (사람 최종 확인)
-  const status = {}      // matchId → { phase, calledAt, warnAt, deadlineAt, secondsLeft, elapsedSec }
+  const status = {}      // matchId → { phase, calledAt, warnAt, deadlineAt, secondsLeft, elapsedSec, recallCount }
   for (const m of matches ?? []) {
     if (m.status !== 'scheduled') continue     // 시작·완료된 경기는 노쇼 대상 아님
     const c = calledAt[m.id]
@@ -120,6 +133,8 @@ export function planNoShow(matches, {
     let phase = 'waiting'
     if (now >= deadlineAt) phase = 'overdue'
     else if (now >= warnAt) phase = 'warned'
+    const rc = recalledAt[m.id]
+    const recallCount = rc?.count ?? 0
     status[m.id] = {
       phase,
       calledAt: c,
@@ -127,11 +142,18 @@ export function planNoShow(matches, {
       deadlineAt,
       secondsLeft: Math.max(0, Math.round((deadlineAt - now) / 1000)),
       elapsedSec: Math.max(0, Math.round((now - c) / 1000)),
+      recallCount,
     }
     if (phase === 'overdue') overdue.push(m)
     else if (phase === 'warned' && !warnedAt[m.id]) toWarn.push(m)
+    else if (phase === 'waiting' && recallCount < recallMaxCount) {
+      // 마지막 접점(원 호출 or 직전 재알림) 이후 충분히 지났으면 재알림.
+      const lastAt = rc?.at ?? c
+      const gap = (recallCount === 0 ? recallAfterSec : recallEverySec) * 1000
+      if (now - lastAt >= gap) toRecall.push(m)
+    }
   }
-  return { toWarn, overdue, status }
+  return { toWarn, toRecall, overdue, status }
 }
 
 // 빈 코트 실제 재배치 (C6) — 유휴 코트로 과부하 코트의 대기 경기를 옮긴다.

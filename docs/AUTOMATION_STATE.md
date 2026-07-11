@@ -6,14 +6,14 @@
 | 플로우 | 점수 | 완주 막는 잔여 갭 |
 |--------|:---:|------------------|
 | 주최자 | 89% | **요강·설정 마법사(C8)** ✅ — 개설 시 정원(예상 팀 수)으로 대진 방식 자동 추천(규모→리그/조별+토너먼트·조 크기)·경기 수·예상 소요·예상 종료 시각 역산(코트 수 반영)·요강 문서(PDF) 자동 생성. 무통장 입금 자동 매칭 ✅ / 디지털 상장 ✅ / 사후 공지·리마인더·감사·설문(C11) ✅ / 정산 손익·원천징수 리포트(C10) ✅ / 시상 확정 무인(C2) ✅ / **AI 균형 추첨(C5)** ✅ — 조별 포맷 무작위 편성 시 후보 16개를 시뮬레이션해 조별 평균 MMR 편차 최소 대진 자동 선택 + "왜 균형적인지" 설명. 잔여: PG 실결제(human-gated)·draft→open 자동 개설(공개는 개설자 판단으로 남김)·클럽분리(프로필에 클럽 필드 없음) |
-| 선수   | 76% | 셀프 체크인·디지털 선수증 ✅, 입금 확인 자동화 ✅, 결과·급수·상장 ✅, 대회 안내·공지함 수신 ✅, **문의 챗봇(C9)** ✅ — 규정·일정·참가비·내신청 자동응답으로 단톡방 문의 대체 / PG 카드결제 부재 |
+| 선수   | 78% | 셀프 체크인·디지털 선수증 ✅, 입금 확인 자동화 ✅, 결과·급수·상장 ✅, 대회 안내·공지함 수신 ✅, **문의 챗봇(C9)** ✅ — 규정·일정·참가비·내신청 자동응답으로 단톡방 문의 대체, **호출 재알림(C1)** ✅ — 호출을 놓친 선수에게 경고 전 waiting 구간에서 45초 간격 최대 2회 자동 재호출(앱 잠깐 껐다 켠 선수도 다시 수신) / PG 카드결제 부재 |
 | 심판   | 78% | **코트별 심판 모드(도달 경로)** ✅ — 심판이 담당 코트를 고르면 그 코트의 현재/다음 경기가 나오고, 원터치로 BWF 점수판(/referee/:matchId) 진입, 경기 종료 시 다음 경기가 실시간 구독으로 자동 배포. BWF 자동판정 탭입력·종료 시 대진표 자동반영은 기존 ✅. 잔여: 무심판 코트 셀프스코어(선수 자가 점수 입력 — tournament_matches UPDATE RLS 확장 필요·human-gated) |
-| 운영   | 80% | 빈코트 자동투입·자동호출·사전알림·예상시각(관측 페이스 보정)·노쇼 타이머·지연 예측·**빈코트 실제 재배치 실행(C6)** ✅ — 유휴 코트로 과부하 코트 대기 경기를 실제 이동(court_number UPDATE)→자동 호출까지 무인. 잔여: 자동 부전승 확정(현장 예외로 사람 1탭 유지)·rescheduleAfterForfeit(사전스케줄용, 라이브 미적용) |
+| 운영   | 82% | 빈코트 자동투입·자동호출·사전알림·예상시각(관측 페이스 보정)·노쇼 타이머·**호출 재알림(무응답 자동 재호출)** ✅·지연 예측·**빈코트 실제 재배치 실행(C6)** ✅ — 유휴 코트로 과부하 코트 대기 경기를 실제 이동(court_number UPDATE)→자동 호출까지 무인. 잔여: 자동 부전승 확정(현장 예외로 사람 1탭 유지)·rescheduleAfterForfeit(사전스케줄용, 라이브 미적용) |
 
 ## 클러스터 상태 (C1~C12)
 | C | 클러스터 | 상태 | 비고(코드 근거) |
 |---|----------|:---:|----------------|
-| C1 | 경기 호출·알림 인프라 | ⚠️ | notify.js+orchestrator.js — 자동호출·사전알림(곧 호출)·예상 호출시각 end-to-end(LiveDashboard→MyMatches). 웹푸시/알림톡/SMS는 human-gated 스텁, WO카운트다운·재알림 타이머 미구현 |
+| C1 | 경기 호출·알림 인프라 | ⚠️ | notify.js+orchestrator.js — 자동호출·사전알림(곧 호출)·예상 호출시각·**WO 카운트다운(planNoShow warned/overdue)**·**호출 재알림 타이머** ✅ end-to-end(LiveDashboard→MyMatches). 재알림: `planNoShow`가 waiting 구간(경고 전)에서 무응답 경기를 `toRecall`로 분류(recallAfterSec 45s·recallEverySec 45s·recallMaxCount 2), 무인 진행 ON이면 callMatch를 자동 반복(recalledRef 중복차단, calledIds 원 호출시각 불변→부전승 카운트다운 그대로). 잔여: 웹푸시/알림톡/SMS 실발송만 human-gated 스텁 |
 | C2 | 대회 상태 오케스트레이션 | ⚠️ | stateMachine.js 순수 판정 엔진. TournamentManage "무인 자동 진행": open→closed(마감/정원)·closed→in_progress(당일+대진표) 자동. EntryManagement "무인 자동 승인": 정상 신청 자동, 예외만 큐. **in_progress→completed 무인 확정** ✅ — `planAutoFinalize`(순수·유예 판정) + LiveDashboard 무인 진행 ON이면 전 종목 종료 후 3분 유예(점수정정 창) 지나 finalizeTournament 자동 실행(순위·급수·상장 데이터 확정)+승급 축하 배너, "지금 시상 확정" 원터치. 잔여: draft→open(개설 공개)만 수동(개설자 의도적 판단으로 보류) |
 | C3 | 입금·결제·환불 | ⚠️ | `payment.js` 신설 — 무통장 입금 내역 붙여넣기→신청자명 퍼지매칭(Levenshtein+정규화)+금액 대조→`payment_status='confirmed'` 자동 처리. EntryManagement "입금 자동 매칭" 패널(자동확인/확인권장/미매칭 분류, 1탭 확인). 입금 확인이 auto-approval 입금대기 버킷을 비워 무인 승인까지 연결. PG 실결제(토스)·가상계좌·환불규정 코드화는 미구현·human-gated |
 | C4 | 셀프 체크인 | ✅ | `checkin.js` 엔진 신설 — 선수 MyMatches "디지털 선수증" 카드에서 대회 당일/진행중 원터치 셀프 체크인(verified_method='self'). 실명인증 선수는 무인 완료, 미인증은 "본인확인 권장" 예외로만 노출. LiveDashboard 체크인 패널 실시간 반영(tournament_checkins 구독)+셀프/본인확인권장/신고 요약. 운영자 수동 체크인 병존. QR/PIN 키오스크·대리스코어링만 잔여 |
@@ -27,6 +27,22 @@
 | C12 | 대회 탐색·파트너·전적 | ⚠️ | 파트너 초대·랭킹 있음, 추천/매칭 없음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-11 · C1 · `src/lib/orchestrator.js`(planNoShow 확장)·`src/pages/organizer/LiveDashboard.jsx`
+  · 호출 재알림 타이머 — 진단이 "가장 큰 공백"으로 지목한 C1의 남은 조각(재알림)을 채움. 지금껏
+    호출(callMatch)은 인앱 실시간 방송이라 그 순간 앱을 안 보던 선수는 놓쳤고, 다음 접점은 2분 뒤
+    "곧 부전승" 경고(warned)뿐이라 그 사이 놓친 선수를 다시 부를 부드러운 재호출이 없었다(북극성
+    "선수: 호출까지 화면 하나로 완결"의 신뢰도 갭). 순수 함수 `planNoShow`에 재알림 판정을 추가 —
+    호출된 채 아직 시작 안 한 waiting 구간 경기를 `recallAfterSec(45s)` 무응답이면 `toRecall`로 분류하고,
+    이후 `recallEverySec(45s)` 간격으로 `recallMaxCount(2회)`까지만 반복(스팸 방지). `recalledAt`
+    ({at,count}) 맵으로 중복·간격을 판정하고, status에 `recallCount`를 실어 UI 표시. warned/overdue로
+    넘어가면 재알림은 멈추고 기존 경고·부전승 경로가 이어받는다. LiveDashboard: `recalledRef` 신설,
+    노쇼 useEffect에서 무인 진행 ON이면 `toRecall` 경기를 `callMatch`로 자동 재방송(recalledRef 먼저
+    갱신해 중복 차단, **calledIds 원 호출시각은 건드리지 않아 부전승 카운트다운은 그대로 흐름**),
+    자동 조치 로그에 "N번 코트 재호출 — 팀 (응답 없음)" 기록. 새 호출(handleCall·자동 toCall)이면
+    recalledRef도 초기화해 시퀀스 재시작. 예정 카드 카운트다운에 "· 재호출 N회" 표시. 선수 MyMatches는
+    기존 match_call 수신 로직이 재방송을 그대로 배너·진동으로 재현(코드 변경 불필요). 스키마·외부 키
+    불필요. 엔진 11개 시나리오(초기 무재알림·45s 첫 재알림·간격 미달·2차 재알림·max 초과·warned/overdue
+    우선·미호출/시작경기 제외) 자체 검증 통과, `npx vite build` green. (자동화율 선수 76%→78%, 운영 80%→82%)
 - 2026-07-10 · C8 · `src/lib/planWizard.js`(신규)·`src/pages/organizer/CreateTournament.jsx`
   · 요강·설정 마법사(C8 ⚠️→✅) — "설정 폼만, 역산/문서생성 없음"이던 클러스터를 채움. 북극성은
     주최자가 "개설"만 하면 되게 하는 것인데, 지금껏 개설 화면은 조 크기·포맷·상금까지 전부 주최자가
