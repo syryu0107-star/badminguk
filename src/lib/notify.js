@@ -243,9 +243,12 @@ export async function callWalkoverWarn({ match, tournamentId, court, sport, seco
 // 낱개 callMatch/callMatchSoon 를 순차 await 하면 매번 채널 구독(최대 2초)을
 // 기다려 호출이 직렬로 밀리므로(코트 N개면 N×2초), 한 대회 채널 하나로 방송을
 // 모으고 지속 저장도 한 번의 insert 로 처리한다. 결과는 항목별로 되돌려 준다.
-//   calls: [{ match, court, sport, recipients }]
+// 재알림(호출 반복)·미입장 경고도 여러 경기가 동시에 무응답이면 낱개 발송이
+// 그만큼 채널을 새로 열고 insert 를 N회 한다 → warns 로 함께 배치해 낭비를 없앤다.
+//   calls: [{ match, court, sport, recipients }]           (호출·재알림 공용)
 //   soons: [{ match, court, sport, aheadCount, recipients }]
-export function buildCallBatchItems({ tournamentId, calls = [], soons = [] }) {
+//   warns: [{ match, court, sport, secondsLeft, recipients }] (미입장 부전승 경고)
+export function buildCallBatchItems({ tournamentId, calls = [], soons = [], warns = [] }) {
   const callItems = calls.map(c => ({
     kind: 'call', match: c.match,
     payload: buildMatchCall({ match: c.match, tournamentId, court: c.court, sport: c.sport }),
@@ -256,11 +259,16 @@ export function buildCallBatchItems({ tournamentId, calls = [], soons = [] }) {
     payload: buildMatchSoon({ match: s.match, tournamentId, court: s.court, sport: s.sport, aheadCount: s.aheadCount }),
     recipients: s.recipients ?? [],
   }))
-  return [...callItems, ...soonItems]
+  const warnItems = warns.map(w => ({
+    kind: 'warn', match: w.match,
+    payload: buildWalkoverWarn({ match: w.match, tournamentId, court: w.court, sport: w.sport, secondsLeft: w.secondsLeft }),
+    recipients: w.recipients ?? [],
+  }))
+  return [...callItems, ...soonItems, ...warnItems]
 }
 
-export async function callMatchBatch({ tournamentId, calls = [], soons = [] }) {
-  const items = buildCallBatchItems({ tournamentId, calls, soons })
+export async function callMatchBatch({ tournamentId, calls = [], soons = [], warns = [] }) {
+  const items = buildCallBatchItems({ tournamentId, calls, soons, warns })
   if (!items.length) return { sent: 0, broadcast: { sent: false, count: 0 }, persist: { persisted: false }, items: [] }
   const bc = await broadcastBatch(tournamentId, items.map(i => i.payload))
   const ps = await persistBatch(items)

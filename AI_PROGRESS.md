@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-12 — [하드닝·C1] 무인 노쇼 경로 재알림·경고 배치화 — 채널 개폐·insert 낭비 제거
+
+- **C1 경기 호출 인프라 — 무인 노쇼 경로(재알림·경고) 채널·insert 낭비 제거(배치화)**
+  - 파일: `src/lib/notify.js`, `src/pages/organizer/LiveDashboard.jsx`, `tests/notify.test.mjs`
+  - 요약: 직전 런이 toCall/toSoon 순차 await 직렬 지연을 `callMatchBatch` 로 잡았고 원장이 "다음 하드닝 후보: recall/warn 도 배치화"를 명시했다(안티스톨: 같은 배치 인프라지만 **다른 코드 경로**—직전은 planAutoAdvance 의 호출/사전알림 **순차 await 직렬 지연**, 이번은 planNoShow 의 재알림/경고 **fire-and-forget forEach 채널·insert 낭비**로 실패 모드가 달라 다음 슬라이스). **진단(코드 실측)**: LiveDashboard 노쇼 useEffect(10초 틱)는 `plan.toRecall` 을 낱개 `callMatch`, `plan.toWarn` 을 낱개 `callWalkoverWarn` 로 forEach 발송했다. 이 둘은 순차 await 가 아니라 fire-and-forget 동시 실행이라 **직렬 지연은 없지만**, 각 호출이 `broadcast()` 에서 **새 Supabase 채널을 열고 SUBSCRIBED 를 기다려 send→removeChannel + persist insert 1회** 한다. 라운드 전환 등으로 **여러 경기가 한꺼번에 무응답(재알림/경고 대상)이 되면** 그만큼 채널을 동시에 열고 닫고 insert 를 N회 해 realtime 연결·DB 왕복을 낭비한다(직전 런이 toCall/toSoon 에서 없앤 낭비가 노쇼 경로엔 남아 있었음). **구현(비파괴)**: notify.js `buildCallBatchItems`/`callMatchBatch` 에 `warns`(각 `{match,court,sport,secondsLeft,recipients}` → `buildWalkoverWarn` 페이로드·kind:'warn') 인자 추가(기존 calls/soons 계약 불변). LiveDashboard 는 재알림·경고 두 forEach 를 `callMatchBatch({tournamentId:id, calls:재알림, warns:경고})` 단일 호출로 대체 — 재알림은 호출 반복이라 calls(buildMatchCall)로, 경고는 warns(buildWalkoverWarn)로 묶어 **대회 채널 하나·insert 한 번**에 발송. refs(recalledRef count 증가·warnedRef)는 기존처럼 **발송 전에 먼저 찍어** 다음 틱 중복 발송 차단(원 호출 시각 calledIds 는 불변 → 부전승 카운트다운 그대로), 로그(pushAutoLog)는 배치 resolve 후 경기별로. 발송 실패 시 재시도 안 함(기존 fire-and-forget 동작 보존). 수동 `callMatch`(handleCall)·순수 `planNoShow` 판정·노쇼 자동 부전승(assessNoShowResolution) 트리거 전부 불변, `callWalkoverWarn` export 유지(공개 API 보존, LiveDashboard 미사용이라 import 목록에서만 제거). 신규 테스트 2개(buildCallBatchItems 가 warns 를 WALKOVER_WARN 페이로드로 구성·재알림은 MATCH_CALL / callMatchBatch 가 calls+warns 를 단일 채널로 함께 방송 count=2) → `npm test` **158/158 통과**(기존 156 + 신규 2), `npx vite build` green(deps 설치 후). 트리거 배선 grep 확인(callMatchBatch line 278 재알림·경고/612 호출·사전알림, callMatch line 555 수동 유지, callWalkoverWarn 소스 참조 0=주석만). 다음 하드닝 후보: UI 빈/로딩/에러 상태·checkins(체크인 탭 뷰) 구독 폴링·referee 화면 빈/에러 상태. (자동화율 운영 88% 유지·주최자 93%·선수 88% 불변 — 무인 노쇼 경로 채널·연결 낭비 제거 하드닝)
+
 ## 2026-07-12 — [하드닝·C1] 무인 자동 호출 배치 발송 — 다중 호출 직렬 지연(broadcast 순차 send) 제거
 
 - **C1 경기 호출 인프라 — 무인 오케스트레이터 다중 호출 직렬 지연 제거(배치 발송)**

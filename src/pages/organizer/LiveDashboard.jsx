@@ -4,7 +4,7 @@ import { supabase } from '../../lib/supabase'
 import { resolveMatchMMR, CERT_LEVELS } from '../../lib/mmr'
 import { calculatePoolStandings, prizeLabel } from '../../lib/tournament'
 import { completeMatch, finalizeTournament, scoresToPairs, forfeitTeamRemaining } from '../../lib/advance'
-import { callMatch, callMatchBatch, callWalkoverWarn } from '../../lib/notify'
+import { callMatch, callMatchBatch } from '../../lib/notify'
 import { planAutoAdvance, planNoShow, analyzeDelay, planRebalance } from '../../lib/orchestrator'
 import { planAutoFinalize } from '../../lib/stateMachine'
 import { summarizeCheckins, assessNoShowResolution } from '../../lib/checkin'
@@ -261,30 +261,30 @@ export default function LiveDashboard() {
       calledAt: calledIds, warnedAt: warnedRef.current, recalledAt: recalledRef.current, now: nowTick,
     })
     setNoShow(plan.status)
-    if (autoRun && plan.toRecall.length) {
-      // 부드러운 재알림 (C1) — 경고 전 waiting 구간에서 호출을 반복해 놓친 선수를 다시 부른다.
-      //   calledIds(원 호출 시각)는 건드리지 않아 부전승 카운트다운은 그대로 흐른다.
+    if (autoRun && (plan.toRecall.length || plan.toWarn.length)) {
+      // 부드러운 재알림(C1) + 미입장 경고(C7)를 한 대회 채널로 배치 발송.
+      //   재알림: 경고 전 waiting 구간에서 호출을 반복해 놓친 선수를 다시 부른다
+      //           (calledIds(원 호출 시각)는 건드리지 않아 부전승 카운트다운은 그대로).
+      //   여러 경기가 동시에 무응답이면 낱개 callMatch/callWalkoverWarn 는 매번 채널을
+      //   새로 열어(각 최대 2초 구독) realtime 연결을 낭비하고 insert 도 N회 한다.
+      //   callMatchBatch 로 채널 하나·insert 한 번에 모은다. refs 는 발송 전에 먼저
+      //   찍어 다음 틱(10초) 중복 발송을 차단한다(발송 실패 시 재시도 안 함 — 기존 동작).
+      const at = Date.now()
       plan.toRecall.forEach(m => {
         const prev = recalledRef.current[m.id]
-        recalledRef.current[m.id] = { at: Date.now(), count: (prev?.count ?? 0) + 1 } // 먼저 표시해 중복 차단
-        callMatch({
-          match: m, tournamentId: id, court: m.court_number, sport: sportOf(m), recipients: recipientsOf(m),
-        })
-          .then(() => pushAutoLog(`${m.court_number}번 코트 재호출 — ${teamNamesOf(m)} (응답 없음)`))
-          .catch(() => {})
+        recalledRef.current[m.id] = { at, count: (prev?.count ?? 0) + 1 }
       })
-    }
-    if (autoRun && plan.toWarn.length) {
-      plan.toWarn.forEach(m => {
-        warnedRef.current[m.id] = Date.now() // 먼저 표시해 중복 발송 차단
-        const st = plan.status[m.id]
-        callWalkoverWarn({
-          match: m, tournamentId: id, court: m.court_number, sport: sportOf(m),
-          secondsLeft: st?.secondsLeft ?? null, recipients: recipientsOf(m),
-        })
-          .then(() => pushAutoLog(`${m.court_number}번 코트 미입장 경고 — ${teamNamesOf(m)}`))
-          .catch(() => {})
+      plan.toWarn.forEach(m => { warnedRef.current[m.id] = at })
+      callMatchBatch({
+        tournamentId: id,
+        calls: plan.toRecall.map(m => ({ match: m, court: m.court_number, sport: sportOf(m), recipients: recipientsOf(m) })),
+        warns: plan.toWarn.map(m => ({ match: m, court: m.court_number, sport: sportOf(m), secondsLeft: plan.status[m.id]?.secondsLeft ?? null, recipients: recipientsOf(m) })),
       })
+        .then(() => {
+          plan.toRecall.forEach(m => pushAutoLog(`${m.court_number}번 코트 재호출 — ${teamNamesOf(m)} (응답 없음)`))
+          plan.toWarn.forEach(m => pushAutoLog(`${m.court_number}번 코트 미입장 경고 — ${teamNamesOf(m)}`))
+        })
+        .catch(() => {})
     }
     if (autoRun && plan.overdue.length) {
       // 노쇼 자동 부전승 (C7) — 유예가 지난 경기 중 체크인 데이터로 "안 온 팀"을 확신할 수
