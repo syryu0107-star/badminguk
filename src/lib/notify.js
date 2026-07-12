@@ -105,17 +105,37 @@ export function buildWalkoverWarn({ match, tournamentId, court, sport, secondsLe
   }
 }
 
+// 채널이 SUBSCRIBED 될 때까지 기다린다(최대 2초). 방송은 구독 완료 후에만 도달한다.
+function waitSubscribed(ch) {
+  return new Promise(resolve => {
+    let done = false
+    let timer = null
+    const finish = () => { if (!done) { done = true; if (timer) clearTimeout(timer); resolve() } }
+    ch.subscribe(status => { if (status === 'SUBSCRIBED') finish() })
+    timer = setTimeout(finish, 2000)
+  })
+}
+
+// notifications 테이블 저장용 행 — persist/persistBatch 공용(단일 소스).
+export function notificationRow(payload, recipientId) {
+  return {
+    recipient_id: recipientId,
+    tournament_id: payload.tournamentId,
+    match_id: payload.matchId ?? null,
+    type: payload.type,
+    title: payload.title,
+    body: payload.body,
+    payload,
+    channels: ['in_app'],
+    status: 'sent',
+  }
+}
+
 // ── 채널 1: 인앱 실시간 방송 (스키마 불필요) ───────────────────────────
 async function broadcast(payload) {
   if (!payload?.tournamentId) return { sent: false }
   const ch = supabase.channel(notifyChannel(payload.tournamentId))
-  // 방송은 채널이 SUBSCRIBED 된 뒤에만 나간다 → 구독 완료를 기다린다(최대 2초).
-  await new Promise(resolve => {
-    let done = false
-    const finish = () => { if (!done) { done = true; resolve() } }
-    ch.subscribe(status => { if (status === 'SUBSCRIBED') finish() })
-    setTimeout(finish, 2000)
-  })
+  await waitSubscribed(ch)
   try {
     await ch.send({ type: 'broadcast', event: payload.type, payload })
   } finally {
@@ -124,21 +144,45 @@ async function broadcast(payload) {
   return { sent: true }
 }
 
+// 여러 페이로드를 한 채널 구독으로 연달아 방송한다(모두 같은 대회 채널이므로 재사용).
+//   낱개 broadcast() 를 N번 부르면 매번 채널을 새로 열고 SUBSCRIBED 를 최대 2초씩
+//   기다려 무인 오케스트레이터의 동시 호출이 직렬로 밀린다(코트 여러 개가 한꺼번에
+//   비면 N×2초). 채널 하나만 구독해 한 번의 대기로 전부 보내 그 지연을 없앤다.
+async function broadcastBatch(tournamentId, payloads) {
+  const list = (payloads ?? []).filter(p => p?.type)
+  if (!tournamentId || !list.length) return { sent: false, count: 0 }
+  const ch = supabase.channel(notifyChannel(tournamentId))
+  await waitSubscribed(ch)
+  try {
+    for (const p of list) {
+      await ch.send({ type: 'broadcast', event: p.type, payload: p })
+    }
+  } finally {
+    supabase.removeChannel(ch)
+  }
+  return { sent: true, count: list.length }
+}
+
 // ── 채널 2: 지속 저장 (테이블 없으면 degrade) ──────────────────────────
 async function persist(payload, recipients = []) {
   const ids = [...new Set(recipients.filter(Boolean))]
   if (!ids.length) return { persisted: false, reason: 'no_recipients' }
-  const rows = ids.map(rid => ({
-    recipient_id: rid,
-    tournament_id: payload.tournamentId,
-    match_id: payload.matchId,
-    type: payload.type,
-    title: payload.title,
-    body: payload.body,
-    payload,
-    channels: ['in_app'],
-    status: 'sent',
-  }))
+  const rows = ids.map(rid => notificationRow(payload, rid))
+  return insertNotifications(rows)
+}
+
+// 여러 (payload, recipients) 조합을 한 번의 insert 로 저장(낱개 insert N회 → 1회).
+async function persistBatch(items) {
+  const rows = []
+  for (const it of items ?? []) {
+    const ids = [...new Set((it.recipients ?? []).filter(Boolean))]
+    for (const rid of ids) rows.push(notificationRow(it.payload, rid))
+  }
+  if (!rows.length) return { persisted: false, reason: 'no_recipients' }
+  return insertNotifications(rows)
+}
+
+async function insertNotifications(rows) {
   try {
     const { error } = await supabase.from('notifications').insert(rows)
     if (error) throw error
@@ -192,6 +236,37 @@ export async function callWalkoverWarn({ match, tournamentId, court, sport, seco
   const ps = await persist(payload, recipients)
   const ex = dispatchExternal(payload, recipients)
   return { payload, broadcast: bc, persist: ps, external: ex }
+}
+
+// ── 고수준 진입점: 경기 호출 배치 (무인 오케스트레이터용) ──────────────
+// 빈 코트가 여러 개 한꺼번에 비면 오케스트레이터가 여러 경기를 동시에 호출한다.
+// 낱개 callMatch/callMatchSoon 를 순차 await 하면 매번 채널 구독(최대 2초)을
+// 기다려 호출이 직렬로 밀리므로(코트 N개면 N×2초), 한 대회 채널 하나로 방송을
+// 모으고 지속 저장도 한 번의 insert 로 처리한다. 결과는 항목별로 되돌려 준다.
+//   calls: [{ match, court, sport, recipients }]
+//   soons: [{ match, court, sport, aheadCount, recipients }]
+export function buildCallBatchItems({ tournamentId, calls = [], soons = [] }) {
+  const callItems = calls.map(c => ({
+    kind: 'call', match: c.match,
+    payload: buildMatchCall({ match: c.match, tournamentId, court: c.court, sport: c.sport }),
+    recipients: c.recipients ?? [],
+  }))
+  const soonItems = soons.map(s => ({
+    kind: 'soon', match: s.match,
+    payload: buildMatchSoon({ match: s.match, tournamentId, court: s.court, sport: s.sport, aheadCount: s.aheadCount }),
+    recipients: s.recipients ?? [],
+  }))
+  return [...callItems, ...soonItems]
+}
+
+export async function callMatchBatch({ tournamentId, calls = [], soons = [] }) {
+  const items = buildCallBatchItems({ tournamentId, calls, soons })
+  if (!items.length) return { sent: 0, broadcast: { sent: false, count: 0 }, persist: { persisted: false }, items: [] }
+  const bc = await broadcastBatch(tournamentId, items.map(i => i.payload))
+  const ps = await persistBatch(items)
+  // 외부 발송(웹푸시/알림톡/SMS)은 human-gated 스텁 — 항목별로 위임(키 없으면 no-op).
+  items.forEach(it => dispatchExternal(it.payload, it.recipients))
+  return { sent: items.length, broadcast: bc, persist: ps, items }
 }
 
 // ── 고수준 진입점: 사후 커뮤니케이션 캠페인 (C11) ──────────────────────

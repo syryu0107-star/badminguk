@@ -13,7 +13,7 @@
 ## 클러스터 상태 (C1~C12)
 | C | 클러스터 | 상태 | 비고(코드 근거) |
 |---|----------|:---:|----------------|
-| C1 | 경기 호출·알림 인프라 | ⚠️ | notify.js+orchestrator.js — 자동호출·사전알림(곧 호출)·예상 호출시각·**WO 카운트다운(planNoShow warned/overdue)**·**호출 재알림 타이머** ✅ end-to-end(LiveDashboard→MyMatches). 재알림: `planNoShow`가 waiting 구간(경고 전)에서 무응답 경기를 `toRecall`로 분류(recallAfterSec 45s·recallEverySec 45s·recallMaxCount 2), 무인 진행 ON이면 callMatch를 자동 반복(recalledRef 중복차단, calledIds 원 호출시각 불변→부전승 카운트다운 그대로). 잔여: 웹푸시/알림톡/SMS 실발송만 human-gated 스텁 |
+| C1 | 경기 호출·알림 인프라 | ⚠️ | notify.js+orchestrator.js — 자동호출·사전알림(곧 호출)·예상 호출시각·**WO 카운트다운(planNoShow warned/overdue)**·**호출 재알림 타이머** ✅ end-to-end(LiveDashboard→MyMatches). 재알림: `planNoShow`가 waiting 구간(경고 전)에서 무응답 경기를 `toRecall`로 분류(recallAfterSec 45s·recallEverySec 45s·recallMaxCount 2), 무인 진행 ON이면 callMatch를 자동 반복(recalledRef 중복차단, calledIds 원 호출시각 불변→부전승 카운트다운 그대로). **배치 발송(하드닝)** ✅ — 코트 여러 개가 한꺼번에 비면 오케스트레이터가 여러 경기를 동시에 호출하는데, 낱개 `callMatch`/`callMatchSoon` 순차 await 는 매 호출 채널 구독(최대 2초)을 기다려 직렬로 밀렸다(N×2초 지연·채널 N회 개폐 낭비). `notify.callMatchBatch`(broadcastBatch=채널 1회 구독으로 전 페이로드 방송 + persistBatch=1회 insert, waitSubscribed 공용화·타이머 정리)로 toCall/toSoon 를 한 번에 발송해 지연 제거. 낱개 callMatch(수동/재호출)·callWalkoverWarn 불변. 잔여: 웹푸시/알림톡/SMS 실발송만 human-gated 스텁·recall/warn 배치화 |
 | C2 | 대회 상태 오케스트레이션 | ⚠️ | stateMachine.js 순수 판정 엔진. TournamentManage "무인 자동 진행": open→closed(마감/정원)·closed→in_progress(당일+대진표) 자동. EntryManagement "무인 자동 승인": 정상 신청 자동, 예외만 큐. **in_progress→completed 무인 확정** ✅ — `planAutoFinalize`(순수·유예 판정) + LiveDashboard 무인 진행 ON이면 전 종목 종료 후 3분 유예(점수정정 창) 지나 finalizeTournament 자동 실행(순위·급수·상장 데이터 확정)+승급 축하 배너, "지금 시상 확정" 원터치. **자동 대진 생성** ✅ — closed→in_progress를 막던 "대진표 없음"을 `autoDraw.js`(autoGenerateAllBrackets)가 자동 해소: 무인 ON이고 대회 당일 대진표가 없어 plan.blockReason이 뜨면 TournamentManage가 autoDrawnRef 1회 잠금으로 대진표를 자동 생성→reloadMatches→다음 틱에 closed→in_progress 자동 전환. 이미 대진표 있는 종목은 count 체크로 스킵(주최자 직접 추첨 보호), 승인<2팀은 not_enough 안내. 공개 추첨(BracketGenerator)과 buildDrawPlan/persistDrawPlan 단일 소스 공유(중복 0). 잔여: draft→open(개설 공개)만 수동(개설자 의도적 판단으로 보류) |
 | C3 | 입금·결제·환불 | ⚠️ | `payment.js`(주최자 자동매칭)+`deposit.js`(선수 입금 안내) — 무통장 입금 루프가 양쪽에서 완결. 주최자: 입금 내역 붙여넣기→신청자명 퍼지매칭(Levenshtein+정규화)+금액 대조→`payment_status='confirmed'` 자동, EntryManagement "입금 자동 매칭" 패널(자동확인/확인권장/미매칭, 1탭). 선수: `deposit.js`+MyMatches "입금 안내" 카드 — 참가비 있는 미입금 신청에 금액·**본인 실명 입금자명(복사 버튼)**·3단계 안내 노출로 "실명으로 입금→앱이 자동 확인"을 처음 명시(matchDeposits가 player1/2 실명 대조하므로 매칭율 직결). 입금 확인이 auto-approval 입금대기 버킷을 비워 무인 승인까지 연결. 잔여: 주최자 계좌번호 표시(tournaments에 계좌 필드 없음·마이그레이션 human-gated)·PG 실결제(토스)·가상계좌·환불규정 코드화 |
 | C4 | 셀프 체크인 | ✅ | `checkin.js` 엔진 신설 — 선수 MyMatches "디지털 선수증" 카드에서 대회 당일/진행중 원터치 셀프 체크인(verified_method='self'). 실명인증 선수는 무인 완료, 미인증은 "본인확인 권장" 예외로만 노출. LiveDashboard 체크인 패널 실시간 반영(tournament_checkins 구독)+셀프/본인확인권장/신고 요약. 운영자 수동 체크인 병존. **checkinset 구독 복원력** ✅ — 노쇼 자동 부전승 데이터원인 checkinSet 구독에 재연결 따라잡기+15초 폴링 폴백(matches 와 동일 패턴, 채널 조용히 끊겨도 셀프 체크인 반영 지속). QR/PIN 키오스크·대리스코어링만 잔여 |
@@ -27,6 +27,25 @@
 | C12 | 대회 탐색·파트너·전적 | ✅ | `discover.js`+`partners.js`+`record.js` — **대회 탐색 추천** ✅ + **파트너 매칭** ✅ + **통합 전적 뷰** ✅. **대회 탐색 추천(`discover.js`)**: `regionTokens`(venue·주소에서 17시도+시/군/구 세밀 토큰 추출, 광역시/특별시 중복 제외)·`preferredRegions`(내 참가 이력 대회의 지역 빈도 집계)·`ddayOf`(로컬 자정 기준 D-day)·`recommendTournaments`(접수중·미신청·미래 대회 중 급수 참가 가능 종목이 있는 것만 골라 지역 매칭·마감 임박·대회일 근접으로 점수화, 근거 배열 반환). 자격 판정은 lib/grades.js로 승격한 공용 `checkEligibility`를 fitOf로 주입(신청 화면과 100% 동일 로직·중복 0). Tournaments.jsx가 로그인 선수의 프로필·참가 이력을 1회 로드→"🎯 나에게 맞는 대회" 카드+근거 칩(급수 파랑/지역 초록/마감 빨강·주황) 노출(전체 탭·검색 없을 때만, 실패 시 검색만 degrade). 파트너 매칭·통합 전적은 아래 유지. 통합 전적(`record.js`): `computeCareerRecord`가 내가 낀 전 대회 완료 경기(+세트)에서 총 승패·승률·세트/점수 득실·풀세트·부전 카운트와 상대 선수별 head-to-head(`byOpponent`)를 집계, `opponentPlayers`(팀에서 나 제외·게스트팀명 폴백)·`hasCareerRecord`. Profile "대회 커리어" 탭에 통합 전적 카드(승/패/승률 게이지·세부지표)+상대 전적 카드(자주 만난 상대별 W/L 최대 8명)를 추가, 내 엔트리 id 배치로 tournament_matches 조회(try-catch degrade, 헤더 mmr delta 근사와 달리 실경기 기준 정확 전적). 파트너 매칭: `collectPastPartners`(내가 낀 복식 신청 이력에서 상대를 모아 함께 출전 횟수·최근순 집계)+`rankPartnerSuggestions`(호출부 checkEligibility 주입 → 종목 자격 통과 먼저·횟수·최근순)+`partnerReason`. TournamentDetail 복식 신청 폼에 "추천 파트너 · 지난 대회에 함께 나간 분들" 카드(자격 통과 최대 4명, "다시 초대" 원터치→selectPartner). 대진DB 개인화 추천으로 검색-only 마찰 완화. 잔여: 대회 탐색 추천(급수·지역 맞춤 대회 추천)만 남음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-12 · 하드닝(C1 배치 발송 — 무인 자동 호출 직렬 지연 제거) · `src/lib/notify.js`·`src/pages/organizer/LiveDashboard.jsx`·`tests/notify.test.mjs`
+  · **무인 오케스트레이터의 다중 호출 직렬 지연(notify broadcast 순차 send) 제거** — 원장이 6런 넘게
+    "다음 하드닝 후보"로 미뤄 온 **"notify broadcast 순차 send 직렬 지연"**을 실제로 잡았다(직전 두 런은
+    LiveDashboard 실시간 구독 하드닝 — 안티스톨상 같은 화면이라도 다른 계층: 이번은 notify.js 발송 경로).
+    **진단(코드 실측)**: `runOrchestrator` 의 `plan.toCall`·`plan.toSoon` 루프는 경기마다 `await callMatch`/
+    `await callMatchSoon` 를 **순차** 실행했고, 각 호출은 `broadcast()` 에서 **새 Supabase 채널을 열고
+    SUBSCRIBED 를 최대 2초 기다린 뒤** send→removeChannel 한다. 라운드 전환 등으로 **코트가 여러 개 한꺼번에
+    비면** 호출이 직렬로 밀려 마지막 코트는 최악 N×2초 늦게 호출된다(무인 near-zero touch 의 체감 지연 —
+    빈 코트가 그만큼 더 오래 논다). 게다가 채널을 N번 열고 닫아 realtime 연결도 낭비. **구현(비파괴)**:
+    notify.js 에 (a) `waitSubscribed(ch)` 추출(구독 대기 공용화 + **SUBSCRIBED 시 setTimeout clearTimeout**
+    으로 매달린 2초 타이머 정리), (b) `notificationRow(payload,rid)` 추출(persist 행 스키마 단일 소스),
+    (c) `broadcastBatch(tournamentId,payloads)` — **채널 하나만 구독(대기 1회)해 전 페이로드를 연달아 방송**,
+    (d) `persistBatch(items)` — 전 항목 행을 **한 번의 insert** 로 저장, (e) 고수준 `callMatchBatch({calls,soons})`
+    + 순수 `buildCallBatchItems`(테스트용). LiveDashboard 의 toCall/toSoon 두 순차 루프를 `callMatchBatch`
+    한 번 호출로 대체 — 배치 성공 시에만 calledIds/soonSentRef 를 일괄 갱신(실패 시 다음 틱 재시도, 기존
+    per-match try/catch 의미 유지). 낱개 `callMatch`(수동 호출 버튼·재호출 루프)·`callWalkoverWarn`(노쇼 경고)는
+    불변. `broadcast`/`persist` 도 새 헬퍼로 리팩터했으나 동작 동일. `npm test` **156/156**(신규 6: notificationRow
+    2·buildCallBatchItems 2·callMatchBatch 2), `npx vite build` green. 다음 하드닝 후보: recall/warn 도 배치화·
+    UI 빈/로딩/에러 상태·checkins(뷰 전용) 구독 폴링. (운영 88% 유지 — 무인 호출 지연·연결 낭비 제거 하드닝)
 - 2026-07-12 · 하드닝(실시간 복원력 ② — 체크인 채널 재연결·폴링 폴백) · `src/pages/organizer/LiveDashboard.jsx`
   · **무인 노쇼 자동 부전승의 데이터 소스(체크인 채널) 복원력** — 직전 런이 LiveDashboard 의
     `matches` 구독을 하드닝(필터·재연결 따라잡기·폴링 폴백)했고 원장이 "다음 후보"로 명시한

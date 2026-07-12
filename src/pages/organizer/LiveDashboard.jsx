@@ -4,7 +4,7 @@ import { supabase } from '../../lib/supabase'
 import { resolveMatchMMR, CERT_LEVELS } from '../../lib/mmr'
 import { calculatePoolStandings, prizeLabel } from '../../lib/tournament'
 import { completeMatch, finalizeTournament, scoresToPairs, forfeitTeamRemaining } from '../../lib/advance'
-import { callMatch, callMatchSoon, callWalkoverWarn } from '../../lib/notify'
+import { callMatch, callMatchBatch, callWalkoverWarn } from '../../lib/notify'
 import { planAutoAdvance, planNoShow, analyzeDelay, planRebalance } from '../../lib/orchestrator'
 import { planAutoFinalize } from '../../lib/stateMachine'
 import { summarizeCheckins, assessNoShowResolution } from '../../lib/checkin'
@@ -603,24 +603,35 @@ export default function LiveDashboard() {
       })
       setEstimates(plan.estimates)
 
-      // 지금 호출할 경기 (빈 코트 맨 앞) — 순차 발송
-      for (const m of plan.toCall) {
+      // 지금 호출할 경기(빈 코트 맨 앞) + 곧 호출될 경기(사전 알림)를 한 채널로 배치 발송.
+      //   코트 여러 개가 한꺼번에 비면 낱개 순차 await 는 매 호출 채널 구독(최대 2초)을
+      //   기다려 직렬로 밀렸다(N×2초). callMatchBatch 가 대회 채널 하나로 모아 보내 그
+      //   지연을 없앤다. 성공 시에만 호출 이력(calledIds/soonSentRef)을 갱신한다.
+      if (plan.toCall.length || plan.toSoon.length) {
         try {
-          await callMatch({ match: m, tournamentId: id, court: m.court_number, sport: sportOf(m), recipients: recipientsOf(m) })
-          setCalledIds(prev => ({ ...prev, [m.id]: Date.now() }))
-          delete warnedRef.current[m.id]
-          delete recalledRef.current[m.id]
-          pushAutoLog(`${m.court_number}번 코트 자동 호출 — ${teamNamesOf(m)}`)
+          await callMatchBatch({
+            tournamentId: id,
+            calls: plan.toCall.map(m => ({ match: m, court: m.court_number, sport: sportOf(m), recipients: recipientsOf(m) })),
+            soons: plan.toSoon.map(m => ({ match: m, court: m.court_number, sport: sportOf(m), aheadCount: plan.estimates[m.id]?.ahead ?? null, recipients: recipientsOf(m) })),
+          })
+          const at = Date.now()
+          if (plan.toCall.length) {
+            setCalledIds(prev => {
+              const next = { ...prev }
+              plan.toCall.forEach(m => { next[m.id] = at })
+              return next
+            })
+            plan.toCall.forEach(m => {
+              delete warnedRef.current[m.id]
+              delete recalledRef.current[m.id]
+              pushAutoLog(`${m.court_number}번 코트 자동 호출 — ${teamNamesOf(m)}`)
+            })
+          }
+          plan.toSoon.forEach(m => {
+            soonSentRef.current[m.id] = at
+            pushAutoLog(`${m.court_number}번 코트 곧 호출 예고 — ${teamNamesOf(m)}`)
+          })
         } catch { /* 다음 틱에 재시도 */ }
-      }
-      // 곧 호출될 경기 — 사전 알림 1회
-      for (const m of plan.toSoon) {
-        try {
-          const est = plan.estimates[m.id]
-          await callMatchSoon({ match: m, tournamentId: id, court: m.court_number, sport: sportOf(m), aheadCount: est?.ahead ?? null, recipients: recipientsOf(m) })
-          soonSentRef.current[m.id] = Date.now()
-          pushAutoLog(`${m.court_number}번 코트 곧 호출 예고 — ${teamNamesOf(m)}`)
-        } catch { /* 무시 */ }
       }
     } finally {
       orchestrating.current = false

@@ -10,6 +10,7 @@ import { makeSupabase } from './_supabase-stub.mjs'
 import {
   NOTIFY, CAMPAIGN, NOTICE_TYPES, notifyChannel,
   buildMatchCall, buildMatchSoon, buildWalkoverWarn,
+  buildCallBatchItems, notificationRow, callMatchBatch,
 } from '../src/lib/notify.js'
 import {
   localDateStr, dayDiff, planCampaigns, pendingCampaigns,
@@ -119,6 +120,77 @@ test('notify: buildWalkoverWarn — 코트 없음 폴백', () => {
   const p = buildWalkoverWarn({ match: { id: 'm' }, tournamentId: 't', secondsLeft: 60 })
   assert.equal(p.court, null)
   assert.equal(p.body, '경기 호출에 응답이 없어요. 지금 바로 입장하지 않으면 부전승 처리될 수 있어요!')
+})
+
+// ══════════════════════ notify: notificationRow ══════════════════════
+test('notify: notificationRow — 지속 저장 행 스키마', () => {
+  const payload = buildMatchCall({ match: { id: 'm1', team1_entry_id: 'a', team2_entry_id: 'b', court_number: 3 }, tournamentId: 't1' })
+  const row = notificationRow(payload, 'u1')
+  assert.equal(row.recipient_id, 'u1')
+  assert.equal(row.tournament_id, 't1')
+  assert.equal(row.match_id, 'm1')
+  assert.equal(row.type, NOTIFY.MATCH_CALL)
+  assert.equal(row.status, 'sent')
+  assert.deepEqual(row.channels, ['in_app'])
+  assert.equal(row.payload, payload)
+})
+
+test('notify: notificationRow — matchId 없는 페이로드(캠페인)는 match_id null', () => {
+  const row = notificationRow({ type: CAMPAIGN.THANKS, tournamentId: 't', title: 'x', body: 'y' }, 'u1')
+  assert.equal(row.match_id, null)
+})
+
+// ══════════════════════ notify: buildCallBatchItems ══════════════════════
+test('notify: buildCallBatchItems — 호출·사전알림 항목을 정확히 구성', () => {
+  const items = buildCallBatchItems({
+    tournamentId: 't',
+    calls: [{ match: { id: 'm1', court_number: 1, team1_entry_id: 'a', team2_entry_id: 'b' }, court: 1, sport: '남복', recipients: ['a', 'b'] }],
+    soons: [{ match: { id: 'm2', court_number: 2 }, court: 2, sport: '여복', aheadCount: 1, recipients: ['c'] }],
+  })
+  assert.equal(items.length, 2)
+  // 호출 항목
+  assert.equal(items[0].kind, 'call')
+  assert.equal(items[0].payload.type, NOTIFY.MATCH_CALL)
+  assert.equal(items[0].payload.court, 1)
+  assert.deepEqual(items[0].recipients, ['a', 'b'])
+  assert.equal(items[0].payload.body, '지금 1번 코트로 입장해주세요!')
+  // 사전 알림 항목
+  assert.equal(items[1].kind, 'soon')
+  assert.equal(items[1].payload.type, NOTIFY.MATCH_SOON)
+  assert.equal(items[1].payload.aheadCount, 1)
+  assert.deepEqual(items[1].recipients, ['c'])
+})
+
+test('notify: buildCallBatchItems — 빈 입력 → 빈 배열, recipients 기본값 []', () => {
+  assert.deepEqual(buildCallBatchItems({ tournamentId: 't' }), [])
+  const items = buildCallBatchItems({ tournamentId: 't', calls: [{ match: { id: 'm', court_number: 5 } }] })
+  assert.equal(items.length, 1)
+  assert.deepEqual(items[0].recipients, [])  // recipients 미지정 폴백
+})
+
+// ══════════════════════ notify: callMatchBatch (배치 발송) ══════════════════════
+test('notify: callMatchBatch — 빈 입력이면 발송 0, 채널/insert 미사용', async () => {
+  const res = await callMatchBatch({ tournamentId: 't', calls: [], soons: [] })
+  assert.equal(res.sent, 0)
+  assert.equal(res.broadcast.sent, false)
+  assert.deepEqual(res.items, [])
+})
+
+test('notify: callMatchBatch — 여러 경기를 한 채널로 방송하고 항목을 되돌려줌', async () => {
+  const res = await callMatchBatch({
+    tournamentId: 't',
+    calls: [
+      { match: { id: 'm1', court_number: 1, team1_entry_id: 'a', team2_entry_id: 'b' }, court: 1, recipients: ['a', 'b'] },
+      { match: { id: 'm2', court_number: 2, team1_entry_id: 'c', team2_entry_id: 'd' }, court: 2, recipients: ['c', 'd'] },
+    ],
+    soons: [{ match: { id: 'm3', court_number: 3 }, court: 3, aheadCount: 2, recipients: ['e', 'f'] }],
+  })
+  assert.equal(res.sent, 3)
+  assert.equal(res.broadcast.sent, true)
+  assert.equal(res.broadcast.count, 3)     // 세 경기 모두 단일 구독으로 방송
+  assert.equal(res.items.length, 3)
+  assert.equal(res.items[0].match.id, 'm1')
+  assert.equal(res.items[2].kind, 'soon')
 })
 
 // ══════════════════════ campaign: 날짜 유틸 ══════════════════════
