@@ -233,6 +233,7 @@ export default function MyMatches() {
   const [checkins, setCheckins] = useState({})   // { [tournamentId]: row } 내 체크인 상태
   const [checkingIn, setCheckingIn] = useState(null) // 체크인 처리 중인 tournamentId
   const [loading, setLoading]   = useState(true)
+  const [loadError, setLoadError] = useState(false) // 불러오기 실패(네트워크 등) → 재시도 안내
   const [acting, setActing]     = useState(null) // 처리 중인 entry id
   const [call, setCall]         = useState(null) // 수신한 경기 호출 { court, sport, matchId, notificationId }
   const [soon, setSoon]         = useState(null) // 사전 알림 { court, sport, aheadCount }
@@ -242,6 +243,8 @@ export default function MyMatches() {
   const myTournamentIds = useRef([])              // 내가 참가한 대회 id (구독 대상)
 
   const load = useCallback(async () => {
+    setLoadError(false)
+    try {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setLoading(false); return }
     setUserId(user.id)
@@ -350,9 +353,18 @@ export default function MyMatches() {
     }
 
     setLoading(false)
+    } catch (e) {
+      // 네트워크·일시 오류로 조회가 던지면 스피너에 영영 갇히지 않도록 에러 화면으로 폴백
+      console.error('[내 경기] 불러오기 실패:', e)
+      setLoadError(true)
+      setLoading(false)
+    }
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // 재시도: 스피너를 다시 띄우고 load 재실행(액션 후 조용한 재조회 UX는 그대로 유지)
+  const retry = useCallback(() => { setLoading(true); load() }, [load])
 
   // ── 경기 호출 수신: 내 대회 채널 구독 + 놓친 호출 복구 (C1) ─────────
   useEffect(() => {
@@ -596,6 +608,19 @@ export default function MyMatches() {
       <div className="px-4 py-4 space-y-6">
         {loading ? (
           <div className="flex justify-center py-16"><Spinner size={32} /></div>
+        ) : loadError ? (
+          <div className="py-16 flex flex-col items-center text-center gap-3">
+            <AlertTriangle size={30} className="text-[#C60C30]" />
+            <p className="text-sm font-bold text-gray-700">정보를 불러오지 못했어요</p>
+            <p className="text-xs text-gray-500">인터넷 연결을 확인한 뒤 다시 시도해 주세요.</p>
+            <button
+              onClick={retry}
+              className="mt-1 px-5 py-2.5 rounded-xl text-sm font-bold text-white active:opacity-80"
+              style={{ background: '#003478' }}
+            >
+              다시 시도
+            </button>
+          </div>
         ) : (
           <>
             {/* ── 다음 경기 하이라이트 ─────────────────────────── */}

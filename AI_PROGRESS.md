@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-12 — [하드닝·선수UI] MyMatches 로드 실패 복구 — 무한 스피너 제거(try-catch + 에러 상태 + 다시 시도)
+
+- **선수 허브(MyMatches) 로드 에러 상태 — "완주를 막던 무한 스피너" 제거**
+  - 파일: `src/pages/player/MyMatches.jsx`
+  - 요약: 원장이 6런 넘게 "다음 하드닝 후보"로 미뤄 온 **"UI 빈/로딩/에러 상태"**를 처음 착수(안티스톨: 직전 런들은 전부 LiveDashboard/notify **실시간·발송** 계층이나 **엔진 테스트** — 이번은 **선수 페이지 로드 에러 상태**로 계층·실패 모드가 완전히 다름). **진단(코드 실측)**: DoD가 "선수는 화면 하나로 완결"이라 지목한 핵심 허브 `MyMatches`(체크인·경기 호출 배너·입금 안내·공지함이 전부 여기)의 `load()`는 최상위 try-catch도 에러 상태도 없었다(전 선수 페이지 `errorState=0` grep 확인). getUser·profiles·entries·checkins·notices·matches·코트 큐를 여러 번 `await`하는데, 네트워크 flap·일시 오류로 어느 하나라도 throw하면 예외가 unhandled로 새어 `setLoading(false)`(라인 352)에 영영 도달 못하고 **스피너에 갇히며 재시도 버튼도 없다**. 실패 시나리오: 대회 당일 체육관 와이파이가 순간 끊긴 채 앱을 열면 MyMatches 무한 로딩 → **경기 호출 배너 미수신·체크인 불가 → 노쇼 처리**(무인 near-zero touch의 선수측 완주가 조용히 붕괴, "완주를 막는 것" 최우선 티어). **구현(비파괴)**: `load()` 본문 전체를 try-catch로 감싸 실패 시 `loadError=true`+`setLoading(false)`로 스피너 탈출, `loadError` 상태와 `retry`(스피너 다시 띄우고 load 재실행 — loading(true)를 load 시작이 아니라 retry에만 둬 액션 후 조용한 재조회 UX는 그대로 유지) 추가, 렌더 `{loading ? 스피너 : (…)}`를 `{loading ? 스피너 : loadError ? 에러화면 : (…)}`로 확장(AlertTriangle+"정보를 불러오지 못했어요·인터넷 확인 후 다시 시도"+파랑 "다시 시도" 버튼, 초보용 문구). load 성공/무유저 경로·실시간 구독·체크인/입금/파트너 로직 전부 불변(retry만 신설, grep으로 loadError 236·retry 367·에러 렌더 611 배선 확인). `npm test` **158/158 통과**, `npx vite build` green(deps 설치 후). 다음 하드닝 후보: 나머지 선수 페이지(Results/Profile/TournamentDetail/Tournaments)·Home/Ranking 동일 패턴 확장·접근성(aria). (자동화율 주최자 93%·선수 88%·운영 88% 불변 — 선수 완주 신뢰성 품질 하드닝)
+
 ## 2026-07-12 — [하드닝·C4] 체크인 탭 뷰 구독 실시간 복원력 — 15초 폴링·재연결 따라잡기 + 스테일 종목 잠복 버그 수정
 
 - **C4 셀프 체크인 — 체크인 탭 뷰(`checkins`) 구독에 폴링·재연결 정렬 + 종목 스테일 버그 수정**

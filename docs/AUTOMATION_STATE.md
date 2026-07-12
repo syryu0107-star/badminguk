@@ -27,6 +27,27 @@
 | C12 | 대회 탐색·파트너·전적 | ✅ | `discover.js`+`partners.js`+`record.js` — **대회 탐색 추천** ✅ + **파트너 매칭** ✅ + **통합 전적 뷰** ✅. **대회 탐색 추천(`discover.js`)**: `regionTokens`(venue·주소에서 17시도+시/군/구 세밀 토큰 추출, 광역시/특별시 중복 제외)·`preferredRegions`(내 참가 이력 대회의 지역 빈도 집계)·`ddayOf`(로컬 자정 기준 D-day)·`recommendTournaments`(접수중·미신청·미래 대회 중 급수 참가 가능 종목이 있는 것만 골라 지역 매칭·마감 임박·대회일 근접으로 점수화, 근거 배열 반환). 자격 판정은 lib/grades.js로 승격한 공용 `checkEligibility`를 fitOf로 주입(신청 화면과 100% 동일 로직·중복 0). Tournaments.jsx가 로그인 선수의 프로필·참가 이력을 1회 로드→"🎯 나에게 맞는 대회" 카드+근거 칩(급수 파랑/지역 초록/마감 빨강·주황) 노출(전체 탭·검색 없을 때만, 실패 시 검색만 degrade). 파트너 매칭·통합 전적은 아래 유지. 통합 전적(`record.js`): `computeCareerRecord`가 내가 낀 전 대회 완료 경기(+세트)에서 총 승패·승률·세트/점수 득실·풀세트·부전 카운트와 상대 선수별 head-to-head(`byOpponent`)를 집계, `opponentPlayers`(팀에서 나 제외·게스트팀명 폴백)·`hasCareerRecord`. Profile "대회 커리어" 탭에 통합 전적 카드(승/패/승률 게이지·세부지표)+상대 전적 카드(자주 만난 상대별 W/L 최대 8명)를 추가, 내 엔트리 id 배치로 tournament_matches 조회(try-catch degrade, 헤더 mmr delta 근사와 달리 실경기 기준 정확 전적). 파트너 매칭: `collectPastPartners`(내가 낀 복식 신청 이력에서 상대를 모아 함께 출전 횟수·최근순 집계)+`rankPartnerSuggestions`(호출부 checkEligibility 주입 → 종목 자격 통과 먼저·횟수·최근순)+`partnerReason`. TournamentDetail 복식 신청 폼에 "추천 파트너 · 지난 대회에 함께 나간 분들" 카드(자격 통과 최대 4명, "다시 초대" 원터치→selectPartner). 대진DB 개인화 추천으로 검색-only 마찰 완화. 잔여: 대회 탐색 추천(급수·지역 맞춤 대회 추천)만 남음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-12 · 하드닝(UI 에러 상태 — 선수 허브 MyMatches 로드 실패 복구) · `src/pages/player/MyMatches.jsx`
+  · **선수 완주를 막던 "무한 스피너" 구멍 제거** — 원장이 6런 넘게 "다음 하드닝 후보"로 미뤄 온
+    **"UI 빈/로딩/에러 상태 세부"**를 처음으로 잡았다(안티스톨: 직전 여러 런은 전부 LiveDashboard/notify
+    **실시간·발송 계층** 또는 **엔진 테스트 커버리지** — 이번은 **선수 페이지의 로드 에러 상태**로 계층·
+    실패 모드가 완전히 다르다). **진단(코드 실측)**: `MyMatches`(DoD가 "선수는 화면 하나로 완결"이라
+    지목한 핵심 허브 — 체크인·경기 호출 배너·입금 안내·공지함이 모두 여기)의 `load()` 는 **최상위
+    try-catch 도, 에러 상태도 없다**(전 선수 페이지가 `errorState=0`으로 확인). Supabase 조회(getUser·
+    profiles·entries·checkins·notices·matches·코트 큐)는 여러 번 `await` 하는데, **네트워크 flap·일시
+    오류로 어느 하나라도 throw 하면** 예외가 unhandled rejection 으로 새어 `setLoading(false)`(라인 352)
+    에 **영영 도달하지 못하고 화면이 스피너에 갇힌다** — 재시도 버튼도 없다. 실패 시나리오: 대회 당일
+    체육관 와이파이가 순간 끊긴 채 선수가 앱을 열면 MyMatches 가 무한 로딩 → **경기 호출 배너를 못 받고
+    체크인도 못 해 노쇼 처리**(무인 near-zero touch 의 선수측 완주가 조용히 붕괴, "완주를 막는 것" 최우선
+    티어). **구현(비파괴)**: `load()` 본문 전체를 try-catch 로 감싸 실패 시 `loadError=true`+
+    `setLoading(false)`(스피너 탈출) 폴백, `loadError` 상태·`retry`(스피너 다시 띄우고 load 재실행,
+    액션 후 조용한 재조회 UX 는 loading(true) 를 load 시작이 아니라 retry 에만 둬 그대로 유지) 추가,
+    렌더의 `{loading ? 스피너 : (…)}` 를 `{loading ? 스피너 : loadError ? 에러화면 : (…)}` 로 확장
+    (AlertTriangle+"정보를 불러오지 못했어요·인터넷 확인 후 다시 시도"+파랑 "다시 시도" 버튼, 초보용
+    문구). load 성공/무유저 경로·실시간 구독·체크인/입금/파트너 로직 전부 불변(retry 만 신설, grep 으로
+    loadError line 236·retry 367·에러 렌더 611 배선 확인). `npm test` **158/158**·`npx vite build` green.
+    다음 하드닝 후보: 나머지 선수 페이지(Results/Profile/TournamentDetail/Tournaments)·Home/Ranking 로드
+    에러 상태(동일 패턴 확장)·접근성(aria). (선수 88% 유지 — 완주 신뢰성 품질 하드닝)
 - 2026-07-12 · 하드닝(실시간 복원력 ③ — 체크인 탭 뷰 구독 폴링·재연결 + 스테일 종목 버그 수정) · `src/pages/organizer/LiveDashboard.jsx`
   · **앱의 마지막 무폴백 실시간 구독(체크인 탭 뷰) 정렬 + 잠복 버그 수정** — 원장이 6런 넘게 "다음
     하드닝 후보"로 미뤄 온 **"checkins(체크인 탭 뷰) 구독 폴링"**을 잡았다(안티스톨: 직전 두 런은
