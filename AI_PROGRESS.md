@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-12 — [C5] 토너먼트 대진 AI 최적화 — 녹아웃(single_elim) 시드 최적화(강팀 조기 대결 회피)
+
+- **무작위 단판 토너먼트의 "강강 조기 대결" 쏠림을 후보 대진 시뮬레이션으로 제거 — C5의 마지막 비-human-gated 실질 갭 완성**
+  - 파일: `src/lib/drawOptimizer.js`, `src/lib/autoDraw.js`, `src/pages/organizer/BracketGenerator.jsx`, `tests/engines2.test.mjs`
+  - 요약: 직전 런(C3 환불)·그 앞 7런(UI 로드-에러 하드닝) 뒤, 하드닝 스윕이 사실상 끝나고 플로우 점수가 아직 ≥95 미만이라 **⚠️ 클러스터 중 비-human-gated 실질 갭**을 코드 실측으로 재선별. C5 잔여 3개 중 유일하게 즉시 shippable·순수함수·AI 차별화(#1 대진 최적화)인 **녹아웃 시드 최적화**를 골랐다. **진단**: `optimizeDraw`는 조별(pool)만 최적화하고 `buildDrawPlan`의 single_elim 분기는 무작위면 `seededShuffle` 씨드 **딱 하나**를 확정(optimization:null) → 운 나쁘면 강팀 둘이 1라운드에서 만나 한 팀 즉시 탈락, 반대편은 약팀만 남아 결승이 싱거워짐. **구현(순수·비파괴·단일 소스)**: (1) `drawOptimizer.js`에 `meetRound`(두 1라운드 리프가 만나는 라운드=XOR 비트 길이)·`knockoutLeaves`(buildDrawPlan과 동일 배치로 리프 순서·재현)·`scoreKnockout`(clashPenalty=Σ 강도i·강도j/meetRound + halfSpread=위/아래 절반 평균 MMR 차이)·`optimizeKnockout`(무작위면 후보 16개 비교해 벌점 최소, 시드 켜짐이면 스네이크 결정적 1개, 4팀↓·MMR<2면 'random')·`explainKnockout`(조 설명과 같은 poolLines 모양→UI 재사용). (2) `buildDrawPlan` single_elim 분기가 optimizeKnockout으로 effSeed 선택→그 씨드로 shuffle+generateKnockoutBracket(재현성)+optimization 세팅. (3) `autoGenerateBracket`도 single_elim(무작위·4팀↑·MMR)까지 확장. (4) BracketGenerator: `isKnockout`/`optimizable`로 토글·최적화 확장, 문구 format-aware. 고른 씨드 저장으로 공개 추첨 재현성 유지, 조별/시드/부전승 경로 전부 불변(엔진 재사용, 대진 로직 중복 0). 회귀 6개(meetRound·scoreKnockout·optimizeKnockout 재현성·explainKnockout 3분기). `npm test` **185/185 통과**(182+3), `npx vite build` green(deps 설치 후). (자동화율 주최자 94%→95%·선수 89%·심판 83%·운영 88% — 모든 토너먼트 추첨이 강팀 분산 균형 대진으로, C5 비-human-gated 갭 소진)
+
 ## 2026-07-12 — [C3] 환불 규정 코드화 — refund.js 엔진 + 주최자 환불 처리 패널 + 챗봇 환불 개인화
 
 - **환불을 "사람 판단"에서 "규정 계산"으로 — 접수·정산 루프의 마지막 큰 수작업 무인화**

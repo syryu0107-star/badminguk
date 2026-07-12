@@ -83,17 +83,20 @@ export default function BracketGenerator() {
   const formatInfo = FORMAT_INFO[format] ?? FORMAT_INFO.round_robin
   const seedingOn = !!activeCategory?.seeding_enabled
 
-  // AI 균형 추첨 적용 여부 판정 (조별 포맷 · 2개 이상 조 · MMR 데이터 있음)
+  // AI 균형 추첨 적용 여부 판정 (조별: 2개 이상 조 / 토너먼트: 4팀 이상 · MMR 데이터 있음)
   const isPoolFormat = format === 'pool_only' || format === 'pool_knockout'
+  const isKnockout = format === 'single_elim'
   const poolSizeCfg = format === 'round_robin'
     ? Math.max(allEntries.length, 1)
     : Math.max(activeCategory?.pool_size ?? 4, 1)
   const numPools = poolSizeCfg > 0 ? Math.ceil(allEntries.length / poolSizeCfg) : 1
   const hasMmrData = allEntries.some(e => e.mmr != null)
+  // 최적화 대상 규모: 조별 2개 이상 조 or 토너먼트 4팀 이상
+  const optimizable = (isPoolFormat && numPools >= 2) || (isKnockout && allEntries.length >= 4)
   // 토글 노출: 무작위 편성일 때만(시드 켜짐이면 이미 MMR 스네이크로 균형 배정)
-  const canToggleBalance = isPoolFormat && numPools >= 2 && hasMmrData && !seedingOn
-  // 최적화 실행: 조별 포맷·2개 이상 조·MMR 있음 + (시드 켜짐 or AI 균형 켜짐)
-  const useOptimizer = isPoolFormat && numPools >= 2 && hasMmrData && (seedingOn || aiBalance)
+  const canToggleBalance = optimizable && hasMmrData && !seedingOn
+  // 최적화 실행: 대상 규모·MMR 있음 + (시드 켜짐 or AI 균형 켜짐)
+  const useOptimizer = optimizable && hasMmrData && (seedingOn || aiBalance)
 
   // ── 추첨 계획 수립 (씨드 고정 → 저장 시 그대로 사용, 재현 가능) ──
   // 계획 로직은 lib/autoDraw.buildDrawPlan 공용(공개 추첨·자동 추첨 단일 소스).
@@ -284,8 +287,12 @@ export default function BracketGenerator() {
                     </div>
                     <p className="text-xs text-gray-500 mt-1 leading-relaxed">
                       {aiBalance
-                        ? '후보 대진 16개를 비교해 조별 실력이 가장 고른 대진을 자동으로 골라요. 한 조에 강팀이 몰리는 쏠림을 막아줘요. (씨드는 공개돼 재현 가능)'
-                        : '꺼짐 — 그냥 무작위로 한 번 뽑아요. 운에 따라 조별 실력이 기울 수 있어요.'}
+                        ? (isKnockout
+                          ? '후보 대진 16개를 비교해 강팀이 가장 고르게 퍼진 대진을 자동으로 골라요. 강팀끼리 1라운드부터 만나 일찍 탈락하는 쏠림을 막아줘요. (씨드는 공개돼 재현 가능)'
+                          : '후보 대진 16개를 비교해 조별 실력이 가장 고른 대진을 자동으로 골라요. 한 조에 강팀이 몰리는 쏠림을 막아줘요. (씨드는 공개돼 재현 가능)')
+                        : (isKnockout
+                          ? '꺼짐 — 그냥 무작위로 한 번 뽑아요. 운에 따라 강팀이 한쪽에 몰릴 수 있어요.'
+                          : '꺼짐 — 그냥 무작위로 한 번 뽑아요. 운에 따라 조별 실력이 기울 수 있어요.')}
                     </p>
                   </div>
                 </div>
@@ -523,7 +530,7 @@ export default function BracketGenerator() {
                     </div>
                     {plan.optimization.method === 'balanced' && plan.optimization.avgSpread > plan.optimization.bestSpread && (
                       <p className="text-[11px] text-gray-400 mt-2">
-                        조별 평균 실력 차이 {Math.round(plan.optimization.bestSpread)}
+                        {plan.optimization.spreadLabel ?? '조별 평균 실력 차이'} {Math.round(plan.optimization.bestSpread)}
                         <span className="text-gray-300"> (무작위 평균 {Math.round(plan.optimization.avgSpread)})</span>
                       </p>
                     )}

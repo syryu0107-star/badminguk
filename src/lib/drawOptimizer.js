@@ -9,7 +9,7 @@
 // 기존 엔진 generatePools(scheduler 씨드 셔플)를 재사용한다(대진 로직 중복 없음).
 // 고른 씨드를 그대로 저장하므로 공개 추첨의 재현성(같은 씨드=같은 대진)은 유지된다.
 
-import { generatePools } from './tournament.js'
+import { generatePools, generateKnockoutBracket, seededShuffle } from './tournament.js'
 
 const mmrOf = e => (e && e.mmr != null && Number.isFinite(e.mmr)) ? e.mmr : null
 
@@ -137,6 +137,163 @@ export function explainDraw(result, pools) {
     detail: `조별 평균 실력(MMR) 차이가 가장 작은 대진이에요. `
       + `가장 센 조(${strongest.name} 평균 ${Math.round(strongest.mean)})와 가장 약한 조`
       + `(${weakest.name} 평균 ${Math.round(weakest.mean)})의 차이가 ${spread}이에요.${beat}`,
+    poolLines, hasMmr: true,
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 녹아웃(토너먼트·single_elim) 대진 최적화 (C5)
+// ──────────────────────────────────────────────────────────────────────
+// 조별 편성과 달리 토너먼트는 "누가 어느 자리에 들어가느냐"가 대진의 공정성을 좌우한다.
+// 무작위로 한 번 뽑으면(seeding OFF) 운에 따라 강팀 둘이 1라운드에서 만나 한 명이
+// 곧바로 탈락하고, 반대쪽은 약팀만 남아 결승이 싱거워진다. 이 엔진은 후보 대진 여럿을
+// 시뮬레이션해 (1)강팀이 낮은 라운드에서 서로 만나는 정도(clashPenalty)와
+// (2)대진 위/아래 절반의 평균 실력 차이(halfSpread)로 채점해, 강팀이 가장 고르게
+// 퍼진 대진을 고르고 "왜 균형적인지"를 설명한다. 고른 씨드를 그대로 저장하므로 재현 가능.
+
+// 두 리프(1라운드 슬롯) i, j 가 처음 맞붙는 라운드 = XOR 비트 길이.
+//   (0,1)=1라운드 / (0,2)=2라운드 / (0,4)=3라운드 … 표준 싱글엘림 트리 구조.
+export function meetRound(i, j) {
+  let x = (i ^ j) >>> 0
+  let r = 0
+  while (x > 0) { x >>= 1; r++ }
+  return r
+}
+
+// buildDrawPlan(single_elim) 과 동일한 배치 로직으로 1라운드 리프 순서를 만든다.
+//   seedingEnabled=true : MMR 내림차순(스네이크 시드) / false : 씨드 셔플(무작위)
+// 반환 [{ entryId, mmr }] — 1라운드 슬롯 순서(왼→오), 부전승 자리는 mmr=null.
+export function knockoutLeaves(entries, seed, seedingEnabled = false) {
+  const list = Array.isArray(entries) ? entries : []
+  const ordered = seedingEnabled
+    ? [...list].sort((a, b) => (b.mmr ?? -Infinity) - (a.mmr ?? -Infinity))
+    : seededShuffle(list, seed)
+  const direct = ordered.map((e, i) => ({ entryId: e.id, label: e.label, rank: i + 1, poolIndex: 0 }))
+  const bracket = generateKnockoutBracket({ direct, wildcards: [] }, seed)
+  const round1 = bracket.filter(m => m.round === 1).sort((a, b) => a.slot - b.slot)
+  const mmrById = new Map(list.map(e => [e.id, mmrOf(e)]))
+  const leaves = []
+  for (const m of round1) {
+    leaves.push({ entryId: m.team1EntryId, mmr: m.team1EntryId != null ? (mmrById.get(m.team1EntryId) ?? null) : null })
+    leaves.push({ entryId: m.team2EntryId, mmr: m.team2EntryId != null ? (mmrById.get(m.team2EntryId) ?? null) : null })
+  }
+  return leaves
+}
+
+// 녹아웃 대진 균형 점수 — 낮을수록 균형.
+//   clashPenalty : Σ (강도i·강도j / 만나는라운드). 강팀 쌍이 일찍 만날수록 커짐(핵심 지표).
+//   halfSpread   : 대진 위쪽 절반 vs 아래쪽 절반 평균 MMR 차이.
+//   means        : [위쪽 평균, 아래쪽 평균] (MMR 없으면 null).
+//   score        : 정렬용(=clashPenalty). 강팀을 최대한 늦게 만나게 퍼뜨림.
+export function scoreKnockout(leaves) {
+  const arr = Array.isArray(leaves) ? leaves : []
+  const n = arr.length
+  const mmrs = arr.map(l => (l && l.mmr != null && Number.isFinite(l.mmr)) ? l.mmr : null)
+  const known = mmrs.filter(v => v != null)
+  const half = Math.floor(n / 2)
+  const meanOf = (a, b) => {
+    const v = mmrs.slice(a, b).filter(x => x != null)
+    return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null
+  }
+  const meanA = meanOf(0, half)
+  const meanB = meanOf(half, n)
+  const halfSpread = (meanA != null && meanB != null) ? Math.abs(meanA - meanB) : 0
+  if (n < 2 || known.length < 2) {
+    return { clashPenalty: 0, halfSpread: 0, means: [meanA, meanB], score: 0 }
+  }
+  const max = Math.max(...known), min = Math.min(...known)
+  const range = max - min
+  const w = i => mmrs[i] == null ? 0 : (range > 0 ? (mmrs[i] - min) / range : 1)
+  let clashPenalty = 0
+  for (let i = 0; i < n; i++) {
+    const wi = w(i)
+    if (wi === 0) continue
+    for (let j = i + 1; j < n; j++) {
+      const wj = w(j)
+      if (wj === 0) continue
+      clashPenalty += (wi * wj) / meetRound(i, j)
+    }
+  }
+  return { clashPenalty, halfSpread, means: [meanA, meanB], score: clashPenalty }
+}
+
+// 녹아웃 대진 최적화 — 후보 대진을 비교해 강팀이 가장 고르게 퍼진 것을 반환.
+//   seedingEnabled : true 면 MMR 스네이크(결정적)라 후보 1개, false 면 무작위 후보 여럿.
+//   4팀 미만이거나 MMR 있는 팀 2 미만이면 최적화 의미가 없어 단일 후보(method 'random').
+// 반환 { seed, method, tried, metrics, leafCount, clashPenalties, halfSpreads, best/worst/avgSpread }.
+export function optimizeKnockout({ entries, baseSeed, seedingEnabled = false, candidates = 16 } = {}) {
+  const list = Array.isArray(entries) ? entries : []
+  const withMmr = list.filter(e => mmrOf(e) != null)
+  const base = String(baseSeed ?? '0')
+
+  if (seedingEnabled || list.length < 4 || withMmr.length < 2) {
+    const leaves = knockoutLeaves(list, base, seedingEnabled)
+    const metrics = scoreKnockout(leaves)
+    const method = seedingEnabled
+      ? 'seeded'
+      : (withMmr.length >= 2 && list.length >= 4 ? 'balanced' : 'random')
+    return {
+      seed: base, method, tried: 1, metrics, leafCount: leaves.length,
+      clashPenalties: [metrics.clashPenalty], halfSpreads: [metrics.halfSpread],
+      bestSpread: metrics.halfSpread, worstSpread: metrics.halfSpread, avgSpread: metrics.halfSpread,
+    }
+  }
+
+  const seeds = candidateSeeds(base, Math.max(1, candidates))
+  let best = null
+  const clashPenalties = [], halfSpreads = []
+  for (const s of seeds) {
+    const leaves = knockoutLeaves(list, s, false)
+    const metrics = scoreKnockout(leaves)
+    clashPenalties.push(metrics.clashPenalty)
+    halfSpreads.push(metrics.halfSpread)
+    if (!best || metrics.score < best.metrics.score) best = { seed: s, metrics, leafCount: leaves.length }
+  }
+  const avgSpread = halfSpreads.length ? halfSpreads.reduce((a, b) => a + b, 0) / halfSpreads.length : 0
+  return {
+    seed: best.seed, method: 'balanced', tried: seeds.length, metrics: best.metrics, leafCount: best.leafCount,
+    clashPenalties, halfSpreads,
+    bestSpread: best.metrics.halfSpread,
+    worstSpread: halfSpreads.length ? Math.max(...halfSpreads) : 0,
+    avgSpread,
+  }
+}
+
+// "왜 이 토너먼트 대진이 공정한지" — 초보 주최자용 한국어 설명.
+// 반환 { headline, detail, poolLines:[{name, mean}], hasMmr } (조 설명과 같은 모양 → UI 재사용).
+export function explainKnockout(result) {
+  const means = result?.metrics?.means ?? [null, null]
+  const meanA = means[0], meanB = means[1]
+  const hasMmr = meanA != null && meanB != null && result?.method !== 'random'
+  const poolLines = [
+    { name: '위쪽 대진', mean: meanA != null ? Math.round(meanA) : null },
+    { name: '아래쪽 대진', mean: meanB != null ? Math.round(meanB) : null },
+  ]
+  if (!hasMmr) {
+    return {
+      headline: '무작위로 공정하게 대진을 뽑았어요',
+      detail: '실력(MMR) 정보가 충분하지 않아 강팀 분산은 계산하지 않았어요. 순서는 무작위 씨드로 공정하게 배정했어요.',
+      poolLines, hasMmr: false,
+    }
+  }
+  const spread = Math.round(Math.abs(meanA - meanB))
+  if (result?.method === 'seeded') {
+    return {
+      headline: 'MMR 시드로 강팀을 대진 양쪽에 갈라놨어요',
+      detail: `실력 상위 팀일수록 대진 반대편에 배치돼 결승 전에는 서로 만나지 않아요. `
+        + `위쪽 대진 평균 ${Math.round(meanA)} · 아래쪽 대진 평균 ${Math.round(meanB)}로 양쪽 실력 차이는 ${spread}뿐이에요.`,
+      poolLines, hasMmr: true,
+    }
+  }
+  const tried = result?.tried ?? 1
+  const worst = Math.round(result?.worstSpread ?? spread)
+  const beat = worst > spread
+    ? ` 무작위로 그냥 뽑았다면 양쪽 실력 차이가 ${worst}까지 벌어질 수 있었는데, 그보다 고른 대진을 골랐어요.`
+    : ''
+  return {
+    headline: `후보 대진 ${tried}개 중 강팀이 가장 고르게 퍼진 대진을 골랐어요`,
+    detail: `강한 팀들이 1~2라운드에 몰려 서로 일찍 탈락하지 않도록 대진 양쪽에 고르게 배치했어요. `
+      + `위쪽 대진 평균 ${Math.round(meanA)} · 아래쪽 대진 평균 ${Math.round(meanB)}로 차이는 ${spread}이에요.${beat}`,
     poolLines, hasMmr: true,
   }
 }

@@ -20,7 +20,7 @@
 
 import { makeSeed, seededShuffle, scheduleMatches, buildRoundRobin } from './scheduler.js'
 import { generatePools, generateKnockoutBracket, knockoutSkeletonSize } from './tournament.js'
-import { optimizeDraw, explainDraw } from './drawOptimizer.js'
+import { optimizeDraw, explainDraw, optimizeKnockout, explainKnockout } from './drawOptimizer.js'
 
 // ── UUID (crypto 우선, 폴백) ──────────────────────────────────────────
 export function uuid() {
@@ -153,11 +153,28 @@ export function buildDrawPlan({ format, entries, category, seed, useOptimizer = 
   if (format === 'single_elim') {
     // 시드 켜짐: MMR 상위 = 낮은 시드 번호 → 대진 반대편 배치 / 꺼짐: 씨드 셔플 순서
     const entryMap = Object.fromEntries(allEntries.map(e => [e.id, e]))
+    const someMmr = allEntries.some(e => e.mmr != null)
+    // AI 균형(무작위 편성일 때 후보 대진 비교) 또는 시드(MMR 스네이크) 설명을 붙일지 판정.
+    // 무작위 최적화는 4팀 이상·MMR 있음일 때만 의미가 있다.
+    const runKnockoutOpt = someMmr && (
+      (seedingOn) || (useOptimizer && !seedingOn && allEntries.length >= 4)
+    )
+    let effSeed = s, optimization = null
+    if (runKnockoutOpt) {
+      const res = optimizeKnockout({ entries: allEntries, baseSeed: s, seedingEnabled: hasMmr, candidates: 16 })
+      effSeed = res.seed
+      optimization = {
+        method: res.method, tried: res.tried,
+        bestSpread: res.bestSpread, worstSpread: res.worstSpread, avgSpread: res.avgSpread,
+        spreadLabel: '양쪽 대진 평균 실력 차이',
+        explanation: explainKnockout(res),
+      }
+    }
     const ordered = hasMmr
       ? [...allEntries].sort((a, b) => (b.mmr ?? -Infinity) - (a.mmr ?? -Infinity))
-      : seededShuffle(allEntries, s)
+      : seededShuffle(allEntries, effSeed)
     const direct = ordered.map((e, i) => ({ entryId: e.id, label: e.label, rank: i + 1, poolIndex: 0 }))
-    const bracket = generateKnockoutBracket({ direct, wildcards: [] }, s)
+    const bracket = generateKnockoutBracket({ direct, wildcards: [] }, effSeed)
     const round1 = bracket.filter(m => m.round === 1).sort((a, b) => a.slot - b.slot)
     const size = round1.length * 2
     const sequence = []
@@ -168,7 +185,7 @@ export function buildDrawPlan({ format, entries, category, seed, useOptimizer = 
           : { type: 'slot', entryId: null, label: '부전승', bye: true })
       }
     })
-    return { format, seed: s, pools: null, round1, size, sequence, optimization: null }
+    return { format, seed: effSeed, pools: null, round1, size, sequence, optimization }
   }
 
   // round_robin = 전원 한 조 / pool_only·pool_knockout = pool_size씩 조 편성
@@ -364,8 +381,11 @@ export async function autoGenerateBracket(supabase, { tournament, category }) {
     : Math.max(category.pool_size ?? 4, 1)
   const numPools = poolSize > 0 ? Math.ceil(entries.length / poolSize) : 1
   const hasMmr = entries.some(e => e.mmr != null)
-  // 자동 추첨은 AI 균형 편성을 기본 적용(재현 가능한 씨드 저장). 조별 2개↑·MMR 있을 때만 의미.
-  const useOptimizer = isPoolFormat && numPools >= 2 && hasMmr
+  // 자동 추첨은 AI 균형 편성을 기본 적용(재현 가능한 씨드 저장). 조별은 2개↑·MMR,
+  // 토너먼트(single_elim)는 무작위 편성·4팀↑·MMR 있을 때 후보 대진을 비교해 강팀을 분산.
+  const useOptimizer =
+    (isPoolFormat && numPools >= 2 && hasMmr) ||
+    (format === 'single_elim' && !seedingOn && hasMmr && entries.length >= 4)
 
   const seed = makeSeed()
   const plan = buildDrawPlan({ format, entries, category, seed, useOptimizer, seedingOn })

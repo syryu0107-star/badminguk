@@ -16,6 +16,7 @@ import {
 } from '../src/lib/deposit.js'
 import {
   poolMeanMmr, scoreDraw, candidateSeeds, optimizeDraw, explainDraw,
+  meetRound, knockoutLeaves, scoreKnockout, optimizeKnockout, explainKnockout,
 } from '../src/lib/drawOptimizer.js'
 import {
   distributePools, estimateMatches, defaultMatchMinutes, recommendSetup,
@@ -155,6 +156,76 @@ test('drawOptimizer: candidateSeeds / optimizeDraw / explainDraw', () => {
   ])
   assert.equal(withMmr.hasMmr, true)
   assert.equal(withMmr.poolLines.length, 2)
+})
+
+test('drawOptimizer: meetRound — 리프가 만나는 라운드', () => {
+  assert.equal(meetRound(0, 1), 1)   // 같은 1라운드 경기
+  assert.equal(meetRound(0, 2), 2)   // 2라운드에서 만남
+  assert.equal(meetRound(0, 3), 2)
+  assert.equal(meetRound(0, 4), 3)   // 8강 트리에서 3라운드(결승)
+  assert.equal(meetRound(5, 5), 0)   // 같은 리프
+})
+
+test('drawOptimizer: scoreKnockout — 강팀 조기 대결/절반 균형', () => {
+  // 강팀(2000)이 1라운드에 서로 만나는 나쁜 대진 vs 반대편으로 갈린 좋은 대진
+  const bad = scoreKnockout([
+    { mmr: 2000 }, { mmr: 1990 },  // 1라운드 강강 대결
+    { mmr: 1000 }, { mmr: 1010 },
+  ])
+  const good = scoreKnockout([
+    { mmr: 2000 }, { mmr: 1000 },  // 강팀이 서로 다른 리프
+    { mmr: 1010 }, { mmr: 1990 },
+  ])
+  assert.ok(good.clashPenalty < bad.clashPenalty)   // 좋은 대진이 벌점 낮음
+  assert.ok(good.halfSpread < bad.halfSpread)        // 위/아래 절반도 더 고름
+  // MMR 없으면 벌점 0
+  const none = scoreKnockout([{}, {}, {}, {}])
+  assert.equal(none.clashPenalty, 0)
+  assert.equal(none.score, 0)
+})
+
+test('drawOptimizer: optimizeKnockout / knockoutLeaves / explainKnockout', () => {
+  const entries = [
+    { id: 'a', label: 'A', mmr: 2000 }, { id: 'b', label: 'B', mmr: 1950 },
+    { id: 'c', label: 'C', mmr: 1200 }, { id: 'd', label: 'D', mmr: 1150 },
+    { id: 'e', label: 'E', mmr: 1900 }, { id: 'f', label: 'F', mmr: 1100 },
+    { id: 'g', label: 'G', mmr: 1300 }, { id: 'h', label: 'H', mmr: 1250 },
+  ]
+  // 시드 켜짐 → 결정적, 후보 1개, method 'seeded'
+  const seeded = optimizeKnockout({ entries, baseSeed: 's', seedingEnabled: true })
+  assert.equal(seeded.method, 'seeded')
+  assert.equal(seeded.tried, 1)
+  assert.equal(seeded.leafCount, 8)
+
+  // 무작위 → 후보 여럿 비교, 가장 균형(=벌점 최소)을 고른다
+  const bal = optimizeKnockout({ entries, baseSeed: 's', seedingEnabled: false, candidates: 16 })
+  assert.equal(bal.method, 'balanced')
+  assert.equal(bal.tried, 16)
+  assert.equal(bal.clashPenalties.length, 16)
+  // 고른 대진의 벌점은 후보 중 최소
+  assert.ok(bal.metrics.clashPenalty <= Math.min(...bal.clashPenalties) + 1e-9)
+  // 고른 씨드를 다시 넣으면 같은 리프(재현성)
+  const l1 = knockoutLeaves(entries, bal.seed, false)
+  const l2 = knockoutLeaves(entries, bal.seed, false)
+  assert.deepEqual(l1.map(x => x.entryId), l2.map(x => x.entryId))
+  assert.equal(l1.length, 8)
+
+  // 4팀 미만 → method 'random'(최적화 의미 없음)
+  const tiny = optimizeKnockout({ entries: entries.slice(0, 2), baseSeed: 's' })
+  assert.equal(tiny.method, 'random')
+  assert.equal(tiny.tried, 1)
+
+  // 설명: balanced → 강팀 분산 헤드라인 + 위/아래 대진 2줄
+  const exp = explainKnockout(bal)
+  assert.equal(exp.hasMmr, true)
+  assert.equal(exp.poolLines.length, 2)
+  assert.ok(exp.headline.includes('강팀'))
+  // 설명: seeded → 시드 헤드라인
+  const expSeed = explainKnockout(seeded)
+  assert.ok(expSeed.headline.includes('시드'))
+  // 설명: random(MMR 부족) → 무작위 공정
+  const expRandom = explainKnockout(tiny)
+  assert.equal(expRandom.hasMmr, false)
 })
 
 // ══════════════════════ planWizard.js ══════════════════════
