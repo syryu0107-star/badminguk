@@ -33,7 +33,7 @@ class Query {
     this._single = false
     this._payload = null
   }
-  select(cols = '*') { this.op = 'select'; this.cols = cols; return this }
+  select(cols = '*', opts = null) { this.op = 'select'; this.cols = cols; this._selectOpts = opts; return this }
   update(patch) { this.op = 'update'; this._payload = patch; return this }
   insert(rows) { this.op = 'insert'; this._payload = rows; return this }
   delete() { this.op = 'delete'; return this }
@@ -69,6 +69,12 @@ class Query {
 
   _run() {
     if (this.op === 'select') {
+      // count/head 모드: PostgREST 의 `.select('*', { count:'exact', head:true })`
+      // (autoDraw.autoGenerateBracket 이 "이미 대진표가 있나" 판정에 사용) → { count, data }.
+      if (this._selectOpts && this._selectOpts.count) {
+        const n = this._rows().length
+        return { data: this._selectOpts.head ? null : this._rows().map(clone), count: n, error: null }
+      }
       let rows = this._rows().map(clone)
       rows = this._applyJoins(rows)
       if (this.orderCol) {

@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-12 — [하드닝·테스트] 자동 대진 생성 autoDraw.js(C2/C5) 회귀 테스트 14개 + Supabase 스텁 count/head 지원
+
+- **완주를 여는 최대 엔진 autoDraw.js 의 커밋된 테스트 0 → 14개(무인 대회 시작 경로 회귀 그물)**
+  - 파일: `tests/autodraw.test.mjs`(신규), `tests/_supabase-stub.mjs`(select 에 count/head 지원 추가)
+  - 요약: 직전 3런이 UI 로드 에러 상태(MyMatches·Results·TournamentDetail·Scoreboard)를 스윕했으나 남은 대상은 원장 자체 판정상 "탐색·조회 후순위" 페이지뿐이라 **티어1(완주 막는 것)에서 벗어난다**. 안티스톨: 같은 패턴 4연속 대신 **다른 계층(엔진 회귀 테스트)**으로 전환하되 대상은 **완주를 실제로 여는 최상위 엔진**으로 골랐다. **선정 이유**: 미테스트 lib 스캔 결과 실질 엔진 중 `autoDraw.js`(395줄)만 커밋 테스트 0이었다(나머지는 supabase 싱글턴·useOnline 훅). autoDraw 는 무인 진행 ON·대회 당일 대진표 없음일 때 stateMachine closed→in_progress 를 막던 "대진표 없음"을 **자동 해소해 대회를 시작시키는 유일 경로**(TournamentManage 자동)이자 공개 추첨(BracketGenerator 수동)의 단일 소스라, 리팩터가 조용히 깨지면 **대회가 시작조차 못 하거나(무인 완주 정지) 진출 링크·부전승이 틀어져 대진이 오염**된다. **커버**: 순수 — knockoutLabel(결승/4강/8강/r16)·makeMatchRow(기본값·id 자동)·buildKnockoutRows(진출 링크 pos→ceil(p/2)·슬롯 홀짝, **부전승 선진출** status='bye'+승자+다음 슬롯 자동 채움)·enrichEntries(라벨·MMR 평균·폴백)·buildDrawPlan(single_elim size4·부전승1 / round_robin 한 조 / pool_only 6팀→2조 전원 1회 배정)·uuid. DB 변이 — persistDrawPlan(single_elim 3팀=경기3·조0·씨드 / 인자 없으면 throw 없이 실패 반환)·autoGenerateBracket(**이미 대진표 있으면 exists**=공개 추첨 보호 / 승인<2팀 not_enough / round_robin 3팀 created=경기3·조1·조원3·미승인 제외)·autoGenerateAllBrackets(생성/스킵/부족 집계). **스텁 확장(테스트 전용·하위호환)**: `_supabase-stub.mjs` select(cols, opts) 가 `{count:'exact',head:true}` 를 받아 `{count,data}` 반환, 기존 158 테스트는 opts 미전달이라 동작 불변(회귀 0). `npm test` **172/172 통과**(158+14), `npx vite build` green(deps 설치 후). 배선 grep 확인(autoGenerateAllBrackets→TournamentManage:390 / buildDrawPlan·persistDrawPlan→BracketGenerator:103·146). 다음 하드닝 후보: 선수 Home/Ranking/Profile/Tournaments 로드 에러 상태·drawOptimizer 경계·접근성(aria). (자동화율 주최자 93%·선수 88%·심판 83%·운영 88% 불변 — 완주 최대 엔진 회귀 그물)
+
 ## 2026-07-12 — [하드닝·심판UI] 점수판(Scoreboard) 로드 실패 복구 — 무한 스피너 제거 스윕 ③
 
 - **심판 완주(점수 입력→대진표 반영)를 막던 "무한 스피너" 제거 — 로드 try-catch + 에러 상태 + 다시 시도**
