@@ -205,16 +205,34 @@ export default function LiveDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
+  // 최신 loadCheckins 를 참조로 유지 — 체크인 탭에서 종목 탭을 바꿔도(activeCat 변경)
+  //   구독을 다시 열지 않고 항상 현재 종목 기준으로 새로고침한다(스테일 종목 방지).
+  const loadCheckinsRef = useRef(loadCheckins)
+  loadCheckinsRef.current = loadCheckins
+
   // ── 셀프 체크인 실시간 반영 (선수가 폰으로 체크인하면 무인으로 갱신) ──
+  //   체크인 탭을 보는 동안 실시간이 조용히 끊겨도 15초 폴링·재연결 따라잡기로
+  //   새 셀프 체크인이 목록에서 누락되지 않게 한다(matches·checkinset 구독과 동일 패턴 —
+  //   앱의 마지막 남은 무폴백 구독이었음). reload 는 ref 로 항상 최신 activeCat 을 반영.
   useEffect(() => {
-    if (viewMode !== 'checkin') return
+    if (viewMode !== 'checkin' || !id) return
+    let dropped = false
+    const reload = () => loadCheckinsRef.current()
+    const poll = setInterval(reload, REFRESH_MS)
     const sub = supabase
       .channel(`checkins-${id}`)
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'tournament_checkins', filter: `tournament_id=eq.${id}` },
-        () => loadCheckins())
-      .subscribe()
-    return () => supabase.removeChannel(sub)
+        reload)
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          // 끊겼다 돌아왔으면 그 사이 들어온 셀프 체크인을 따라잡는다.
+          if (dropped) { dropped = false; reload() }
+        } else if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) {
+          dropped = true
+        }
+      })
+    return () => { clearInterval(poll); supabase.removeChannel(sub) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode, id])
 

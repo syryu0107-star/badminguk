@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-12 — [하드닝·C4] 체크인 탭 뷰 구독 실시간 복원력 — 15초 폴링·재연결 따라잡기 + 스테일 종목 잠복 버그 수정
+
+- **C4 셀프 체크인 — 체크인 탭 뷰(`checkins`) 구독에 폴링·재연결 정렬 + 종목 스테일 버그 수정**
+  - 파일: `src/pages/organizer/LiveDashboard.jsx`
+  - 요약: 원장이 6런 넘게 "다음 하드닝 후보"로 미뤄 온 **"checkins(체크인 탭 뷰) 구독 폴링"**을 잡았다(안티스톨: 직전 두 런은 notify.js **발송** 배치화, 이번은 LiveDashboard 체크인 **뷰 구독** — 다른 계층·다른 실패 모드). **진단(코드 실측)**: 앱의 모든 실시간 구독(LiveScore·CourtView·CourtReferee·LiveDashboard의 matches·checkinset)이 이미 15초 폴링 폴백 + 재연결 따라잡기를 갖췄는데, **유일하게** `checkins-${id}` 구독(체크인 탭, viewMode==='checkin')만 (1)`.subscribe()`에 status 핸들러가 없어 재연결 따라잡기 전무, (2)폴링 폴백 없음이었다 — 체크인 탭을 열어 둔 운영자 화면에서 realtime이 조용히 끊기면 새 셀프 체크인이 목록에 안 뜬다(뷰 전용이라 무인 노쇼 판정엔 영향 없으나 운영자 모니터링이 낡음). 게다가 **잠복 버그**: 구독 핸들러 `() => loadCheckins()`는 effect deps가 `[viewMode, id]`뿐이라 **체크인 탭에서 종목 탭(activeCat)을 바꿔도 재구독되지 않아**, 그 뒤 도착한 realtime 이벤트가 **직전 종목**의 loadCheckins 클로저로 목록을 덮어써 엉뚱한 종목 참가자가 표시될 수 있었다. **구현(matches·checkinset 패턴으로 정렬, 비파괴)**: (a) `loadCheckinsRef`(render마다 최신 loadCheckins 할당)로 reload를 참조 고정 — 종목 탭을 바꿔도 구독을 다시 열지 않고 항상 현재 activeCat 기준으로 새로고침(스테일 종목 버그 수정), (b) 15초 폴링 `setInterval(reload, REFRESH_MS)`, (c) `.subscribe(status=>…)`에서 SUBSCRIBED 시 끊겼다 복귀면(local dropped) reload 따라잡기·CHANNEL_ERROR/TIMED_OUT/CLOSED 시 dropped 표시, cleanup에 clearInterval. loadCheckins·loadCheckinSet·checkinset 구독·오케스트레이터·노쇼/시상 확정 트리거 전부 불변(체크인 뷰 구독 내부만 강화, grep으로 loadCheckinsRef line 210·`checkins-${id}` line 223 배선 확인). `npm test` **158/158 통과**·`npx vite build` green(deps 설치 후). 이로써 앱의 전 실시간 구독이 폴링·재연결 복원력을 갖춤(실시간 하드닝 스윕 완료). 다음 하드닝 후보: UI 빈/로딩/에러 상태 세부·bwf.scoreSummary/serviceCourt 테스트·접근성(aria). (자동화율 주최자 93%·선수 88%·운영 88% 불변 — C4 품질 하드닝)
+
 ## 2026-07-12 — [하드닝·C1] 무인 노쇼 경로 재알림·경고 배치화 — 채널 개폐·insert 낭비 제거
 
 - **C1 경기 호출 인프라 — 무인 노쇼 경로(재알림·경고) 채널·insert 낭비 제거(배치화)**
