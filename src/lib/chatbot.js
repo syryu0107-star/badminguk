@@ -17,6 +17,8 @@
 //     myEntries  : [{ category_id, entry_status, payment_status }],
 //   }
 
+import { computeRefund, refundLineText, policyLines } from './refund'
+
 // ─── 포맷 헬퍼 ────────────────────────────────────────────────────────
 
 const WD = ['일', '월', '화', '수', '목', '금', '토']
@@ -207,10 +209,42 @@ const TOPICS = [
     },
   },
   {
-    id: 'refund', personal: false,
+    id: 'refund', personal: true,
     keywords: ['환불', '취소하고', '신청취소', '철회', '돈돌려', '환불돼', '못가게', '환불규정'],
-    answer: () =>
-      '참가 철회·환불은 대회 규정과 시점에 따라 달라요. "내 신청" 화면에서 신청을 철회할 수 있고, 이미 입금한 참가비의 환불은 주최자에게 문의하면 규정에 따라 처리돼요. (환불 경계 판단은 사람이 확인하는 예외 항목이에요.)',
+    answer: (ctx) => {
+      const t = ctx.tournament ?? {}
+      const catById = Object.fromEntries((ctx.categories ?? []).map(c => [c.id, c]))
+      // 접수 마감 전이면 "지금 취소하면 얼마 환불"의 기준이 마감 datetime 이 된다.
+      const opt = { tournamentDate: t.date, registrationEnd: t.registration_end }
+
+      const lines = ['참가 철회·환불 규정 안내예요.', '', '📋 환불 규정(취소 시점 기준)']
+      lines.push(...policyLines())
+
+      // 개인화: 입금 확인된 내 신청이 있으면 "지금 취소하면 얼마"를 규정으로 계산.
+      const paid = (ctx.myEntries ?? []).filter(e => e.payment_status === 'confirmed')
+      const priced = paid
+        .map(e => ({ e, cat: catById[e.category_id] }))
+        .filter(x => x.cat && Number(x.cat.entry_fee) > 0)
+      if (priced.length) {
+        lines.push('', '💰 지금 취소하면(내 입금 기준)')
+        for (const { e, cat } of priced) {
+          const r = computeRefund({
+            fee: Number(cat.entry_fee), paymentStatus: 'confirmed', ...opt,
+          })
+          const sport = cat.sport_type ? `${cat.sport_type}: ` : ''
+          if (r.requiresReview) {
+            lines.push(`• ${sport}${r.reason}`)
+          } else {
+            lines.push(`• ${sport}${refundLineText(r)}`)
+          }
+        }
+        lines.push('', '취소는 "내 신청" 화면에서 할 수 있어요. 환불금 송금은 주최자가 규정 금액대로 처리해요.')
+      } else {
+        lines.push('', '취소는 "내 신청" 화면에서 할 수 있어요. 입금한 참가비가 있으면 위 규정에 따라 환불돼요.')
+      }
+      lines.push('※ 대회 당일·이후(노쇼·지각·응급)는 주최자가 확인하는 예외예요.')
+      return lines.join('\n')
+    },
   },
   {
     id: 'scoring', personal: false,

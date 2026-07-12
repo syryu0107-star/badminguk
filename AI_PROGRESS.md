@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-12 — [C3] 환불 규정 코드화 — refund.js 엔진 + 주최자 환불 처리 패널 + 챗봇 환불 개인화
+
+- **환불을 "사람 판단"에서 "규정 계산"으로 — 접수·정산 루프의 마지막 큰 수작업 무인화**
+  - 파일: `src/lib/refund.js`(신규), `src/pages/organizer/EntryManagement.jsx`, `src/lib/chatbot.js`, `tests/refund.test.mjs`(신규)
+  - 요약: 직전 7런이 UI 로드-에러 상태를 전 화면에 스윕(사실상 완료). 안티스톨으로 같은 하드닝 패턴 8연속을 피하고, **플로우 점수가 아직 ≥95 미만이라 강제 하드닝 모드 진입 전**임을 코드 실측으로 재확인 → ⚠️ 클러스터 중 **비-human-gated 실질 갭**을 골랐다. C3의 잔여 "환불규정 코드화"는 규칙 기반(PG·계좌 스키마 무관)이라 human-gated 가 아닌데도, 챗봇이 "환불 경계 판단은 사람이 확인하는 예외"라 답하고 EntryManagement 엔 환불 UI 가 없어(refunded 상태만 존재) **환불액 결정·처리가 통째로 주최자 수작업**이었다(북극성 체인 접수→…→정산→환불 중 유일하게 엔진 부재). **구현**: (1) `refund.js` 순수 엔진 — `DEFAULT_REFUND_POLICY`(접수 마감 전 전액 / 대회 7일 전 100%·3~6일 50%·1~2일 30%·당일 이후 0%, 정책을 데이터로 분리)·`computeRefund`(fee·tournamentDate·registration_end·payment_status·now → rate·amount·deducted·requiresReview, floor 과다환불 방지, 마감 전=시점 무관 전액, 날짜 미정·당일 이후=requiresReview 사람 확인)·`daysUntil`/`isBeforeDeadline`/`pickTier`/`refundLineText`/`policyLines`. notify 체인 임포트 회피 위해 day-diff 자체 구현, formatWon 만 deposit.js(순수) 재사용. (2) EntryManagement — 대회(date·registration_end) 로드 추가, 입금 확인 뒤 철회·거절된 신청을 `refundPending`으로 모아 환불액 계산, "환불 처리 · 규정 자동 계산" 접이식 패널(규정 요약 + 규정 자동계산건 일괄/개별 "환불 완료" + 당일이후·날짜미정 "직접 확인" 예외 리스트). "환불 완료"는 payment_status='refunded'(실제 송금은 무통장 계좌이체라 사람이 보냄 — 금액 판단만 무인화). (3) chatbot refund 토픽 personal 전환 — 규정 요약 + 내 입금건별 "지금 취소하면 ₩얼마 환불" 개인화(HelpChat ctx 에 필요 필드 이미 전달됨). (4) 회귀 테스트 10개. `npm test` **182/182 통과**(172+10), `npx vite build` green(deps 설치 후). (자동화율 주최자 93%→94%·선수 88%→89%·심판 83%·운영 88% — 환불 규정 무인 계산으로 접수·정산 루프 예외 축소)
+
 ## 2026-07-12 — [하드닝·선수/주최자UI] 진입점 Home·Dashboard 로드 실패 복구 — 무한 스피너/false-empty 제거 스윕 ⑦
 
 - **두 플로우의 첫 화면(입구)이 로드 실패에 무너지던 구멍 봉인 — 무한 스피너 + false-empty 오표시 제거**

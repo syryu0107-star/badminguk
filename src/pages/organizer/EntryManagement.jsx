@@ -8,7 +8,9 @@ import { assessSandbag, worseLevel, SANDBAG_STYLE } from '../../lib/sandbag'
 import { planAutoApprovals } from '../../lib/stateMachine'
 import { parseDeposits, matchDeposits } from '../../lib/payment'
 import { buildNoShowIndex, recommendWaitlist, predictNoShow, NOSHOW_STYLE } from '../../lib/noshowPredict'
-import { Check, X, ShieldAlert, Trophy, Clock, Sparkles, Banknote, ChevronDown, UserX, AlertTriangle } from 'lucide-react'
+import { computeRefund, refundLineText, policyLines } from '../../lib/refund'
+import { formatWon } from '../../lib/deposit'
+import { Check, X, ShieldAlert, Trophy, Clock, Sparkles, Banknote, ChevronDown, UserX, AlertTriangle, Undo2 } from 'lucide-react'
 
 // 신청 상태별 표시(라벨·색). 011에서 partner_pending/partner_rejected 추가됨.
 const ENTRY_STATUS_META = {
@@ -33,6 +35,7 @@ const isPartnerBlocked = s => s === 'partner_pending' || s === 'partner_rejected
 
 export default function EntryManagement() {
   const { id } = useParams()
+  const [tournament, setTournament] = useState(null) // 환불 규정 계산용(date·registration_end)
   const [categories, setCategories] = useState([])
   const [entries, setEntries]       = useState([])
   const [activeCat, setActiveCat]   = useState(null)
@@ -59,6 +62,14 @@ export default function EntryManagement() {
     let alive = true
     async function load() {
      try {
+      // 대회 기본정보(환불 규정 시점 계산용) — 없어도 나머지는 진행(degrade)
+      const { data: tour } = await supabase
+        .from('tournaments')
+        .select('id,date,registration_end')
+        .eq('id', id)
+        .maybeSingle()
+      if (alive) setTournament(tour ?? null)
+
       const { data: cats } = await supabase
         .from('tournament_categories')
         .select('*')
@@ -198,6 +209,41 @@ export default function EntryManagement() {
       setEntries(prev => prev.map(e => idSet.has(e.id) ? { ...e, payment_status: 'confirmed' } : e))
     } catch { /* 무시 — 다음 로드에서 재시도 */ }
     setConfirming(false)
+  }
+
+  // ── 환불 규정 자동 계산 (C3) ────────────────────────────────────────
+  // 입금 확인된 뒤 철회·거절된 신청 = 환불 대상. 취소 시점(대회일까지 남은 일수·
+  // 접수 마감 전후) 규정으로 환불액을 앱이 계산해 주최자는 금액 판단 없이 송금·
+  // 확정만 한다. 대회 당일·이후(노쇼·지각·응급)만 requiresReview 로 사람 확인.
+  const [refunding, setRefunding] = useState(false)
+  const refundOpt = useMemo(
+    () => ({ tournamentDate: tournament?.date, registrationEnd: tournament?.registration_end }),
+    [tournament],
+  )
+  const refundPending = useMemo(() => {
+    const left = ['withdrawn', 'rejected', 'partner_rejected']
+    return entries
+      .filter(e => e.payment_status === 'confirmed' && left.includes(e.entry_status))
+      .map(e => {
+        const fee = Number(catById[e.category_id]?.entry_fee) || 0
+        return { entry: e, calc: computeRefund({ fee, paymentStatus: 'confirmed', ...refundOpt }) }
+      })
+  }, [entries, catById, refundOpt])
+  const refundAuto   = useMemo(() => refundPending.filter(r => r.calc.applicable && !r.calc.requiresReview), [refundPending])
+  const refundReview = useMemo(() => refundPending.filter(r => r.calc.requiresReview), [refundPending])
+  const [showRefund, setShowRefund] = useState(false)
+
+  // 환불 완료 처리 (payment_status='refunded'). 실제 송금은 무통장 계좌이체라 사람이 보냄.
+  async function markRefunded(list) {
+    const ids = (list ?? []).map(r => r.entry.id)
+    if (!ids.length || refunding) return
+    setRefunding(true)
+    try {
+      await supabase.from('tournament_entries').update({ payment_status: 'refunded' }).in('id', ids)
+      const idSet = new Set(ids)
+      setEntries(prev => prev.map(e => idSet.has(e.id) ? { ...e, payment_status: 'refunded' } : e))
+    } catch { /* 무시 — 다음 로드에서 재시도 */ }
+    setRefunding(false)
   }
 
   // 안전한 신청 일괄 자동 승인
@@ -430,6 +476,116 @@ export default function EntryManagement() {
                     )}
                   </>
                 )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 환불 처리 (C3) — 취소 시점 규정으로 환불액 자동 계산 */}
+      {hasFee && refundPending.length > 0 && (
+        <div className="px-4 pt-3">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            <button
+              onClick={() => setShowRefund(v => !v)}
+              className="w-full flex items-center justify-between gap-3 p-4 text-left"
+            >
+              <div className="flex items-start gap-2">
+                <Undo2 size={18} className="text-[#C60C30] mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-bold text-sm">환불 처리 · 규정 자동 계산</p>
+                  <p className="text-xs text-gray-400 leading-relaxed mt-0.5">
+                    입금 후 취소·거절된 신청의 환불액을 <b>취소 시점 규정</b>으로 계산해요.
+                    {' '}환불 대기 <b className="text-[#C60C30]">{refundPending.length}건</b>
+                    {refundAuto.length > 0 && (
+                      <> · 규정 환불 합계 <b className="text-[#003478]">
+                        {formatWon(refundAuto.reduce((s, r) => s + (r.calc.amount || 0), 0))}
+                      </b></>
+                    )}
+                  </p>
+                </div>
+              </div>
+              <ChevronDown size={18} className={`text-gray-400 shrink-0 transition ${showRefund ? 'rotate-180' : ''}`} />
+            </button>
+
+            {showRefund && (
+              <div className="px-4 pb-4 border-t border-gray-50 pt-3">
+                {/* 규정 요약 */}
+                <div className="bg-gray-50 rounded-xl p-3 mb-3">
+                  <p className="text-[11px] font-semibold text-gray-500 mb-1">환불 규정(취소 시점 기준)</p>
+                  <ul className="text-[11px] text-gray-500 leading-relaxed space-y-0.5">
+                    {policyLines().map((l, i) => <li key={i}>{l}</li>)}
+                  </ul>
+                </div>
+
+                {/* 규정 자동 계산 — 금액 확정, 송금 후 완료 처리 */}
+                {refundAuto.length > 0 && (
+                  <>
+                    <button
+                      onClick={() => markRefunded(refundAuto)}
+                      disabled={refunding}
+                      className="w-full mb-2 py-2.5 rounded-xl bg-[#C60C30] text-white text-sm font-bold
+                                 active:scale-[.98] transition disabled:opacity-50"
+                    >
+                      {refunding
+                        ? '처리 중…'
+                        : `규정 환불 ${refundAuto.length}건 완료 처리 (${formatWon(refundAuto.reduce((s, r) => s + (r.calc.amount || 0), 0))})`}
+                    </button>
+                    <div className="space-y-1.5">
+                      {refundAuto.map(({ entry: e, calc }) => (
+                        <div key={e.id} className="flex items-center gap-2 bg-red-50/60 rounded-xl px-3 py-2">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold truncate">
+                              {e.player1?.name}{e.player2 && ` · ${e.player2.name}`}
+                            </p>
+                            <p className="text-[11px] text-gray-500 truncate">{refundLineText(calc)}</p>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className="text-sm font-black text-[#C60C30]">{formatWon(calc.amount)}</p>
+                            <button
+                              onClick={() => markRefunded([{ entry: e, calc }])}
+                              disabled={refunding}
+                              className="text-[11px] font-bold text-[#003478] active:opacity-70 disabled:opacity-50"
+                            >
+                              환불 완료
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {/* 사람 확인 — 대회 당일·이후(노쇼·지각·응급)·날짜 미정 */}
+                {refundReview.length > 0 && (
+                  <div className="mt-3 space-y-1.5">
+                    <p className="text-xs font-semibold text-amber-700 flex items-center gap-1">
+                      <AlertTriangle size={12} /> 직접 확인 — 환불 경계(예외)
+                    </p>
+                    {refundReview.map(({ entry: e, calc }) => (
+                      <div key={e.id} className="flex items-center gap-2 bg-amber-50 rounded-xl px-3 py-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold truncate">
+                            {e.player1?.name}{e.player2 && ` · ${e.player2.name}`}
+                          </p>
+                          <p className="text-[11px] text-amber-600 truncate">{calc.reason}</p>
+                        </div>
+                        <button
+                          onClick={() => markRefunded([{ entry: e, calc }])}
+                          disabled={refunding}
+                          className="shrink-0 px-2.5 py-1.5 rounded-lg bg-amber-500 text-white text-xs font-bold
+                                     active:opacity-80 disabled:opacity-50"
+                        >
+                          환불 완료
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <p className="mt-3 text-[11px] text-gray-400 leading-relaxed">
+                  실제 환불금 송금은 계좌이체로 직접 하시고, 보낸 뒤 "환불 완료"를 누르면 상태가 <b>환불됨</b>으로 바뀌어요.
+                </p>
               </div>
             )}
           </div>
