@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import {
@@ -12,7 +12,7 @@ import TopBar from '../../components/TopBar'
 import GradeChip from '../../components/GradeChip'
 import Spinner from '../../components/Spinner'
 import HelpChat from '../../components/HelpChat'
-import { MapPin, Calendar, Users, ChevronDown, ChevronUp, Shield, Lock, Search, X } from 'lucide-react'
+import { MapPin, Calendar, Users, ChevronDown, ChevronUp, Shield, Lock, Search, X, AlertTriangle } from 'lucide-react'
 
 // 복식 종목(파트너 필수) — 그 외(남단/여단)는 단식(혼자 신청)
 const DOUBLES_TYPES = ['남복', '여복', '혼복']
@@ -36,6 +36,7 @@ export default function TournamentDetail() {
   const [categories, setCategories] = useState([])
   const [myEntries, setMyEntries]   = useState([])
   const [loading, setLoading]       = useState(true)
+  const [loadError, setLoadError]   = useState(false) // 불러오기 실패(네트워크 등) → 재시도 안내
   const [selectedCat, setSelectedCat] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [success, setSuccess]       = useState(false)
@@ -81,8 +82,9 @@ export default function TournamentDetail() {
     return data ?? []
   }
 
-  useEffect(() => {
-    async function load() {
+  const load = useCallback(async () => {
+    setLoadError(false)
+    try {
       const { data: { user } } = await supabase.auth.getUser()
       const [{ data: t }, { data: c }] = await Promise.all([
         supabase.from('tournaments').select('*').eq('id', id).single(),
@@ -120,9 +122,18 @@ export default function TournamentDetail() {
       setCategories(c ?? [])
       setProfile(p)
       setLoading(false)
+    } catch (e) {
+      // 네트워크·일시 오류로 조회가 던지면 스피너에 영영 갇히지 않도록 에러 화면으로 폴백
+      console.error('[대회 상세] 불러오기 실패:', e)
+      setLoadError(true)
+      setLoading(false)
     }
-    load()
   }, [id])
+
+  useEffect(() => { load() }, [load])
+
+  // 재시도: 스피너를 다시 띄우고 load 재실행
+  const retry = useCallback(() => { setLoading(true); load() }, [load])
 
   // ── 파트너 검색 (전화번호 정확일치 → id / 이름 부분일치 리스트) ──
   async function searchPartner() {
@@ -228,6 +239,20 @@ export default function TournamentDetail() {
   }
 
   if (loading) return <div className="flex justify-center py-20"><Spinner size={36} /></div>
+  if (loadError) return (
+    <div className="py-20 flex flex-col items-center text-center gap-3 px-6">
+      <AlertTriangle size={30} className="text-[#C60C30]" />
+      <p className="text-sm font-bold text-gray-700">대회 정보를 불러오지 못했어요</p>
+      <p className="text-xs text-gray-500">인터넷 연결을 확인한 뒤 다시 시도해 주세요.</p>
+      <button
+        onClick={retry}
+        className="mt-1 px-5 py-2.5 rounded-xl text-sm font-bold text-white active:opacity-80"
+        style={{ background: '#003478' }}
+      >
+        다시 시도
+      </button>
+    </div>
+  )
   if (!tournament) return <div className="text-center py-20 text-gray-400">대회를 찾을 수 없습니다.</div>
 
   const unit      = tournament.unit ?? 'gu'

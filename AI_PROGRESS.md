@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-12 — [하드닝·선수UI] 완주 종점·시작점(Results·TournamentDetail) 로드 실패 복구 — 무한 스피너 제거 스윕 ②
+
+- **선수 완주 종점(결과·급수·상장)과 시작점(신청·결제) 로드 에러 상태 — 무한 스피너 제거**
+  - 파일: `src/pages/player/Results.jsx`, `src/pages/player/TournamentDetail.jsx`
+  - 요약: 직전 런이 선수 허브 MyMatches 에 처음 도입한 로드 에러/재시도 패턴을, 원장이 "다음 하드닝 후보"로 명시한 **나머지 선수 페이지**로 확장(안티스톨: 직전은 MyMatches 한 페이지, 이번은 **다른 두 페이지**·같은 패턴이라 스윕 진행). **선정 이유(티어1 완주 차단)**: 6개 선수 페이지 중 완주를 실제로 막는 건 **결과 종점(`Results` — 순위·급수·상장·하이라이트)**와 **신청 시작점(`TournamentDetail` — 신청·결제·챗봇)** 둘(Home/Ranking/Profile/Tournaments 는 탐색·조회라 후순위). **진단(코드 실측)**: 두 페이지 `load()` 모두 최상위 try-catch도 에러 상태도 없이 여러 `await`(getUser·tournaments.single·categories·entries·pools·matches / profiles·파트너 이력)를 직렬 실행 → 어느 하나라도 네트워크 flap 으로 throw 하면 `setLoading(false)` 에 영영 도달 못하고 스피너에 갇힌다(재시도 버튼 없음). 게다가 `TournamentDetail` 은 실패 시 `tournament=null` 이라 **"대회를 찾을 수 없습니다"** 오표시(존재하는 대회를 없다고 오인)로 선수가 신청을 포기. **실패 시나리오**: 대회 당일 체육관 와이파이 순간 끊김에 결과 화면을 열면 무한 로딩 → 선수가 자기 순위·급수 반영·상장을 못 봐 완주가 조용히 끊긴다("완주를 막는 것" 최우선 티어). **구현(MyMatches 패턴으로 정렬·비파괴)**: 두 페이지의 `load` 를 `useCallback([id])` 로 승격 + 본문 전체 try-catch(실패 시 `loadError=true`+`setLoading(false)`로 스피너 탈출), `useEffect(()=>load(),[load])`, `retry`(스피너 재점화+load 재실행) 신설, 렌더에 `loadError` 분기(AlertTriangle+"…불러오지 못했어요·인터넷 확인 후 다시 시도"+파랑 "다시 시도" 버튼·초보용 문구)를 **`!tournament`(진짜 없음) 분기 앞**에 삽입해 네트워크 오류를 "없음" 오표시와 분리. 기존 내부 try-catch(mmr_history·파트너 이력 degrade)·신청/공유/파트너 로직·성공 경로 전부 불변(grep: Results loadError 49·retry 117·에러 렌더 120 / TournamentDetail loadError 39·retry 136·에러 렌더 242). `npm test` **158/158 통과**, `npx vite build` green(deps 설치 후). 다음 하드닝 후보: Home/Ranking/Profile/Tournaments 동일 패턴 확장·접근성(aria)·referee 화면 빈/에러 상태. (자동화율 주최자 93%·선수 88%·운영 88% 불변 — 선수 완주 종점·시작점 신뢰성 하드닝)
+
 ## 2026-07-12 — [하드닝·선수UI] MyMatches 로드 실패 복구 — 무한 스피너 제거(try-catch + 에러 상태 + 다시 시도)
 
 - **선수 허브(MyMatches) 로드 에러 상태 — "완주를 막던 무한 스피너" 제거**

@@ -27,6 +27,27 @@
 | C12 | 대회 탐색·파트너·전적 | ✅ | `discover.js`+`partners.js`+`record.js` — **대회 탐색 추천** ✅ + **파트너 매칭** ✅ + **통합 전적 뷰** ✅. **대회 탐색 추천(`discover.js`)**: `regionTokens`(venue·주소에서 17시도+시/군/구 세밀 토큰 추출, 광역시/특별시 중복 제외)·`preferredRegions`(내 참가 이력 대회의 지역 빈도 집계)·`ddayOf`(로컬 자정 기준 D-day)·`recommendTournaments`(접수중·미신청·미래 대회 중 급수 참가 가능 종목이 있는 것만 골라 지역 매칭·마감 임박·대회일 근접으로 점수화, 근거 배열 반환). 자격 판정은 lib/grades.js로 승격한 공용 `checkEligibility`를 fitOf로 주입(신청 화면과 100% 동일 로직·중복 0). Tournaments.jsx가 로그인 선수의 프로필·참가 이력을 1회 로드→"🎯 나에게 맞는 대회" 카드+근거 칩(급수 파랑/지역 초록/마감 빨강·주황) 노출(전체 탭·검색 없을 때만, 실패 시 검색만 degrade). 파트너 매칭·통합 전적은 아래 유지. 통합 전적(`record.js`): `computeCareerRecord`가 내가 낀 전 대회 완료 경기(+세트)에서 총 승패·승률·세트/점수 득실·풀세트·부전 카운트와 상대 선수별 head-to-head(`byOpponent`)를 집계, `opponentPlayers`(팀에서 나 제외·게스트팀명 폴백)·`hasCareerRecord`. Profile "대회 커리어" 탭에 통합 전적 카드(승/패/승률 게이지·세부지표)+상대 전적 카드(자주 만난 상대별 W/L 최대 8명)를 추가, 내 엔트리 id 배치로 tournament_matches 조회(try-catch degrade, 헤더 mmr delta 근사와 달리 실경기 기준 정확 전적). 파트너 매칭: `collectPastPartners`(내가 낀 복식 신청 이력에서 상대를 모아 함께 출전 횟수·최근순 집계)+`rankPartnerSuggestions`(호출부 checkEligibility 주입 → 종목 자격 통과 먼저·횟수·최근순)+`partnerReason`. TournamentDetail 복식 신청 폼에 "추천 파트너 · 지난 대회에 함께 나간 분들" 카드(자격 통과 최대 4명, "다시 초대" 원터치→selectPartner). 대진DB 개인화 추천으로 검색-only 마찰 완화. 잔여: 대회 탐색 추천(급수·지역 맞춤 대회 추천)만 남음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-12 · 하드닝(UI 에러 상태 ② — 완주 종점·시작점 선수 페이지 로드 실패 복구) · `src/pages/player/Results.jsx`·`src/pages/player/TournamentDetail.jsx`
+  · **선수 완주의 시작(신청)과 끝(결과·급수·상장)을 막던 "무한 스피너" 제거** — 직전 런이 선수 허브
+    MyMatches 에 처음 도입한 로드 에러/재시도 패턴을, 원장이 "다음 하드닝 후보"로 명시한 **나머지 선수
+    페이지**로 확장(안티스톨: 직전은 MyMatches 한 페이지, 이번은 **다른 두 페이지**·같은 패턴이라 정체가
+    아니라 스윕 진행). **선정 이유(티어1 완주 차단)**: 6개 선수 페이지 중 완주를 실제로 막는 건 **결과 종점
+    (`Results` — 순위·급수·상장·하이라이트)**와 **신청 시작점(`TournamentDetail` — 신청·결제·챗봇)** 둘이다
+    (Home/Ranking/Profile/Tournaments 는 탐색·조회라 후순위). **진단(코드 실측)**: 두 페이지 `load()` 모두
+    최상위 try-catch 도 에러 상태도 없이 여러 `await`(getUser·tournaments.single·categories·entries·pools·
+    matches / profiles·파트너 이력)를 직렬 실행 → **어느 하나라도 네트워크 flap 으로 throw 하면**
+    `setLoading(false)` 에 영영 도달 못하고 스피너에 갇힌다(재시도 버튼도 없음). 게다가 `TournamentDetail`
+    은 실패 시 `tournament=null` 이라 **"대회를 찾을 수 없습니다"** 오표시(존재하는 대회를 없다고 오인) →
+    선수가 신청 자체를 포기. **실패 시나리오**: 대회 당일 체육관 와이파이 순간 끊김에 결과 화면을 열면
+    무한 로딩 → 선수가 자기 순위·급수 반영·상장을 못 봐 완주가 조용히 끊긴다. **구현(MyMatches 패턴으로
+    정렬·비파괴)**: 두 페이지의 `load` 를 `useCallback([id])` 로 승격+본문 전체 try-catch(실패 시
+    `loadError=true`+`setLoading(false)`), `useEffect(()=>load(),[load])`, `retry`(스피너 재점화+load 재실행)
+    신설, 렌더에 `loadError` 분기(AlertTriangle+"…불러오지 못했어요·인터넷 확인 후 다시 시도"+파랑 "다시 시도"
+    버튼·초보용 문구) 를 **`!tournament`(진짜 없음) 분기 앞**에 삽입해 네트워크 오류를 "없음" 오표시와 분리.
+    기존 내부 try-catch(mmr_history·파트너 이력 degrade)·신청/공유/파트너 로직·성공 경로 전부 불변
+    (grep: Results loadError 49·retry 117·에러 렌더 120 / TournamentDetail loadError 39·retry 136·에러 렌더 242).
+    `npm test` **158/158**·`npx vite build` green. 다음 하드닝 후보: Home/Ranking/Profile/Tournaments 동일
+    패턴 확장·접근성(aria)·referee 화면 빈/에러 상태. (선수 88% 유지 — 완주 종점·시작점 신뢰성 하드닝)
 - 2026-07-12 · 하드닝(UI 에러 상태 — 선수 허브 MyMatches 로드 실패 복구) · `src/pages/player/MyMatches.jsx`
   · **선수 완주를 막던 "무한 스피너" 구멍 제거** — 원장이 6런 넘게 "다음 하드닝 후보"로 미뤄 온
     **"UI 빈/로딩/에러 상태 세부"**를 처음으로 잡았다(안티스톨: 직전 여러 런은 전부 LiveDashboard/notify

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { prizeLabel } from '../../lib/tournament'
@@ -6,7 +6,7 @@ import { certRankInfo, buildCertificate, buildCertificates, printCertificates } 
 import { buildPlayerHighlight, highlightShareText } from '../../lib/highlight'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
-import { Trophy, Hourglass, Users, GitBranch, Medal, Award, Sparkles, Share2 } from 'lucide-react'
+import { Trophy, Hourglass, Users, GitBranch, Medal, Award, Sparkles, Share2, AlertTriangle } from 'lucide-react'
 
 // ─── 헬퍼 ────────────────────────────────────────────────────────
 
@@ -46,9 +46,11 @@ export default function Results() {
   const [userId, setUserId]         = useState(null)
   const [mmrDelta, setMmrDelta]     = useState(null) // 이 대회 내 MMR 총 변동
   const [loading, setLoading]       = useState(true)
+  const [loadError, setLoadError]   = useState(false) // 불러오기 실패(네트워크 등) → 재시도 안내
 
-  useEffect(() => {
-    async function load() {
+  const load = useCallback(async () => {
+    setLoadError(false)
+    try {
       const { data: { user } } = await supabase.auth.getUser()
       setUserId(user?.id ?? null)
 
@@ -101,11 +103,34 @@ export default function Results() {
       setMatches(mts)
       setActiveCat(cats?.[0]?.id ?? null)
       setLoading(false)
+    } catch (e) {
+      // 네트워크·일시 오류로 조회가 던지면 스피너에 영영 갇히지 않도록 에러 화면으로 폴백
+      console.error('[대회 결과] 불러오기 실패:', e)
+      setLoadError(true)
+      setLoading(false)
     }
-    load()
   }, [id])
 
+  useEffect(() => { load() }, [load])
+
+  // 재시도: 스피너를 다시 띄우고 load 재실행
+  const retry = useCallback(() => { setLoading(true); load() }, [load])
+
   if (loading) return <div className="flex justify-center py-20"><Spinner size={36} /></div>
+  if (loadError) return (
+    <div className="py-20 flex flex-col items-center text-center gap-3 px-6">
+      <AlertTriangle size={30} className="text-[#C60C30]" />
+      <p className="text-sm font-bold text-gray-700">결과를 불러오지 못했어요</p>
+      <p className="text-xs text-gray-500">인터넷 연결을 확인한 뒤 다시 시도해 주세요.</p>
+      <button
+        onClick={retry}
+        className="mt-1 px-5 py-2.5 rounded-xl text-sm font-bold text-white active:opacity-80"
+        style={{ background: '#003478' }}
+      >
+        다시 시도
+      </button>
+    </div>
+  )
   if (!tournament) return <div className="text-center py-20 text-gray-400">대회를 찾을 수 없습니다.</div>
 
   const isCompleted = tournament.status === 'completed'
