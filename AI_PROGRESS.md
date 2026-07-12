@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-12 — [하드닝·주최자UI] 제어 페이지(TournamentManage·EntryManagement) 로드 실패 복구 — 무한 스피너 제거 스윕 ④
+
+- **자동화 제어를 켜지도 못하게 막던 "무한 스피너"를 주최자 계층에서 제거 — 로드 try-catch + 에러 상태 + 다시 시도**
+  - 파일: `src/pages/organizer/TournamentManage.jsx`, `src/pages/organizer/EntryManagement.jsx`
+  - 요약: 직전 4런이 선수(MyMatches·Results·TournamentDetail)·심판(Scoreboard) UI 로드 에러 상태와 autoDraw 회귀 테스트를 스윕했다. 안티스톨: 같은 로드-에러 패턴이지만 **아직 미커버였던 주최자 계층**으로 확장하되 대상은 **완주를 실제로 여는 최상위 제어 화면**으로 골랐다. **선정 이유(티어1·완주 차단, 선수 페이지보다 상위)**: 이전 UI 스윕이 player/referee 만 덮고 **organizer 페이지는 통째로 미검사**였는데, 코드 실측 결과 주최자의 두 핵심 제어 화면이 무방비였다 — `TournamentManage`(305~349행 load(): tournaments·categories·approved count 루프·matches·entries)와 `EntryManagement`(56~130행 load(): categories·entries 조인·podium 이력) 둘 다 **최상위 try-catch도 에러 상태도 없이** 여러 await 를 직렬 실행 → 어느 하나라도 네트워크 flap 으로 throw 하면 setLoading(false)(TM:346·EM:101)에 영영 못 닿아 스피너에 갇힌다(재시도 버튼 없음). 이 두 화면은 **무인 자동 진행 토글·무인 자동 승인·상태 전환·대진 자동 생성·정산·캠페인**이 모두 사는 곳이라 여기서 잠기면 선수 한 명의 화면이 아니라 **대회 전체의 자동화 제어가 시작조차 불능**(완주 차단 티어1). **실패 시나리오**: 대회 당일 체육관 와이파이 순간 끊김에 주최자가 관리 화면을 열면 무한 로딩 → 무인 진행을 못 켜고 신청 승인도 못 해 오케스트레이터가 아예 안 도는데 원인도 안 보인다. **구현(선수 페이지 패턴으로 정렬·비파괴)**: 두 페이지 load 본문 전체를 try-catch 로 감싸 throw 시 loadError=true+setLoading(false) 탈출, let alive 가드(retryTick 재실행/언마운트 후 setState 방지)+성공 경로에 if(!alive) return, retryTick 상태로 effect deps [id, retryTick], retryLoad()(loadError 리셋·loading 재점화·retryTick++), 렌더 if(loading) 바로 뒤에 loadError 분기(AlertTriangle+"…정보를 불러오지 못했어요·인터넷 확인 후 다시 시도"+파랑 "다시 시도" 버튼·초보용 문구). EntryManagement 의 기존 노쇼 예측 내부 try-catch(advisory degrade)는 outer try 안에 그대로 둬 예측 실패가 페이지를 못 막게 유지, AlertTriangle 을 lucide import 에 추가. 상태 전환·무인 토글·대진 생성·정산·입금 매칭·승인 로직 전부 불변(grep: TM loadError 271·retryLoad 362·에러 렌더 590 / EM loadError 42·retryLoad 143·에러 렌더 236). `npm test` **172/172 통과**, `npx vite build` green(deps 설치 후). 다음 하드닝 후보: 나머지 주최자 페이지(BracketGenerator·CourtView·Dashboard)·선수 Home/Ranking/Profile/Tournaments 동일 패턴·접근성(aria). (자동화율 주최자 93%·선수 88%·심판 83%·운영 88% 불변 — 자동화 제어 화면 신뢰성 하드닝, 완주 차단 티어1 구멍 봉인)
+
 ## 2026-07-12 — [하드닝·테스트] 자동 대진 생성 autoDraw.js(C2/C5) 회귀 테스트 14개 + Supabase 스텁 count/head 지원
 
 - **완주를 여는 최대 엔진 autoDraw.js 의 커밋된 테스트 0 → 14개(무인 대회 시작 경로 회귀 그물)**

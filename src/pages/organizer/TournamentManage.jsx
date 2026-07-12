@@ -268,6 +268,8 @@ export default function TournamentManage() {
   const [entries, setEntries] = useState([])   // 정산용 (payment_status·amount)
   const [matches, setMatches] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)  // 로드 실패(네트워크 flap) 복구
+  const [retryTick, setRetryTick] = useState(0)
   const [copied, setCopied] = useState(false)
   const [now, setNow] = useState(Date.now())
 
@@ -303,50 +305,61 @@ export default function TournamentManage() {
   const liveUrl = `${window.location.origin}/live/${id}`
 
   useEffect(() => {
+    let alive = true
     async function load() {
-      const [{ data: t }, { data: cats }] = await Promise.all([
-        supabase.from('tournaments').select('*').eq('id', id).single(),
-        supabase
-          .from('tournament_categories')
-          .select('*')
-          .eq('tournament_id', id),
-      ])
-
-      const counts = {}
-      for (const cat of cats ?? []) {
-        const { count } = await supabase
-          .from('tournament_entries')
-          .select('*', { count: 'exact', head: true })
-          .eq('category_id', cat.id)
-          .eq('entry_status', 'approved')
-        counts[cat.id] = count ?? 0
-      }
-
-      // 대진표 존재/완료 판정용 경기 상태 + 정산용 신청 내역 (있으면)
-      let ms = []
-      let ents = []
-      const catIds = (cats ?? []).map(c => c.id)
-      if (catIds.length) {
-        const [{ data: md }, { data: ed }] = await Promise.all([
-          supabase.from('tournament_matches').select('id, status').in('category_id', catIds),
+      try {
+        const [{ data: t }, { data: cats }] = await Promise.all([
+          supabase.from('tournaments').select('*').eq('id', id).single(),
           supabase
-            .from('tournament_entries')
-            .select('id, category_id, payment_status, payment_amount, entry_status')
-            .in('category_id', catIds),
+            .from('tournament_categories')
+            .select('*')
+            .eq('tournament_id', id),
         ])
-        ms = md ?? []
-        ents = ed ?? []
-      }
 
-      setTournament(t)
-      setCategories(cats ?? [])
-      setEntryCounts(counts)
-      setEntries(ents)
-      setMatches(ms)
-      setLoading(false)
+        const counts = {}
+        for (const cat of cats ?? []) {
+          const { count } = await supabase
+            .from('tournament_entries')
+            .select('*', { count: 'exact', head: true })
+            .eq('category_id', cat.id)
+            .eq('entry_status', 'approved')
+          counts[cat.id] = count ?? 0
+        }
+
+        // 대진표 존재/완료 판정용 경기 상태 + 정산용 신청 내역 (있으면)
+        let ms = []
+        let ents = []
+        const catIds = (cats ?? []).map(c => c.id)
+        if (catIds.length) {
+          const [{ data: md }, { data: ed }] = await Promise.all([
+            supabase.from('tournament_matches').select('id, status').in('category_id', catIds),
+            supabase
+              .from('tournament_entries')
+              .select('id, category_id, payment_status, payment_amount, entry_status')
+              .in('category_id', catIds),
+          ])
+          ms = md ?? []
+          ents = ed ?? []
+        }
+
+        if (!alive) return
+        setTournament(t)
+        setCategories(cats ?? [])
+        setEntryCounts(counts)
+        setEntries(ents)
+        setMatches(ms)
+        setLoading(false)
+      } catch {
+        // 네트워크 flap 등으로 어느 조회든 throw 하면 무한 스피너에 갇히지 않도록 탈출
+        if (alive) { setLoadError(true); setLoading(false) }
+      }
     }
     load()
-  }, [id])
+    return () => { alive = false }
+  }, [id, retryTick])
+
+  // 재시도: 스피너를 다시 띄우고 load 재실행
+  function retryLoad() { setLoadError(false); setLoading(true); setRetryTick(t => t + 1) }
 
   // 마감 시각·대회 당일 경과를 감지하려면 시계가 흘러야 한다 (20초 틱)
   useEffect(() => {
@@ -574,6 +587,20 @@ export default function TournamentManage() {
   }
 
   if (loading) return <div className="flex justify-center py-20"><Spinner /></div>
+  if (loadError) return (
+    <div className="py-20 flex flex-col items-center text-center gap-3 px-6">
+      <AlertTriangle size={30} className="text-[#C60C30]" />
+      <p className="text-sm font-bold text-gray-700">대회 관리 정보를 불러오지 못했어요</p>
+      <p className="text-xs text-gray-500">인터넷 연결을 확인한 뒤 다시 시도해 주세요.</p>
+      <button
+        onClick={retryLoad}
+        className="mt-1 px-5 py-2.5 rounded-xl text-sm font-bold text-white active:opacity-80"
+        style={{ background: '#003478' }}
+      >
+        다시 시도
+      </button>
+    </div>
+  )
 
   const totalEntries = Object.values(entryCounts).reduce((s, n) => s + n, 0)
 

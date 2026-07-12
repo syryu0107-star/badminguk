@@ -8,7 +8,7 @@ import { assessSandbag, worseLevel, SANDBAG_STYLE } from '../../lib/sandbag'
 import { planAutoApprovals } from '../../lib/stateMachine'
 import { parseDeposits, matchDeposits } from '../../lib/payment'
 import { buildNoShowIndex, recommendWaitlist, predictNoShow, NOSHOW_STYLE } from '../../lib/noshowPredict'
-import { Check, X, ShieldAlert, Trophy, Clock, Sparkles, Banknote, ChevronDown, UserX } from 'lucide-react'
+import { Check, X, ShieldAlert, Trophy, Clock, Sparkles, Banknote, ChevronDown, UserX, AlertTriangle } from 'lucide-react'
 
 // 신청 상태별 표시(라벨·색). 011에서 partner_pending/partner_rejected 추가됨.
 const ENTRY_STATUS_META = {
@@ -39,6 +39,8 @@ export default function EntryManagement() {
   const [podium, setPodium]         = useState({}) // playerId → { champ, medal }
   const [noshowIdx, setNoshowIdx]   = useState({}) // playerId → { appearances, noShows } (노쇼 예측)
   const [loading, setLoading]       = useState(true)
+  const [loadError, setLoadError]   = useState(false)  // 로드 실패(네트워크 flap) 복구
+  const [retryTick, setRetryTick]   = useState(0)
   const [approving, setApproving]   = useState(false)
 
   // 입금 자동 매칭 (C3) — 무통장 입금 내역 붙여넣기 대조
@@ -54,13 +56,15 @@ export default function EntryManagement() {
   const autoRunRef = useRef(false)
 
   useEffect(() => {
+    let alive = true
     async function load() {
+     try {
       const { data: cats } = await supabase
         .from('tournament_categories')
         .select('*')
         .eq('tournament_id', id)
       const catIds = cats?.map(c => c.id) ?? []
-      if (catIds.length === 0) { setLoading(false); return }
+      if (catIds.length === 0) { if (alive) setLoading(false); return }
 
       const { data: es } = await supabase
         .from('tournament_entries')
@@ -94,6 +98,7 @@ export default function EntryManagement() {
         })
       }
 
+      if (!alive) return
       setCategories(cats ?? [])
       setEntries(es ?? [])
       setPodium(map)
@@ -122,12 +127,20 @@ export default function EntryManagement() {
             if (ms?.length) matchRows.push(...ms)
           }
           const idx = buildNoShowIndex({ historyEntries: hEntries ?? [], matches: matchRows })
-          setNoshowIdx(Object.fromEntries(idx))
+          if (alive) setNoshowIdx(Object.fromEntries(idx))
         }
       } catch { /* 무시 — 예측 없이 진행 */ }
+     } catch {
+       // 네트워크 flap 등으로 신청 조회가 throw 하면 무한 스피너에 갇히지 않도록 탈출
+       if (alive) { setLoadError(true); setLoading(false) }
+     }
     }
     load()
-  }, [id])
+    return () => { alive = false }
+  }, [id, retryTick])
+
+  // 재시도: 스피너를 다시 띄우고 load 재실행
+  function retryLoad() { setLoadError(false); setLoading(true); setRetryTick(t => t + 1) }
 
   async function updateEntry(entryId, status) {
     await supabase.from('tournament_entries').update({ entry_status: status }).eq('id', entryId)
@@ -220,6 +233,20 @@ export default function EntryManagement() {
   }, [autoApprove, buckets.auto.length, approving])
 
   if (loading) return <div className="flex justify-center py-20"><Spinner /></div>
+  if (loadError) return (
+    <div className="py-20 flex flex-col items-center text-center gap-3 px-6">
+      <AlertTriangle size={30} className="text-[#C60C30]" />
+      <p className="text-sm font-bold text-gray-700">신청 관리 정보를 불러오지 못했어요</p>
+      <p className="text-xs text-gray-500">인터넷 연결을 확인한 뒤 다시 시도해 주세요.</p>
+      <button
+        onClick={retryLoad}
+        className="mt-1 px-5 py-2.5 rounded-xl text-sm font-bold text-white active:opacity-80"
+        style={{ background: '#003478' }}
+      >
+        다시 시도
+      </button>
+    </div>
+  )
 
   const catEntries = entries.filter(e => e.category_id === activeCat)
   const approved   = catEntries.filter(e => e.entry_status === 'approved').length
