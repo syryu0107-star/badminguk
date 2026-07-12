@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { Clock, MapPin, Wifi, Trophy, RefreshCw, ListOrdered } from 'lucide-react';
+import { Clock, MapPin, Wifi, Trophy, RefreshCw, ListOrdered, AlertTriangle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { calculatePoolStandings } from '../../lib/tournament';
 import ConnectionStatus from '../../components/ConnectionStatus';
@@ -265,6 +265,7 @@ export default function LiveScore() {
   const [activeCatId, setActiveCatId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [notFound, setNotFound] = useState(false); // 진짜 없는 대회(404) vs 네트워크 오류 구분
   const [lastRefresh, setLastRefresh] = useState(null);
   const [rtState, setRtState] = useState('connecting'); // 실시간 채널 상태 (7-6)
 
@@ -356,13 +357,23 @@ export default function LiveScore() {
 
       setLastRefresh(new Date());
       setError(null);
+      setNotFound(false);
     } catch (err) {
       console.error('[LiveScore] load error', err);
       setError(err.message ?? '데이터를 불러오지 못했습니다.');
+      // PostgREST: 존재하지 않는 대회는 .single() 이 PGRST116 로 반환 → 진짜 없음
+      setNotFound(err?.code === 'PGRST116');
     } finally {
       setLoading(false);
     }
   }, [id]);
+
+  // 에러 화면 "다시 시도": 스피너 재점화 후 재조회
+  const retry = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    loadData();
+  }, [loadData]);
 
   // 첫 로드
   useEffect(() => {
@@ -506,12 +517,32 @@ export default function LiveScore() {
     );
   }
 
-  if (error || !tournament) {
+  // 아직 대회 데이터가 없을 때만 전체 화면을 대체한다.
+  // (이미 한 번 로드된 뒤 백그라운드 폴링이 실패해도 전광판을 지우지 않고 그대로 유지 → 화면 깜빡임 방지)
+  if (!tournament) {
+    if (notFound) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 gap-3 px-4">
+          <Trophy size={40} className="text-gray-300" />
+          <p className="text-gray-700 font-semibold">대회를 찾을 수 없습니다.</p>
+          <p className="text-gray-400 text-sm text-center">올바른 링크인지 확인해주세요.</p>
+        </div>
+      );
+    }
+    // 네트워크 오류 등 일시적 실패: 다시 시도 버튼 제공 (체육관 와이파이 순간 끊김 복구)
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 gap-3 px-4">
-        <Trophy size={40} className="text-gray-300" />
-        <p className="text-gray-700 font-semibold">대회를 찾을 수 없습니다.</p>
-        <p className="text-gray-400 text-sm text-center">{error ?? '올바른 링크인지 확인해주세요.'}</p>
+        <AlertTriangle size={40} className="text-gray-300" />
+        <p className="text-gray-700 font-semibold">경기 정보를 불러오지 못했어요.</p>
+        <p className="text-gray-400 text-sm text-center">인터넷 연결을 확인한 뒤 다시 시도해 주세요.</p>
+        <button
+          onClick={retry}
+          className="mt-1 inline-flex items-center gap-2 px-6 py-2.5 rounded-full font-bold text-sm text-white shadow-md active:scale-95 transition"
+          style={{ backgroundColor: '#003478' }}
+        >
+          <RefreshCw size={16} />
+          다시 시도
+        </button>
       </div>
     );
   }

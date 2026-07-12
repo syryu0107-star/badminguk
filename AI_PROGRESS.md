@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-12 — [하드닝·공개/운영UI] 전광판(LiveScore)·코트 현황판(CourtView) 로드 실패 복구 — 대형 디스플레이 스윕 ⑥
+
+- **체육관 대형 화면 두 곳(공개 전광판·주최자 코트 현황판)의 로드 실패 UX 봉인 — 폴링 실패 깜빡임 제거 + 에러 상태 + 다시 시도**
+  - 파일: `src/pages/public/LiveScore.jsx`, `src/pages/organizer/CourtView.jsx`
+  - 요약: 직전 5런이 선수(MyMatches·Results·TournamentDetail)·심판(Scoreboard)·주최자 제어(TournamentManage·EntryManagement)·무인 심장부(LiveDashboard) 초기 로드 무한 스피너를 스윕했고, 남은 라이브 화면은 **관중·운영자가 보는 대형 디스플레이 두 곳**이었다. DoD 운영: "전광판 자동갱신이 무인 진행"이라 이 둘이 곧 무인 진행의 얼굴. **선정 이유(운영 완주 가시성·안티스톨)**: 스윕 다음 후보로 원장이 명시한 공개 LiveScore·CourtView 를 잡되, 코드 실측으로 **각기 다른 실질 버그** 확인. **① LiveScore(전광판)**: 렌더가 `if (error || !tournament)` 라 이미 대회가 로드된 뒤에도 **백그라운드 30초 폴링이 한 번만 throw 하면 `error`가 세팅돼 전광판 전체가 "대회를 찾을 수 없습니다" 에러 화면으로 뒤집힌다**(다음 폴링 성공까지 최대 30초). 프로젝터에 띄운 전광판이 와이파이 1초 끊김에 통째로 사라졌다 30초 뒤 복귀 + "대회 없음" 오표시(TournamentDetail 에서 이미 고친 패턴)·재시도 버튼 없음. **② CourtView(코트 현황판)**: `catch`가 `console.error`만 하고 **에러 상태가 아예 없어**, 첫 로드가 네트워크로 실패하면 조용히 빈 4코트 그리드(court_count 기본값)를 그려 "경기가 하나도 없는 것처럼" 오표시 + 재시도 없음. **구현(스윕 패턴 정렬·비파괴)**: (LiveScore) `notFound` 상태 추가(catch 에서 `err.code==='PGRST116'`=.single() 무행=진짜 404 구분), 렌더 가드를 `error||!tournament`→**`!tournament`**로 좁혀 **이미 로드된 전광판은 폴링이 실패해도 절대 안 지움**(깜빡임 제거), 데이터 없을 때만 notFound→"대회 없음"/그 외→AlertTriangle+"경기 정보를 불러오지 못했어요"+`retry`(스피너 재점화·loadData) 분기. (CourtView) `loadError` 상태 추가(try 진입 시 false·catch 시 true), 로딩 블록 뒤에 **`loadError && !tournament`**(첫 로드부터 데이터 전무)일 때만 다크 테마 에러 화면+AlertTriangle+`retry`, 이미 로드된 현황판은 폴링 실패해도 유지(프로젝터 깜빡임 방지). 두 화면의 realtime 구독·30초/15초 폴링·재연결 따라잡기·ConnectionStatus 전부 불변(에러 화면은 데이터 없을 때만), AlertTriangle 을 두 파일 lucide import 에 추가. `npm test` **172/172 통과**, `npx vite build` green(deps 설치 후). 배선 grep 확인(LiveScore notFound 268·retry 372·`!tournament) {` 522 / CourtView loadError 283·retry 361·`loadError && !tournament` 518). 이로써 완주에 관여하는 전 라이브 화면(선수·심판·주최자 제어·무인 심장부·**공개 전광판·코트 현황판**)이 로드 실패 방어를 갖춤. 다음 하드닝 후보: 나머지 주최자 페이지(BracketGenerator·Dashboard·CreateTournament)·선수 Home/Ranking/Profile/Tournaments·접근성(aria). (자동화율 주최자 93%·선수 88%·심판 83%·운영 88% 불변 — 무인 진행 전광판·코트 현황판 표시 신뢰성 하드닝)
+
 ## 2026-07-12 — [하드닝·주최자UI] 무인 진행 심장부(LiveDashboard) 초기 로드 실패 복구 — 무한 스피너 제거 스윕 ⑤
 
 - **무인 오케스트레이터가 시작조차 못 하게 막던 최상위 "무한 스피너" 봉인 — 로드 try-catch + 에러 상태 + 다시 시도**

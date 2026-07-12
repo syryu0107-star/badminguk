@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { Monitor, Clock, RefreshCw, Maximize, Minimize, ChevronRight } from 'lucide-react';
+import { Monitor, Clock, RefreshCw, Maximize, Minimize, ChevronRight, AlertTriangle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import ConnectionStatus from '../../components/ConnectionStatus';
 import { useOnline } from '../../lib/useOnline';
@@ -280,6 +280,7 @@ export default function CourtView() {
   const [categories, setCategories] = useState([]);
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false); // 첫 로드 실패(데이터 없음) 표시용
   const [refreshAt, setRefreshAt] = useState(null);
   const [isFull, setIsFull] = useState(false);
   const [rtState, setRtState] = useState('connecting'); // 실시간 채널 상태 (7-6)
@@ -297,6 +298,7 @@ export default function CourtView() {
   const fetchData = useCallback(async () => {
     if (!tournamentId) return;
     try {
+      setLoadError(false);
       const [{ data: trn }, { data: cats }] = await Promise.all([
         supabase
           .from('tournaments')
@@ -349,10 +351,18 @@ export default function CourtView() {
       setRefreshAt(new Date());
     } catch (err) {
       console.error('[CourtView] load error', err);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
   }, [tournamentId]);
+
+  // 에러 화면 "다시 시도": 스피너 재점화 후 재조회
+  const retry = useCallback(() => {
+    setLoading(true);
+    setLoadError(false);
+    fetchData();
+  }, [fetchData]);
 
   /* ── 폴링 폴백 ── */
   useEffect(() => {
@@ -498,6 +508,38 @@ export default function CourtView() {
         <style>{STYLES}</style>
         <RefreshCw size={48} color={T.sub} style={{ animation: 'cv-spin 1s linear infinite' }} />
         <p style={{ color: T.sub, fontSize: 24, margin: 0 }}>코트 현황을 불러오는 중...</p>
+      </div>
+    );
+  }
+
+  /* ── 로드 실패(데이터 없음) ── */
+  // 이미 한 번 로드된 뒤 백그라운드 폴링이 실패하면 화면을 지우지 않고 그대로 유지(프로젝터 깜빡임 방지),
+  // 첫 로드부터 실패해 보여줄 데이터가 전혀 없을 때만 에러 화면 + 다시 시도.
+  if (loadError && !tournament) {
+    return (
+      <div
+        className="cv-root"
+        style={{ background: T.bg, alignItems: 'center', justifyContent: 'center', gap: 20, padding: 24 }}
+      >
+        <style>{STYLES}</style>
+        <AlertTriangle size={48} color={T.sub} />
+        <p style={{ color: T.text, fontSize: 26, margin: 0, fontWeight: 700, textAlign: 'center' }}>
+          코트 현황을 불러오지 못했어요.
+        </p>
+        <p style={{ color: T.sub, fontSize: 18, margin: 0, textAlign: 'center' }}>
+          인터넷 연결을 확인한 뒤 다시 시도해 주세요.
+        </p>
+        <button
+          onClick={retry}
+          style={{
+            marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 8,
+            padding: '12px 28px', borderRadius: 999, border: 'none', cursor: 'pointer',
+            background: T.blue, color: '#fff', fontSize: 18, fontWeight: 700,
+          }}
+        >
+          <RefreshCw size={18} />
+          다시 시도
+        </button>
       </div>
     );
   }
