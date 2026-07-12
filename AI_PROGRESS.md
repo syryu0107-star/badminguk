@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-12 — [하드닝·주최자UI] 무인 진행 심장부(LiveDashboard) 초기 로드 실패 복구 — 무한 스피너 제거 스윕 ⑤
+
+- **무인 오케스트레이터가 시작조차 못 하게 막던 최상위 "무한 스피너" 봉인 — 로드 try-catch + 에러 상태 + 다시 시도**
+  - 파일: `src/pages/organizer/LiveDashboard.jsx`
+  - 요약: 직전 4런이 선수(MyMatches·Results·TournamentDetail)·심판(Scoreboard)·주최자 제어(TournamentManage·EntryManagement) 로드 에러 상태를 스윕했으나, 코드 실측 결과 **자동화의 핵심 화면 자체**인 `LiveDashboard`의 초기 `load()`(라인 136~147)가 여전히 최상위 try-catch·에러 상태 없이 `Promise.all`(tournaments.single·categories)을 실행하고 있었다. **선정 이유(티어1·완주 차단, 앞선 스윕보다 상위)**: LiveDashboard 는 **무인 자동 진행 토글·runOrchestrator(자동 호출·빈코트 투입)·노쇼 타이머·시상 자동 확정**이 전부 사는 오케스트레이터의 심장부다. 이 화면은 realtime 구독·폴링 폴백·재연결 따라잡기(matches·checkinset·checkins)는 완비했으면서 **정작 화면을 여는 초기 load 만 무방비**라, 네트워크 flap 한 번에 `setLoading(false)`(라인 144)에 못 닿아 무한 스피너에 갇히면 **무인 진행을 켜기는커녕 화면 자체가 안 떠 오케스트레이터가 영구 미가동**(TournamentManage 무한 스피너보다도 상위 — 여기서 실제로 무인 루프가 돈다). **실패 시나리오**: 대회 당일 체육관 와이파이 순간 끊김에 주최자가 실시간 진행 화면을 열면 무한 로딩 → 자동 호출·빈코트 투입·노쇼 부전승·시상 확정이 통째로 시작 안 되는데 원인도 안 보인다. **구현(스윕 패턴 정렬·비파괴)**: load 본문 전체 try-catch(throw 시 `loadError=true`+`setLoading(false)` 탈출)+`let alive` 가드(retryTick 재실행/언마운트 후 setState 방지, 성공 경로 `if(!alive) return`)+`retryTick` 상태로 effect deps `[id, retryTick]`+`retryLoad()`(loadError 리셋·loading 재점화·retryTick++)+렌더 `if(loading)` 바로 뒤에 `loadError` 분기(AlertTriangle+"실시간 진행 정보를 불러오지 못했어요·인터넷 확인 후 다시 시도"+파랑 "다시 시도" 버튼). AlertTriangle 은 이미 import 됨. 오케스트레이터·노쇼·시상 확정·realtime 구독·loadMatches·loadCheckinSet 전부 불변(grep: loadError 75·retryLoad 164·에러 렌더 917). `npm test` **172/172 통과**, `npx vite build` green(deps 설치 후). 이로써 완주에 관여하는 전 계층(선수·심판·주최자 제어·**무인 심장부**) 초기 로드가 무한 스피너 방어를 갖춤. 다음 하드닝 후보: 나머지 주최자 페이지(BracketGenerator·CourtView·Dashboard·CreateTournament)·선수 Home/Ranking/Profile/Tournaments·공개 LiveScore(전광판)·접근성(aria). (자동화율 주최자 93%·선수 88%·심판 83%·운영 88% 불변 — 무인 진행 심장부 시작 신뢰성 하드닝, 최상위 완주 차단 구멍 봉인)
+
 ## 2026-07-12 — [하드닝·주최자UI] 제어 페이지(TournamentManage·EntryManagement) 로드 실패 복구 — 무한 스피너 제거 스윕 ④
 
 - **자동화 제어를 켜지도 못하게 막던 "무한 스피너"를 주최자 계층에서 제거 — 로드 try-catch + 에러 상태 + 다시 시도**

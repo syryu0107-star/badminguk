@@ -27,6 +27,28 @@
 | C12 | 대회 탐색·파트너·전적 | ✅ | `discover.js`+`partners.js`+`record.js` — **대회 탐색 추천** ✅ + **파트너 매칭** ✅ + **통합 전적 뷰** ✅. **대회 탐색 추천(`discover.js`)**: `regionTokens`(venue·주소에서 17시도+시/군/구 세밀 토큰 추출, 광역시/특별시 중복 제외)·`preferredRegions`(내 참가 이력 대회의 지역 빈도 집계)·`ddayOf`(로컬 자정 기준 D-day)·`recommendTournaments`(접수중·미신청·미래 대회 중 급수 참가 가능 종목이 있는 것만 골라 지역 매칭·마감 임박·대회일 근접으로 점수화, 근거 배열 반환). 자격 판정은 lib/grades.js로 승격한 공용 `checkEligibility`를 fitOf로 주입(신청 화면과 100% 동일 로직·중복 0). Tournaments.jsx가 로그인 선수의 프로필·참가 이력을 1회 로드→"🎯 나에게 맞는 대회" 카드+근거 칩(급수 파랑/지역 초록/마감 빨강·주황) 노출(전체 탭·검색 없을 때만, 실패 시 검색만 degrade). 파트너 매칭·통합 전적은 아래 유지. 통합 전적(`record.js`): `computeCareerRecord`가 내가 낀 전 대회 완료 경기(+세트)에서 총 승패·승률·세트/점수 득실·풀세트·부전 카운트와 상대 선수별 head-to-head(`byOpponent`)를 집계, `opponentPlayers`(팀에서 나 제외·게스트팀명 폴백)·`hasCareerRecord`. Profile "대회 커리어" 탭에 통합 전적 카드(승/패/승률 게이지·세부지표)+상대 전적 카드(자주 만난 상대별 W/L 최대 8명)를 추가, 내 엔트리 id 배치로 tournament_matches 조회(try-catch degrade, 헤더 mmr delta 근사와 달리 실경기 기준 정확 전적). 파트너 매칭: `collectPastPartners`(내가 낀 복식 신청 이력에서 상대를 모아 함께 출전 횟수·최근순 집계)+`rankPartnerSuggestions`(호출부 checkEligibility 주입 → 종목 자격 통과 먼저·횟수·최근순)+`partnerReason`. TournamentDetail 복식 신청 폼에 "추천 파트너 · 지난 대회에 함께 나간 분들" 카드(자격 통과 최대 4명, "다시 초대" 원터치→selectPartner). 대진DB 개인화 추천으로 검색-only 마찰 완화. 잔여: 대회 탐색 추천(급수·지역 맞춤 대회 추천)만 남음 |
 
 ## 실행 로그 (최신 위)
+- 2026-07-12 · 하드닝(UI 에러 상태 ⑤ — 무인 진행 심장부 LiveDashboard 초기 로드 실패 복구) · `src/pages/organizer/LiveDashboard.jsx`
+  · **무인 오케스트레이터가 시작조차 못 하게 막던 최상위 "무한 스피너" 봉인** — 직전 4런이 선수
+    (MyMatches·Results·TournamentDetail)·심판(Scoreboard)·주최자 제어(TournamentManage·EntryManagement)
+    로드 에러 상태를 스윕했으나, 코드 실측 결과 **자동화의 핵심 화면 자체**인 `LiveDashboard`의 초기
+    `load()`(라인 136~147)가 여전히 최상위 try-catch·에러 상태 없이 `Promise.all`(tournaments.single·
+    categories)을 실행하고 있었다. **선정 이유(티어1·완주 차단, 앞선 스윕보다 상위)**: LiveDashboard 는
+    **무인 자동 진행 토글·runOrchestrator(자동 호출·빈코트 투입)·노쇼 타이머·시상 자동 확정**이 전부
+    사는 오케스트레이터의 심장부다. 그런데 이 화면은 realtime 구독·폴링 폴백·재연결 따라잡기(matches·
+    checkinset·checkins)는 완비했으면서 **정작 화면을 여는 초기 load 만 무방비**라, 네트워크 flap 한 번에
+    `setLoading(false)`(라인 144)에 못 닿아 무한 스피너에 갇히면 **무인 진행을 켜기는커녕 화면 자체가 안 떠
+    오케스트레이터가 영구 미가동**(TournamentManage 무한 스피너보다도 상위 — 여기서 실제로 무인 루프가 돈다).
+    **실패 시나리오**: 대회 당일 체육관 와이파이 순간 끊김에 주최자가 실시간 진행 화면을 열면 무한 로딩 →
+    자동 호출·빈코트 투입·노쇼 부전승·시상 확정이 통째로 시작 안 되는데 원인도 안 보인다. **구현(스윕 패턴
+    정렬·비파괴)**: load 본문 전체 try-catch(throw 시 `loadError=true`+`setLoading(false)` 탈출)+`let alive`
+    가드(retryTick 재실행/언마운트 후 setState 방지, 성공 경로 `if(!alive) return`)+`retryTick` 상태로 effect
+    deps `[id, retryTick]`+`retryLoad()`(loadError 리셋·loading 재점화·retryTick++)+렌더 `if(loading)` 바로 뒤에
+    `loadError` 분기(AlertTriangle+"실시간 진행 정보를 불러오지 못했어요·인터넷 확인 후 다시 시도"+파랑 "다시
+    시도" 버튼). AlertTriangle 은 이미 import 됨. 오케스트레이터·노쇼·시상 확정·realtime 구독·loadMatches·
+    loadCheckinSet 전부 불변(grep: loadError 75·retryLoad 164·에러 렌더 917). `npm test` **172/172**·
+    `npx vite build` green. 이로써 완주에 관여하는 전 계층(선수·심판·주최자 제어·**무인 심장부**) 초기 로드가
+    무한 스피너 방어를 갖춤. 다음 하드닝 후보: 나머지 주최자 페이지(BracketGenerator·CourtView·Dashboard·
+    CreateTournament)·선수 Home/Ranking/Profile/Tournaments·공개 LiveScore(전광판)·접근성(aria). (주최자 93% 유지 — 무인 진행 심장부 시작 신뢰성 하드닝, 최상위 완주 차단 구멍 봉인)
 - 2026-07-12 · 하드닝(UI 에러 상태 ④ — 주최자 제어 페이지 로드 실패 복구) · `src/pages/organizer/TournamentManage.jsx`·`src/pages/organizer/EntryManagement.jsx`
   · **자동화를 켜지도 못하게 막던 "무한 스피너"를 주최자 제어 계층에서 제거** — 직전 4런이 선수(MyMatches·Results·
     TournamentDetail)·심판(Scoreboard) UI 로드 에러 상태와 autoDraw 회귀 테스트를 스윕했다. 안티스톨: 같은 로드-에러

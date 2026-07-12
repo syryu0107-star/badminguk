@@ -72,6 +72,8 @@ export default function LiveDashboard() {
   const [matches, setMatches]       = useState([])
   const [activeCat, setActiveCat]   = useState(null)
   const [loading, setLoading]       = useState(true)
+  const [loadError, setLoadError]   = useState(false) // 초기 로드 네트워크 실패(무한 스피너 방지)
+  const [retryTick, setRetryTick]   = useState(0)     // "다시 시도" 재로드 트리거
   const [scoring, setScoring]       = useState(null)
   const [viewMode, setViewMode]     = useState('matches') // 'matches' | 'standings' | 'checkin'
   const [finishing, setFinishing]   = useState(false)
@@ -133,18 +135,37 @@ export default function LiveDashboard() {
   const [standingsLoading, setStandingsLoading] = useState(false)
 
   useEffect(() => {
+    let alive = true
     async function load() {
-      const [{ data: t }, { data: cats }] = await Promise.all([
-        supabase.from('tournaments').select('*').eq('id', id).single(),
-        supabase.from('tournament_categories').select('*').eq('tournament_id', id),
-      ])
-      setTournament(t)
-      setCategories(cats ?? [])
-      setActiveCat(cats?.[0]?.id)
-      setLoading(false)
+      // 무인 진행의 심장부(오케스트레이터·자동 호출·노쇼 타이머·시상 확정)가 모두
+      //   이 화면에 사는데, 초기 로드가 최상위 try-catch 없이 여러 await 를 실행하면
+      //   체육관 와이파이 순간 끊김 한 번에 setLoading(false)에 못 닿아 무한 스피너에
+      //   갇히고 자동 진행이 아예 시작조차 못 한다 → throw 시 에러 화면+다시 시도로 탈출.
+      try {
+        const [{ data: t }, { data: cats }] = await Promise.all([
+          supabase.from('tournaments').select('*').eq('id', id).single(),
+          supabase.from('tournament_categories').select('*').eq('tournament_id', id),
+        ])
+        if (!alive) return
+        setTournament(t)
+        setCategories(cats ?? [])
+        setActiveCat(cats?.[0]?.id)
+        setLoading(false)
+      } catch {
+        if (!alive) return
+        setLoadError(true)
+        setLoading(false)
+      }
     }
     load()
-  }, [id])
+    return () => { alive = false }
+  }, [id, retryTick])
+
+  function retryLoad() {
+    setLoadError(false)
+    setLoading(true)
+    setRetryTick(t => t + 1)
+  }
 
   useEffect(() => {
     if (!activeCat) return
@@ -892,6 +913,20 @@ export default function LiveDashboard() {
   }
 
   if (loading) return <div className="flex justify-center py-20"><Spinner /></div>
+
+  if (loadError) return (
+    <div className="min-h-screen flex flex-col items-center justify-center px-6 text-center">
+      <AlertTriangle size={40} className="text-[#C60C30] mb-3" />
+      <p className="text-base font-bold text-gray-800 mb-1">실시간 진행 정보를 불러오지 못했어요</p>
+      <p className="text-sm text-gray-500 mb-5">인터넷 연결을 확인한 뒤 다시 시도해 주세요.</p>
+      <button
+        onClick={retryLoad}
+        className="px-6 py-2.5 rounded-xl bg-[#003478] text-white text-sm font-bold"
+      >
+        다시 시도
+      </button>
+    </div>
+  )
 
   const certLevel = tournament?.cert_level ?? 'none'
   const certInfo  = CERT_LEVELS[certLevel]
