@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-12 — [하드닝·선수/주최자UI] 진입점 Home·Dashboard 로드 실패 복구 — 무한 스피너/false-empty 제거 스윕 ⑦
+
+- **두 플로우의 첫 화면(입구)이 로드 실패에 무너지던 구멍 봉인 — 무한 스피너 + false-empty 오표시 제거**
+  - 파일: `src/pages/player/Home.jsx`, `src/pages/organizer/Dashboard.jsx`
+  - 요약: 직전 6런이 선수(MyMatches·Results·TournamentDetail)·심판(Scoreboard)·주최자 제어(TournamentManage·EntryManagement)·무인 심장부(LiveDashboard)·대형 디스플레이(LiveScore·CourtView)를 스윕했고, 남은 미보호는 **각 역할의 랜딩 페이지**(선수 Home `/`, 주최자 Dashboard `/organizer`)뿐이었다 — 이 둘은 **나머지 화면으로 들어가는 입구**라, 여기서 막히면 그 아래 전부가 하드닝돼 있어도 도달 불가(안티스톨: 같은 로드-에러 패턴이나 코드 실측으로 **각기 다른 실질 버그** 확인). **① player/Home**: `load()`에 최상위 try-catch가 아예 없어(전 선수 페이지 중 마지막 무방비) getUser·profiles·tournaments·mmr_history·내 경기 조회 중 하나라도 네트워크 flap 으로 throw 하면 `setLoading(false)`에 못 닿아 **무한 스피너**(앱을 열자마자 갇혀 다음 경기·접수 대회로 진입 불능). **② organizer/Dashboard**: catch 가 실패 시 `tournaments=[]` 로만 둬 네트워크 flap 이면 **"아직 주최한 대회가 없습니다 · 첫 대회 만들기"** 빈 화면으로 오표시(CourtView·TournamentDetail 과 같은 false-empty 미스진단) → 주최자가 자기 대회에 못 들어가 무인 진행을 시작조차 못 함. **구현(스윕 패턴 정렬·비파괴)**: 두 페이지에 `loadError`+`retryTick`+`alive` 가드 도입. Home 은 load 본문 전체 try-catch(throw 시 loadError+setLoading(false) 탈출·성공 경로 `if(!alive)return`), 렌더 `if(loading)` 뒤에 loadError 분기(AlertTriangle+"정보를 불러오지 못했어요"+파랑 "다시 시도"+BottomNav 유지). Dashboard 는 쿼리 error throw 처리+catch 를 `setTournaments([])`→`setLoadError(true)` 로 바꿔 네트워크 오류를 진짜 "대회 없음"과 분리(로딩→에러(다시 시도)→빈 목록 3분기). 두 파일 lucide import 에 AlertTriangle 추가. `npm test` **172/172 통과**, `npx vite build` green(deps 설치 후). 이로써 완주에 관여하는 **전 화면(진입점·허브·제어·라이브·심판·무인 심장부·대형 디스플레이)**이 로드 실패 방어를 갖춰 UI 에러 상태 스윕 사실상 완료. 다음 하드닝 후보: 나머지 조회 페이지(Ranking·Profile·Tournaments)·접근성(aria)·bwf.scoreSummary/serviceCourt 테스트. (자동화율 주최자 93%·선수 88%·심판 83%·운영 88% 불변 — 두 플로우 진입점 신뢰성 하드닝)
+
 ## 2026-07-12 — [하드닝·공개/운영UI] 전광판(LiveScore)·코트 현황판(CourtView) 로드 실패 복구 — 대형 디스플레이 스윕 ⑥
 
 - **체육관 대형 화면 두 곳(공개 전광판·주최자 코트 현황판)의 로드 실패 UX 봉인 — 폴링 실패 깜빡임 제거 + 에러 상태 + 다시 시도**

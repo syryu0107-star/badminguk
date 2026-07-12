@@ -7,7 +7,7 @@ import GradeChip from '../../components/GradeChip'
 import TournamentCard from '../../components/TournamentCard'
 import Spinner from '../../components/Spinner'
 import InstallPrompt from '../../components/InstallPrompt'
-import { Bell, ChevronRight, TrendingUp, TrendingDown, Award } from 'lucide-react'
+import { Bell, ChevronRight, TrendingUp, TrendingDown, Award, AlertTriangle } from 'lucide-react'
 
 // ── 다음 경기 위젯용 헬퍼 ───────────────────────────────────────
 const DONE_STATUSES = ['completed', 'forfeited', 'bye']
@@ -47,11 +47,15 @@ export default function Home() {
   const [mmrHistory, setMmrHistory] = useState([])
   const [nextMatch, setNextMatch]   = useState(null)
   const [loading, setLoading]       = useState(true)
+  const [loadError, setLoadError]   = useState(false)
+  const [retryTick, setRetryTick]   = useState(0)
 
   useEffect(() => {
+    let alive = true
     async function load() {
+     try {
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { setLoading(false); return }
+      if (!user) { if (alive) setLoading(false); return }
 
       const [{ data: p }, { data: t }, { data: h }] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', user.id).single(),
@@ -67,6 +71,7 @@ export default function Home() {
           .limit(10),
       ])
 
+      if (!alive) return
       setProfile(p)
       setUpcoming(t ?? [])
       setMmrHistory(h ?? [])
@@ -94,19 +99,51 @@ export default function Home() {
           team2Name: [m.team2?.player1?.name, m.team2?.player2?.name].filter(Boolean).join(' / '),
           myTeamEntryId: entryIds.includes(m.team1_entry_id) ? m.team1_entry_id : m.team2_entry_id,
         }))
+        if (!alive) return
         setNextMatch(pickNextMatch(fmt))
       } else {
+        if (!alive) return
         setNextMatch(null)
       }
 
+      if (alive) setLoading(false)
+     } catch (e) {
+      // 네트워크 flap 등으로 홈이 무한 스피너에 갇히던 구멍 봉인 — 에러 상태로 탈출
+      console.error('[배드민국] 홈 로딩 실패', e)
+      if (!alive) return
+      setLoadError(true)
       setLoading(false)
+     }
     }
     load()
-  }, [])
+    return () => { alive = false }
+  }, [retryTick])
+
+  function retryLoad() {
+    setLoadError(false)
+    setLoading(true)
+    setRetryTick(t => t + 1)
+  }
 
   if (loading) return (
     <div className="flex-1 flex items-center justify-center h-screen">
       <Spinner size={36} />
+    </div>
+  )
+
+  if (loadError) return (
+    <div className="safe-bottom flex-1 flex flex-col items-center justify-center h-screen px-8 text-center">
+      <AlertTriangle size={40} className="text-amber-500 mb-3" />
+      <p className="text-sm font-semibold text-gray-700">정보를 불러오지 못했어요</p>
+      <p className="text-xs text-gray-400 mt-1">인터넷 연결을 확인한 뒤 다시 시도해 주세요.</p>
+      <button
+        onClick={retryLoad}
+        className="mt-4 px-5 py-2.5 rounded-xl text-white text-sm font-bold active:scale-[.97]"
+        style={{ background: '#003478' }}
+      >
+        다시 시도
+      </button>
+      <BottomNav mode="player" />
     </div>
   )
 

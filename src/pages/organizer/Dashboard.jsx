@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import BottomNav from '../../components/BottomNav'
 import Spinner from '../../components/Spinner'
-import { Plus, ChevronRight } from 'lucide-react'
+import { Plus, ChevronRight, AlertTriangle } from 'lucide-react'
 
 const STATUS_LABEL = {
   draft:       { text: '준비중',   cls: 'bg-gray-100 text-gray-600' },
@@ -17,8 +17,11 @@ export default function OrganizerDashboard() {
   const navigate = useNavigate()
   const [tournaments, setTournaments] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [retryTick, setRetryTick] = useState(0)
 
   useEffect(() => {
+    let alive = true
     async function load() {
       try {
         const { data: { user } } = await supabase.auth.getUser()
@@ -28,17 +31,29 @@ export default function OrganizerDashboard() {
           .order('created_at', { ascending: false })
         // 로그인 상태면 내 대회만, 비로그인(테스트 모드)이면 전체를 데모로 표시
         if (user?.id) q = q.eq('organizer_id', user.id)
-        const { data } = await q
+        const { data, error } = await q
+        if (error) throw error
+        if (!alive) return
         setTournaments(data ?? [])
       } catch (e) {
+        // 네트워크 flap 등으로 실패했을 때 빈 목록으로 두면 "대회 없음"으로 오표시돼
+        // 주최자가 자기 대회에 못 들어간다 → 에러 상태로 구분해 재시도 노출
         console.error('[배드민국] 대회 목록 로딩 실패', e)
-        setTournaments([])
+        if (!alive) return
+        setLoadError(true)
       } finally {
-        setLoading(false)
+        if (alive) setLoading(false)
       }
     }
     load()
-  }, [])
+    return () => { alive = false }
+  }, [retryTick])
+
+  function retryLoad() {
+    setLoadError(false)
+    setLoading(true)
+    setRetryTick(t => t + 1)
+  }
 
   return (
     <div className="safe-bottom">
@@ -64,6 +79,19 @@ export default function OrganizerDashboard() {
       <div className="px-4 py-4">
         {loading ? (
           <div className="flex justify-center py-16"><Spinner size={32} /></div>
+        ) : loadError ? (
+          <div className="text-center py-16 text-gray-500">
+            <AlertTriangle size={40} className="mx-auto mb-3 text-amber-500" />
+            <p className="text-sm font-semibold text-gray-700">대회 목록을 불러오지 못했어요</p>
+            <p className="text-xs text-gray-400 mt-1">인터넷 연결을 확인한 뒤 다시 시도해 주세요.</p>
+            <button
+              onClick={retryLoad}
+              className="mt-4 px-5 py-2.5 rounded-xl text-white text-sm font-bold active:scale-[.97]"
+              style={{ background: '#003478' }}
+            >
+              다시 시도
+            </button>
+          </div>
         ) : tournaments.length === 0 ? (
           <div className="text-center py-16 text-gray-400">
             <p className="text-4xl mb-3">🏟️</p>
