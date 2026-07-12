@@ -70,6 +70,7 @@ export default function Scoreboard() {
 
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(null)
+  const [retryTick, setRetryTick] = useState(0)     // '다시 시도' 재로드 트리거
   const [match, setMatch] = useState(null)
   const [events, setEvents] = useState([])
   const [state, setState] = useState(null)          // bwf 엔진 상태
@@ -110,6 +111,7 @@ export default function Scoreboard() {
   useEffect(() => {
     let alive = true
     async function load() {
+      try {
       const [{ data: m, error: me }, { data: evs }, { data: auth }] = await Promise.all([
         supabase
           .from('tournament_matches')
@@ -162,10 +164,17 @@ export default function Scoreboard() {
       // 새로고침 복원 시 인터벌/게임종료 모달이 다시 뜨지 않게 플래그만 비움
       setState({ ...folded, flags: { ...NO_FLAGS } })
       setLoading(false)
+      } catch (err) {
+        // 네트워크 flap 등으로 조회가 throw 하면 무한 스피너에 갇히지 않도록 에러 상태로 탈출
+        console.error('[점수판] 경기 로드 실패:', err)
+        if (!alive) return
+        setLoadError('경기 정보를 불러오지 못했어요. 인터넷 연결을 확인하고 다시 시도해 주세요.')
+        setLoading(false)
+      }
     }
     load()
     return () => { alive = false }
-  }, [matchId])
+  }, [matchId, retryTick])
 
   // ── Screen Wake Lock (화면 꺼짐 방지, 미지원 시 조용히 무시) ──
   useEffect(() => {
@@ -433,11 +442,20 @@ export default function Scoreboard() {
   }
   if (loadError) {
     return (
-      <div className="fixed inset-0 z-50 bg-gray-950 text-white flex flex-col items-center justify-center gap-4">
+      <div className="fixed inset-0 z-50 bg-gray-950 text-white flex flex-col items-center justify-center gap-4 px-6 text-center">
+        <AlertTriangle size={40} className="text-yellow-400" />
         <p className="text-lg font-bold">{loadError}</p>
-        <button onClick={() => navigate(-1)} className="px-5 py-2.5 rounded-xl bg-white/10 text-sm font-bold">
-          돌아가기
-        </button>
+        <div className="flex gap-3">
+          <button
+            onClick={() => { setLoadError(null); setLoading(true); setRetryTick(t => t + 1) }}
+            className="px-5 py-2.5 rounded-xl bg-white text-gray-900 text-sm font-bold"
+          >
+            다시 시도
+          </button>
+          <button onClick={() => navigate(-1)} className="px-5 py-2.5 rounded-xl bg-white/10 text-sm font-bold">
+            돌아가기
+          </button>
+        </div>
       </div>
     )
   }

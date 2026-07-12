@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-12 — [하드닝·심판UI] 점수판(Scoreboard) 로드 실패 복구 — 무한 스피너 제거 스윕 ③
+
+- **심판 완주(점수 입력→대진표 반영)를 막던 "무한 스피너" 제거 — 로드 try-catch + 에러 상태 + 다시 시도**
+  - 파일: `src/pages/referee/Scoreboard.jsx`
+  - 요약: 직전 두 런이 선수 허브 MyMatches·완주 종점/시작점(Results·TournamentDetail)에 도입한 로드 에러/재시도 패턴을, 원장이 "다음 하드닝 후보"로 명시한 **referee 화면 빈/에러 상태**로 확장(안티스톨: 직전은 선수 페이지, 이번은 **심판 계층**·같은 스윕의 다른 화면). **선정 이유(티어1 완주 차단)**: `Scoreboard`(/referee/:matchId)는 심판의 **유일한 작업 화면**이자 진행 병목 — 여기서 점수를 못 넣으면 경기가 completed 로 안 넘어가 승자 진출·대진표 반영·시상까지 전부 멈춘다. **진단(코드 실측)**: `load()`(라인 112)가 최상위 try-catch 없이 `Promise.all`(경기 임베디드 조인·match_events·getUser)을 실행 → 어느 하나라도 네트워크 flap 으로 throw 하면 `setLoading(false)`(라인 166)에 영영 못 닿아 스피너에 갇힌다. `loadError` 상태는 있었으나 **"경기를 찾을 수 없어요"(me/!m)만** 세팅하고 throw 경로는 미처리 + 에러 화면엔 "돌아가기"뿐 재시도 버튼이 없었다. **실패 시나리오**: 체육관 와이파이 순간 끊김에 심판이 점수판을 새로 열거나 새로고침하면 무한 로딩 → 점수를 못 넣어 **그 코트의 경기·이후 라운드가 통째로 정지**(무인 진행의 심판측 완주가 조용히 붕괴, "완주를 막는 것" 최우선 티어). **구현(선수 페이지 패턴으로 정렬·비파괴)**: load 본문 전체를 try-catch 로 감싸 throw 시 네트워크 에러 문구("경기 정보를 불러오지 못했어요·인터넷 확인 후 다시 시도")+`setLoading(false)`로 스피너 탈출(alive 가드 유지), `retryTick` 상태 + effect deps `[matchId, retryTick]`, 에러 화면에 AlertTriangle+"다시 시도"(loadError 리셋·loading 재점화·retryTick++ 로 재로드)/"돌아가기" 두 버튼(다크 태블릿 UI 톤 유지). 점수 입력·이벤트 저장·실시간 구독·최종 확정·성공/무경기 경로 전부 불변(grep: retryTick 73·catch 167·다시 시도 453). `npm test` **158/158 통과**, `npx vite build` green(deps 설치 후). 다음 하드닝 후보: 선수 Home/Ranking/Profile/Tournaments 동일 패턴 확장·접근성(aria)·bwf.scoreSummary/serviceCourt 테스트. (자동화율 심판 82%→83%·주최자 93%·선수 88%·운영 88% — 완주 병목 화면 신뢰성 하드닝)
+
 ## 2026-07-12 — [하드닝·선수UI] 완주 종점·시작점(Results·TournamentDetail) 로드 실패 복구 — 무한 스피너 제거 스윕 ②
 
 - **선수 완주 종점(결과·급수·상장)과 시작점(신청·결제) 로드 에러 상태 — 무한 스피너 제거**
