@@ -94,6 +94,12 @@ export default function LiveDashboard() {
   const [rtState, setRtState]   = useState('connecting') // 'connecting' | 'connected'
   const [lastSync, setLastSync] = useState(null)         // 마지막으로 서버 데이터 받은 시각
   const hadDropRef = useRef(false)  // 실시간이 한 번이라도 끊겼는가(재연결 시 따라잡기)
+  // 체크인 채널은 별도 구독이라 별도 상태로 추적한다. checkinSet 은 노쇼 자동 부전승
+  //   판정(assessNoShowResolution)의 유일한 입력이라, 이 채널이 조용히 끊기면 선수가
+  //   셀프 체크인해도 반영되지 않아 무인 노쇼 처리가 멈춘다. 두 채널 중 하나라도
+  //   끊기면 "재연결 중" 으로 표시하고 재연결 시 즉시 따라잡는다.
+  const [checkinRtState, setCheckinRtState] = useState('connecting')
+  const checkinDropRef = useRef(false)
 
   // 브라우저 네트워크 복구 시(오프라인→온라인) 즉시 데이터 따라잡기.
   const online = useOnline(() => { loadMatches(); loadCheckinSet() })
@@ -177,13 +183,25 @@ export default function LiveDashboard() {
   useEffect(() => {
     if (!id) return
     loadCheckinSet()
+    // 폴링 폴백 — 실시간이 조용히 끊겨도 체크인 현황을 계속 따라잡아, 노쇼 자동
+    //   부전승 판정이 낡은 체크인 데이터로 멈추지 않게 한다(matches 구독과 동일 15초).
+    const poll = setInterval(loadCheckinSet, REFRESH_MS)
     const sub = supabase
       .channel(`checkinset-${id}`)
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'tournament_checkins', filter: `tournament_id=eq.${id}` },
         loadCheckinSet)
-      .subscribe()
-    return () => supabase.removeChannel(sub)
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          setCheckinRtState('connected')
+          // 끊겼다 돌아왔으면 그 사이 들어온 셀프 체크인을 따라잡는다.
+          if (checkinDropRef.current) { checkinDropRef.current = false; loadCheckinSet() }
+        } else if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) {
+          setCheckinRtState('connecting')
+          checkinDropRef.current = true
+        }
+      })
+    return () => { clearInterval(poll); supabase.removeChannel(sub) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
@@ -984,8 +1002,14 @@ export default function LiveDashboard() {
               {/* 실시간 연결 상태 — 무인 진행은 실시간 갱신이 트리거라 연결이 끊기면 멈춘다.
                   끊김/재연결 중을 항상 보여 주고, 재연결되면 자동으로 따라잡는다. */}
               <div className="mt-2 flex items-center justify-between gap-2">
-                <ConnectionStatus online={online} live={online ? rtState === 'connected' : null} lastSync={lastSync} />
-                {online && rtState !== 'connected' && (
+                {/* 경기·체크인 두 채널 모두 연결돼야 "실시간 연결됨". 체크인 채널이
+                    끊기면 노쇼 자동 부전승이 낡은 데이터로 멈추므로 함께 본다. */}
+                <ConnectionStatus
+                  online={online}
+                  live={online ? (rtState === 'connected' && checkinRtState === 'connected') : null}
+                  lastSync={lastSync}
+                />
+                {online && !(rtState === 'connected' && checkinRtState === 'connected') && (
                   <span className="text-[11px] text-amber-600">15초마다 자동 새로고침 중</span>
                 )}
               </div>

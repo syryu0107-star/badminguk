@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-12 — [하드닝·운영] 무인 진행 실시간 복원력 ② — LiveDashboard 체크인 채널(checkinset) 재연결 따라잡기·폴링 폴백·연결 상태 통합
+
+- **운영 무인 진행 신뢰성 — 노쇼 자동 부전승 데이터 소스(체크인 채널) 복원력**
+  - 파일: `src/pages/organizer/LiveDashboard.jsx`
+  - 요약: 직전 런이 LiveDashboard `matches` 구독을 하드닝(현재 종목 필터·재연결 따라잡기·15초 폴링 폴백·연결 상태 표시)하며 원장에 "다음 후보: checkinset/checkins 구독에도 재연결 따라잡기 확장"을 명시했다. 안티스톨 규칙(같은 항목 2연속 금지)에 대해 — 이번은 같은 화면이지만 **다른 구독·다른 실패 모드**(matches=자동 호출/진출 트리거, checkinset=노쇼 자동 부전승 판정 데이터원)라 진행이지 정체가 아니다. **진단(코드 실측)**: `checkinset-${id}` 구독은 바로 옆 `matches` 구독과 달리 여전히 (1)`.subscribe()` 에 status 콜백이 없어 **재연결 따라잡기 전무**, (2)폴링 폴백 없음이었다. 이 구독이 갱신하는 `checkinSet`(이 대회 체크인 선수 id 집합)은 **노쇼 자동 부전승 판정 `checkin.assessNoShowResolution` 의 유일한 입력**이다(한 팀 전원 체크인+상대 전원 미체크인일 때만 무인 부전승 확정). **실패 시나리오**: 선수가 폰으로 셀프 체크인하기 직전 랩톱 절전·모바일 네트워크 flap 으로 checkinset 채널이 조용히 끊겨 있으면 그 체크인 이벤트를 영영 못 받아 `checkinSet` 이 낡은 채로 굳는다 → 상대가 안 와 overdue 진입 시 `assessNoShowResolution` 이 실제로는 온 팀을 미체크인(present=false)으로 오판 → **resolvable=false 로 자동 부전승이 발화하지 않고 경기가 멈춰 사람 개입이 필요**해진다(무인 near-zero touch 노쇼 처리의 조용한 정지). 게다가 `matches` 채널만 붙어 있으면 무인 패널의 ConnectionStatus 가 "실시간 연결됨"을 표시해 **체크인 채널이 죽은 걸 운영자가 눈치챌 방법도 없었다**(`useOnline` 은 브라우저 오프라인→온라인만 잡고 채널만 조용히 끊기는 경우는 못 잡음). **구현(matches 구독과 동일 패턴으로 정렬)**: checkinset 구독에 (a)15초 폴링 폴백 `setInterval(loadCheckinSet, REFRESH_MS)`, (b)`.subscribe(status=>…)` 에서 SUBSCRIBED 시 `checkinRtState='connected'`+끊겼다 복귀(`checkinDropRef`)면 `loadCheckinSet()` 따라잡기, CHANNEL_ERROR/TIMED_OUT/CLOSED 시 `'connecting'`+`checkinDropRef=true`. cleanup 에 `clearInterval` 추가. 무인 패널 ConnectionStatus 는 이제 **경기·체크인 두 채널 모두 연결돼야** `live=true`("실시간 연결됨") — 체크인 채널만 끊겨도 "재연결 중…" + "15초마다 자동 새로고침 중" 으로 운영자가 인지하고, 폴링 폴백이 계속 checkinSet 을 따라잡아 채널이 죽어도 무인 노쇼 처리가 15초 내 복구된다. 비파괴적(matches 구독·오케스트레이터·노쇼 타이머·시상 자동 확정 트리거 배선 전부 불변, checkinset 구독 내부만 강화 — grep 으로 hadDropRef/setRtState/REFRESH_MS/useOnline 이전 배선 유지 확인). `npm test` **150/150 통과**, `npx vite build` green. 다음 하드닝 후보: checkins(체크인 탭 뷰) 구독 폴링(뷰 전용이라 무인 비핵심)·UI 빈/로딩/에러 상태·notify broadcast 순차 send 직렬 지연. (자동화율 운영 88% 유지·주최자 93%·선수 88% 불변 — 무인 노쇼 처리 안정성 하드닝)
+
 ## 2026-07-11 — [하드닝·운영] 무인 진행 실시간 복원력 — LiveDashboard matches 구독 필터·재연결 따라잡기·폴링 폴백·연결 상태 표시
 
 - **운영 무인 진행 신뢰성 — realtime 구독 경쟁조건 하드닝(라이브 화면 정렬)**
