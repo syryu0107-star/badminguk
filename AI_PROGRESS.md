@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-13 — [C4] 셀프 체크인 키오스크 — 입구 체크인을 주최자 수작업에서 선수 셀프로 이관
+
+- **입구 공용 태블릿에서 선수가 이름을 찾아 스스로 체크인 — C4의 유일한 0-코드 갭(키오스크) 완성**
+  - 파일: `src/lib/checkin.js`, `src/pages/organizer/CheckinKiosk.jsx`(신규), `src/App.jsx`, `src/pages/organizer/LiveDashboard.jsx`, `tests/engines.test.mjs`
+  - 요약: 직전 런(C1 탭 밖 OS 알림)까지 비-human-gated 갭이 대부분 소진된 상태에서, 코드 실측(`grep kiosk/QR/PIN`=0건)으로 **C4가 ✅이지만 명시 잔여였던 "QR/PIN 키오스크"가 통째로 미구현**임을 확인. 셀프 체크인은 지금껏 **선수 자기 폰(디지털 선수증)에서만** 가능해, 앱 미설치·미로그인 선수나 대회 당일 입구를 빠르게 처리하려는 운영자는 결국 LiveDashboard 명단에서 한 명씩 눌러야 했다(DoD 운영의 "셀프 체크인·키오스크" 중 키오스크 미충족·입구 수작업 병목). **왜 non-human-gated**: `tournament_checkins` RLS(005)가 `FOR ALL USING(true)`라 새 권한·마이그레이션 0, 기존 `selfCheckin`(verified_method='self') 재사용, 테이블 미적용 시 graceful, 카메라/QR 스캐너 라이브러리 불필요(이름 검색식 → 새 heavy dep 0). **구현(순수·비파괴·엔진 재사용)**: (1) `checkin.js` 순수 헬퍼 4개 — `buildKioskRoster`(승인 신청 조인→선수 단위 중복 제거·종목/파트너 집계·미체크인 우선+이름순 정렬)·`filterKioskRoster`(공백 무시 이름 검색)·`kioskStats`·`normalizeKioskName`. (2) `CheckinKiosk.jsx` 신규(`/organizer/:id/kiosk`) — 대형 터치 UI: 진행 통계·검색창(autofocus)·명단(완료 초록 배지)·"체크인"→확인 오버레이(이름·종목 표시로 오탭 방지)→selfCheckin→완료 플래시+검색 초기화+재포커스, 실시간 구독+15초 폴링으로 폰 셀프체크인·주최자 화면과 상호 반영, load try-catch+loadError+retry. (3) LiveDashboard 체크인 탭에 "키오스크 열기" CTA(새 탭). selfCheckin/summarizeCheckins/노쇼 판정 로직 0 복제, 낙관적 반영 후 서버 재조회, 테이블 미적용 시 빈 명단 degrade, 폰 셀프체크인·수동 체크인 경로 불변. 회귀 4개. `npm test` **221/221**(217+4), `npx vite build` green(CheckinKiosk 청크 확인). (자동화율 주최자 95%·선수 93%·심판 89%·운영 90→91% — 입구 체크인 수작업 병목을 선수 셀프로 이관, 노쇼 판정용 체크인 데이터 촘촘화)
+
 ## 2026-07-13 — [C1] 탭 밖 경기 호출 OS 알림 — 백그라운드 선수의 호출 놓침(부전승 위험) 제거
 
 - **경기 호출·부전승 경고를 "화면 배너 안에서만"에서 "탭이 백그라운드여도 OS 알림까지"로**

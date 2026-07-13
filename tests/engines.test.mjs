@@ -21,6 +21,7 @@ import {
 } from '../src/lib/noshowPredict.js'
 import {
   getCheckinWindow, assessSelfCheckin, assessNoShowResolution, summarizeCheckins,
+  buildKioskRoster, filterKioskRoster, kioskStats, normalizeKioskName,
 } from '../src/lib/checkin.js'
 import { assessSandbag, worseLevel, getGradeFromMMR } from '../src/lib/sandbag.js'
 import { calcReliability, reliabilityTier, isRanked } from '../src/lib/reliability.js'
@@ -484,6 +485,53 @@ test('checkin: summarizeCheckins — done/self/reviewNeeded', () => {
   assert.equal(s.done, 2)
   assert.equal(s.self, 1)
   assert.equal(s.reviewNeeded, 1) // a: self + 미인증
+})
+
+// ── 셀프 체크인 키오스크 (C4) ──
+test('checkin: normalizeKioskName — 공백 제거·소문자', () => {
+  assert.equal(normalizeKioskName(' 김 민수 '), '김민수')
+  assert.equal(normalizeKioskName('Kim Minsu'), 'kimminsu')
+  assert.equal(normalizeKioskName(null), '')
+})
+
+test('checkin: buildKioskRoster — 선수 중복 제거·종목/파트너 집계·정렬', () => {
+  const entries = [
+    { id: 'e1', categoryName: '남복 A', player1: { id: 'a', name: '김민수' }, player2: { id: 'b', name: '이철수' } },
+    { id: 'e2', categoryName: '혼복', player1: { id: 'a', name: '김민수' }, player2: { id: 'c', name: '박영희' } },
+  ]
+  // a 는 이미 체크인, b/c 는 미체크인
+  const checkins = [{ player_id: 'a', flagged: false, verified_method: 'self', checked_in_at: '2026-07-13T01:00:00Z' }]
+  const roster = buildKioskRoster(entries, checkins)
+  assert.equal(roster.length, 3) // a 한 명으로 중복 제거
+  const a = roster.find(r => r.playerId === 'a')
+  assert.equal(a.entries.length, 2) // 남복 A + 혼복
+  assert.equal(a.checkedIn, true)
+  assert.equal(a.method, 'self')
+  // 정렬: 미체크인(b,c) 먼저, 체크인(a) 마지막
+  assert.equal(roster[roster.length - 1].playerId, 'a')
+  assert.equal(roster[0].checkedIn, false)
+})
+
+test('checkin: buildKioskRoster — flagged 는 미체크인 취급', () => {
+  const entries = [{ id: 'e1', player1: { id: 'a', name: '가나다' } }]
+  const roster = buildKioskRoster(entries, [{ player_id: 'a', flagged: true }])
+  assert.equal(roster[0].checkedIn, false)
+})
+
+test('checkin: filterKioskRoster + kioskStats', () => {
+  const entries = [
+    { id: 'e1', player1: { id: 'a', name: '김민수' } },
+    { id: 'e2', player1: { id: 'b', name: '박영희' } },
+  ]
+  const roster = buildKioskRoster(entries, [{ player_id: 'a', flagged: false }])
+  assert.equal(filterKioskRoster(roster, '김').length, 1)
+  assert.equal(filterKioskRoster(roster, '김 민').length, 1) // 공백 무시 매칭
+  assert.equal(filterKioskRoster(roster, '').length, 2)      // 빈 질의 = 전체
+  assert.equal(filterKioskRoster(roster, '없는사람').length, 0)
+  const s = kioskStats(roster)
+  assert.equal(s.total, 2)
+  assert.equal(s.done, 1)
+  assert.equal(s.remaining, 1)
 })
 
 // ══════════════════════ sandbag.js ══════════════════════

@@ -1915,11 +1915,22 @@ export default function LiveDashboard() {
             )
           })()}
 
+          {/* 키오스크 모드 — 입구 공용 태블릿에서 선수가 직접 체크인 */}
+          <a href={`/organizer/${id}/kiosk`} target="_blank" rel="noopener noreferrer"
+            className="flex items-center gap-3 bg-[#003478] text-white rounded-2xl p-3.5 mb-3 active:scale-[0.99] transition">
+            <span className="text-xl shrink-0">🖥️</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold">셀프 체크인 키오스크 열기</p>
+              <p className="text-[11px] text-white/70">입구 태블릿에 띄우면 선수가 이름을 찾아 스스로 체크인해요</p>
+            </div>
+            <span className="text-white/60 text-lg shrink-0">→</span>
+          </a>
+
           {/* 안내 */}
           <div className="bg-blue-50 rounded-2xl p-3.5 mb-4 flex gap-2.5">
             <span className="text-lg shrink-0">💬</span>
             <p className="text-xs text-blue-700 leading-relaxed">
-              선수가 <strong>폰으로 셀프 체크인</strong>하면 여기에 자동으로 표시돼요.
+              선수가 <strong>폰으로 셀프 체크인</strong>하거나 <strong>입구 키오스크</strong>에서 이름을 찾아 체크인하면 여기에 자동으로 표시돼요.
               실명인증 선수는 그대로 확정, <strong className="text-amber-700">'본인확인 권장'</strong> 표시(셀프·미인증)만
               현장에서 한 번 확인하세요. 미도착 선수는 아래에서 직접 체크인할 수도 있어요.
             </p>

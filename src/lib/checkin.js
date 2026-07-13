@@ -159,6 +159,80 @@ export function assessNoShowResolution(match, checkedIn) {
   return { resolvable, absentTeam, winnerTeam, t1, t2, reason }
 }
 
+// ── 셀프 체크인 키오스크 (C4) ─────────────────────────────────────────
+// 입구에 공용 태블릿 한 대를 두고 선수가 직접 자기 이름을 찾아 체크인하는 "키오스크"
+// 모드용 순수 헬퍼. 주최자가 명단을 한 명씩 눌러 주던 수작업을 선수 셀프로 넘긴다
+// (RLS 는 005 에서 전체 허용이므로 새 권한 불필요, verified_method='self' 로 기록).
+
+// 이름 정규화 — 공백 제거 + 소문자. 키오스크 검색에서 "김민수"·"김 민수" 동일 취급.
+export function normalizeKioskName(s) {
+  return String(s ?? '').toLowerCase().replace(/\s+/g, '').trim()
+}
+
+// 승인된 참가 신청 + 체크인 행 → 키오스크 명단(선수 단위로 중복 제거).
+// entries: [{ id, categoryName?, category?, player1:{id,name,identity_verified}, player2 }]
+// checkins: [{ player_id, checked_in_at, flagged, verified_method }]
+// 반환: [{ playerId, name, verified, checkedIn, checkedInAt, method, entries:[{category, partner}] }]
+//   정렬: 미체크인 먼저(줄 서 있는 사람이 위로) → 이름 오름차순.
+export function buildKioskRoster(entries, checkins) {
+  const chkById = new Map()
+  for (const c of checkins ?? []) {
+    if (c && c.player_id != null) chkById.set(c.player_id, c)
+  }
+  const labelOf = e =>
+    e?.categoryName || e?.category?.sport_type || e?.category?.name || ''
+
+  const byPlayer = new Map()
+  for (const e of entries ?? []) {
+    const pair = [e?.player1, e?.player2].filter(p => p && p.id != null)
+    for (const p of pair) {
+      const partner = pair.find(o => o.id !== p.id)
+      let row = byPlayer.get(p.id)
+      if (!row) {
+        row = {
+          playerId: p.id,
+          name: p.name || '이름 미상',
+          verified: !!p.identity_verified,
+          entries: [],
+        }
+        byPlayer.set(p.id, row)
+      }
+      row.entries.push({ category: labelOf(e), partner: partner?.name || null })
+    }
+  }
+
+  const roster = [...byPlayer.values()].map(row => {
+    const chk = chkById.get(row.playerId)
+    const checkedIn = !!chk && !chk.flagged
+    return {
+      ...row,
+      checkedIn,
+      checkedInAt: checkedIn ? (chk.checked_in_at ?? null) : null,
+      method: chk?.verified_method ?? null,
+    }
+  })
+
+  roster.sort((a, b) => {
+    if (a.checkedIn !== b.checkedIn) return a.checkedIn ? 1 : -1
+    return a.name.localeCompare(b.name, 'ko')
+  })
+  return roster
+}
+
+// 키오스크 검색 — 이름에 질의(정규화)가 포함된 선수만. 빈 질의는 전체.
+export function filterKioskRoster(roster, query) {
+  const q = normalizeKioskName(query)
+  if (!q) return roster ?? []
+  return (roster ?? []).filter(r => normalizeKioskName(r.name).includes(q))
+}
+
+// 키오스크 상단 진행 통계.
+export function kioskStats(roster) {
+  const total = (roster ?? []).length
+  const done = (roster ?? []).filter(r => r.checkedIn).length
+  return { total, done, remaining: total - done }
+}
+
 // 체크인 요약 통계 (주최자 화면용). players: [{id, identity_verified}], checkins: rows
 export function summarizeCheckins(players, checkins) {
   const byId = new Map((checkins ?? []).map(c => [c.player_id, c]))
