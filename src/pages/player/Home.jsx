@@ -2,8 +2,11 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { getGradeInfo, getMMRPercentile } from '../../lib/grades'
+import { calcReliability, MIN_RANKED_GAMES } from '../../lib/reliability'
+import { reliabilityLabel } from '../../lib/rating'
 import BottomNav from '../../components/BottomNav'
 import GradeChip from '../../components/GradeChip'
+import ReliabilityBadge from '../../components/ReliabilityBadge'
 import TournamentCard from '../../components/TournamentCard'
 import Spinner from '../../components/Spinner'
 import InstallPrompt from '../../components/InstallPrompt'
@@ -157,6 +160,13 @@ export default function Home() {
   const recent5    = mmrHistory.slice(0, 5)
   const recentSum  = recent5.reduce((a, h) => a + (h.delta ?? 0), 0)
 
+  // ── 실력 신뢰도 (복식 기준) — 원점수 대신 "측정 중/검증완료" 상태로 ──
+  const doublesHist = mmrHistory.filter(h => (h.game_mode ?? 'doubles') === 'doubles')
+  const rel         = calcReliability({ gamesPlayed, history: doublesHist })
+  const relInfo     = reliabilityLabel(profile?.mmr_rd, gamesPlayed, rel.score)
+  const measuring   = relInfo.text !== '검증완료'
+  const gamesToConfirm = Math.max(1, MIN_RANKED_GAMES - gamesPlayed)
+
   return (
     <div className="safe-bottom">
       {/* 헤더 */}
@@ -199,6 +209,20 @@ export default function Home() {
             <p className="text-white/50 text-xs mt-1">{pct} · {gamesPlayed}경기</p>
           </div>
         </div>
+
+        {/* 실력 신뢰도 배지 + 안내 (초보자: 측정 중이면 몇 경기 더 뛰면 확정되는지) */}
+        {profile && (
+          <div className="bg-white/10 rounded-xl px-3 py-2 flex items-center gap-2 mb-3">
+            <ReliabilityBadge rd={profile?.mmr_rd} games={gamesPlayed} relScore={rel.score} size="sm" showPct />
+            <span className="text-xs text-white/75 leading-snug">
+              {measuring
+                ? (gamesPlayed < MIN_RANKED_GAMES
+                    ? `대회 ${gamesToConfirm}경기 더 뛰면 실력이 확정돼요`
+                    : '경기를 더 뛰면 실력이 확정돼요')
+                : '실력이 검증됐어요'}
+            </span>
+          </div>
+        )}
 
         {/* 최근 경기 MMR 흐름 */}
         {recent5.length > 0 && (

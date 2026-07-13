@@ -9,8 +9,9 @@
  *  - finalizeTournament(supabase, tournamentId, categoryIds): 전 종목 시상 확정 + 대회 completed
  *
  * DB 규약: 상태값은 전부 소문자. stage 구분은 match_phase('pool'|'knockout').
- * MMR 반영은 completeMatch 안에서 apply_match_mmr(match_id) RPC(SECURITY DEFINER)를
+ * MMR 반영은 completeMatch 안에서 apply_match_mmr_v2(match_id) RPC(SECURITY DEFINER)를
  * 단일 진입점으로 호출한다 — 심판 점수판·주최자 인라인 어느 경로든 여기로 통합된다.
+ * (v2 = RD 감쇠·provisional·source를 MMR 갱신과 같은 트랜잭션에서 원자적으로 반영. 016 계약.)
  * walkover 제외/retired 포함/none·bye·멱등 판정은 전부 RPC 내부가 전담하므로,
  * 호출부는 result_type을 분기하지 말고 그냥 completeMatch만 부르면 된다.
  */
@@ -115,7 +116,7 @@ export async function completeMatch(supabase, matchId, {
   //    (RPC는 mmr_applied 가드로 멱등 → 나중에 재확정해도 중복 반영 없음)
   let mmrError = null
   {
-    const { error: rpcErr } = await supabase.rpc('apply_match_mmr', { p_match_id: matchId })
+    const { error: rpcErr } = await supabase.rpc('apply_match_mmr_v2', { p_match_id: matchId })
     if (rpcErr) {
       mmrError = rpcErr.message || String(rpcErr)
       console.error('[completeMatch] MMR 반영 실패:', rpcErr)

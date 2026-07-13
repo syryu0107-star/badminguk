@@ -73,7 +73,7 @@ export default function Ranking() {
 
     let query = supabase
       .from('profiles')
-      .select(`id, name, mmr, mmr_games_played, singles_mmr, singles_games_played, ${TRACK_COLS.join(', ')}`)
+      .select(`id, name, mmr, mmr_rd, mmr_games_played, singles_mmr, singles_mmr_rd, singles_games_played, ${TRACK_COLS.join(', ')}`)
       .gt(mmrCol, 0)
       .gt(gamesCol, 0)
       .order(mmrCol, { ascending: false })
@@ -147,6 +147,7 @@ export default function Ranking() {
 
   const mmrKey   = tab === 'singles' ? 'singles_mmr'          : 'mmr'
   const gamesKey = tab === 'singles' ? 'singles_games_played' : 'mmr_games_played'
+  const rdKey    = tab === 'singles' ? 'singles_mmr_rd'       : 'mmr_rd'
   const modeLabel = tab === 'singles' ? '단식' : '복식'
 
   return (
@@ -269,7 +270,7 @@ export default function Ranking() {
                     </div>
                     <div className="flex items-center gap-1.5">
                       <p className="text-xs text-gray-400">{p[gamesKey] ?? 0}경기</p>
-                      <ReliabilityBadge result={p.reliability} size="sm" />
+                      <ReliabilityBadge rd={p[rdKey]} games={p[gamesKey] ?? 0} relScore={p.reliability?.score} size="sm" />
                     </div>
                   </div>
 
@@ -314,7 +315,7 @@ export default function Ranking() {
                           </div>
                           <div className="flex items-center gap-1.5">
                             <p className="text-xs text-gray-400">{p[gamesKey] ?? 0}경기</p>
-                            <ReliabilityBadge result={p.reliability} size="sm" />
+                            <ReliabilityBadge rd={p[rdKey]} games={p[gamesKey] ?? 0} relScore={p.reliability?.score} size="sm" showPct />
                           </div>
                         </div>
                         <div className="text-right shrink-0">

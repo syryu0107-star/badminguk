@@ -1,3 +1,9 @@
+// RD(불확실성) 인지 K 배수·감쇠는 rating.js가 단일 소스(016 SQL과 파리티).
+// mmr.js는 프론트 리허설/프리뷰이므로 여기서 재정의하지 않고 재사용한다.
+//   ⚠️ 의존 방향: mmr → rating → {grades, reliability}. rating은 mmr을 import하지
+//      않으므로 순환 없음.
+import { provisionalK, decayRD } from './rating'
+
 // ── 대회 단위별 K 팩터 ──────────────────────────────────────────
 // 대회 단위(구/시/전국)가 MMR 반영 강도 K를 결정한다. 전부 반영(비반영 없음).
 //   c: 구 대회   (K=32)   ← tournaments.unit 'gu'
@@ -13,10 +19,16 @@ export const CERT_LEVELS = {
   a:    { label: '전국 대회', k: 64, color: 'red',    desc: '전국 단위 대회 · 순위 변동 매우 큼' },
 }
 
-// 신규 플레이어(10경기 미만) K 보정: 1.5배
-function kFactor(baseK, gamesPlayed) {
+// K 보정 배수. RD(불확실성)를 알면 연속값 provisional 큰-K(rating.js·016 SQL과 동일),
+// 모르면 레거시 휴리스틱(10경기 미만 1.5배)으로 폴백 → 하위호환 유지.
+//   rd == null  → 기존 동작 그대로(gamesPlayed<10 ? 1.5 : 1.0)
+//   rd 제공     → provisionalK(rd, games) [1.0~3.0], RD 높을수록 크게
+function kFactor(baseK, gamesPlayed, rd = null) {
   if (baseK === 0) return 0
-  return gamesPlayed < 10 ? Math.round(baseK * 1.5) : baseK
+  const mult = rd != null
+    ? provisionalK(rd, gamesPlayed)
+    : (gamesPlayed < 10 ? 1.5 : 1.0)
+  return Math.round(baseK * mult)
 }
 
 // Elo 기대 승률
@@ -34,9 +46,10 @@ export function partnerAdjustment(myMMR, partnerMMR) {
 }
 
 // ── 개인 MMR 변화량 계산 ────────────────────────────────────────
-export function calcMMRDelta(playerMMR, opponentTeamMMR, result, gamesPlayed, certLevel = 'c') {
+// rd(옵셔널): 있으면 RD 인지 큰-K, 없으면 레거시 K(하위호환). 마지막 인자라 기존 호출 무영향.
+export function calcMMRDelta(playerMMR, opponentTeamMMR, result, gamesPlayed, certLevel = 'c', rd = null) {
   const baseK = CERT_LEVELS[certLevel]?.k ?? 32
-  const k = kFactor(baseK, gamesPlayed)
+  const k = kFactor(baseK, gamesPlayed, rd)
   if (k === 0) return 0
   const e = expected(playerMMR, opponentTeamMMR)
   return Math.round(k * (result - e))
@@ -48,8 +61,9 @@ export function teamMMR(p1mmr, p2mmr) {
 
 // ── 경기 결과 → 4명 MMR 변화량 (파트너 보정 포함) ────────────────
 export function resolveMatchMMR({ team1, team2, winner, certLevel = 'c' }) {
-  // team1/team2: [{ id, mmr, gamesPlayed }]
-  // winner: 1 | 2
+  // team1/team2: [{ id, mmr, gamesPlayed, rd? }]
+  //   rd 옵셔널 — 주면 RD 인지 큰-K + rdBefore/rdAfter(경기 후 감쇠) 동봉(016 v2 리허설),
+  //   안 주면 레거시 동작(rd 필드 미포함). winner: 1 | 2
 
   if (certLevel === 'none') {
     return [...team1, ...team2].map(p => ({
@@ -64,16 +78,20 @@ export function resolveMatchMMR({ team1, team2, winner, certLevel = 'c' }) {
   const r2 = winner === 2 ? 1 : 0
 
   function calcPlayer(p, partner, opponentAvg, result) {
-    const baseDelta = calcMMRDelta(p.mmr, opponentAvg, result, p.gamesPlayed, certLevel)
+    const rd = p.rd ?? null
+    const baseDelta = calcMMRDelta(p.mmr, opponentAvg, result, p.gamesPlayed, certLevel, rd)
     const adj = partner ? partnerAdjustment(p.mmr, partner.mmr) : 1
     const delta = Math.round(baseDelta * adj)
-    return {
+    const out = {
       id: p.id,
       before: p.mmr,
       delta,
       after: Math.max(100, p.mmr + delta),
       partnerAdj: Math.round((adj - 1) * 100), // 보정률 % (UI 표시용)
     }
+    // RD를 준 호출만 경기 후 RD(감쇠) 동봉 — 레거시 반환 형태 불변.
+    if (rd != null) { out.rdBefore = rd; out.rdAfter = decayRD(rd) }
+    return out
   }
 
   return [

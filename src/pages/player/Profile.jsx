@@ -11,6 +11,9 @@ import ReliabilityBadge from '../../components/ReliabilityBadge'
 import Spinner from '../../components/Spinner'
 import { LogOut, Upload, Award, Shield, TrendingUp, TrendingDown, ChevronsUp, PartyPopper, Swords } from 'lucide-react'
 
+// MMR 출처 라벨 (016 mmr_source: self_report|import|match) — 초보용 쉬운 우리말
+const SOURCE_LABEL = { self_report: '자기 신고', import: '불러온 기록', match: '경기 기록' }
+
 // 미니 MMR 추이 차트 (SVG)
 function MiniChart({ history }) {
   if (!history.length) return null
@@ -388,7 +391,7 @@ export default function Profile() {
                 <p className="font-bold text-sm">레이팅 신뢰도</p>
                 <p className="text-xs text-gray-400">이 MMR이 실력을 얼마나 반영하는지</p>
               </div>
-              <ReliabilityBadge result={reliability} size="md" />
+              <ReliabilityBadge rd={profile?.mmr_rd} games={gamesPlayed} relScore={reliability.score} size="md" showPct />
             </div>
             {/* 신뢰도 게이지 */}
             <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
@@ -414,6 +417,11 @@ export default function Profile() {
                 </div>
               ))}
             </div>
+            {/* 현재 MMR 출처 (자기 신고 / 불러온 기록 / 경기 기록) */}
+            <p className="mt-3 text-[11px] text-gray-400 text-center">
+              지금 MMR 출처: <strong className="text-gray-600">{SOURCE_LABEL[profile?.mmr_source] ?? '자기 신고'}</strong>
+              {(profile?.mmr_source == null || profile?.mmr_source === 'self_report') && ' · 경기를 뛰면 실측으로 바뀌어요'}
+            </p>
             {!ranked && (
               <p className="mt-3 text-[11px] text-amber-600 bg-amber-50 rounded-lg px-2.5 py-1.5 leading-relaxed">
                 아직 <strong>잠정</strong> 상태입니다. 최소 {MIN_RANKED_GAMES}경기 이상 + 신뢰도 {MIN_RANKED_RELIABILITY}% 이상이면

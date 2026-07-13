@@ -90,7 +90,7 @@ test('advance: completeMatch(normal) — 상태·승수·라이브캐시 리셋 
   assert.equal(final.team1_entry_id, 'E1')
   // MMR RPC 단일 진입점 호출
   assert.equal(sb._rpcCalls.length, 1)
-  assert.equal(sb._rpcCalls[0].name, 'apply_match_mmr')
+  assert.equal(sb._rpcCalls[0].name, 'apply_match_mmr_v2')
   assert.equal(sb._rpcCalls[0].args.p_match_id, 'sf1')
   // 반환 계약
   assert.equal(res.categoryId, 'C')

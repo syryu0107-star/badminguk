@@ -17,7 +17,7 @@ import {
 import {
   Users, GitBranch, Zap, Monitor, ChevronRight, Trophy,
   Share2, Copy, Check, Printer, ExternalLink, Sparkles, AlertTriangle,
-  Megaphone, Send, Calculator, Plus, X, TrendingUp, TrendingDown, Gavel,
+  Megaphone, Send, Calculator, Plus, X, TrendingUp, TrendingDown, Gavel, Upload,
 } from 'lucide-react'
 
 // ═══════════════════════════════════════════════════════════════
@@ -987,6 +987,7 @@ export default function TournamentManage() {
           { label: '코트별 심판 모드', icon: Gavel,      path: `/referee/court/${id}`,     desc: '코트별 현재 경기 점수판 · 다음 경기 자동 배포' },
           { label: '실시간 진행',    icon: Zap,         path: `/organizer/${id}/live`,    desc: '경기 스코어 입력 · MMR 반영' },
           { label: '최종 결과 · 시상', icon: Trophy,    path: `/tournaments/${id}/results`, desc: '시상대 · 최종 순위표 · 조별 결과' },
+          { label: '대회결과 가져오기', icon: Upload,    path: `/organizer/${id}/import`,   desc: 'CSV·엑셀 결과표 업로드 → 참가자 초기 MMR 자동 부여' },
         ].map(({ label, icon: Icon, path, desc }) => (
           <button
             key={path}

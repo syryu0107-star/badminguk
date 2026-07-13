@@ -22,6 +22,7 @@ const EntryManagement = lazy(() => import('./pages/organizer/EntryManagement'))
 const BracketGenerator = lazy(() => import('./pages/organizer/BracketGenerator'))
 const LiveDashboard = lazy(() => import('./pages/organizer/LiveDashboard'))
 const CourtView = lazy(() => import('./pages/organizer/CourtView'))
+const ImportResults = lazy(() => import('./pages/organizer/ImportResults'))
 
 const LiveScore = lazy(() => import('./pages/public/LiveScore'))
 const RefereeScoreboard = lazy(() => import('./pages/referee/Scoreboard'))
@@ -84,6 +85,7 @@ export default function App() {
         <Route path="/organizer/:id/entries" element={<Req s={session} p={profile}><EntryManagement /></Req>} />
         <Route path="/organizer/:id/bracket" element={<Req s={session} p={profile}><BracketGenerator /></Req>} />
         <Route path="/organizer/:id/live"    element={<Req s={session} p={profile}><LiveDashboard /></Req>} />
+        <Route path="/organizer/:id/import"  element={<Req s={session} p={profile}><ImportResults /></Req>} />
         <Route path="/organizer/:id/courts" element={<Req s={session} p={profile}><CourtView /></Req>} />
 
         <Route path="/live/:id" element={<LiveScore />} />
