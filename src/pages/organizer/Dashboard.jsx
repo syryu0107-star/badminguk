@@ -25,13 +25,14 @@ export default function OrganizerDashboard() {
     async function load() {
       try {
         const { data: { session } } = await supabase.auth.getSession(); const user = session?.user ?? null
-        let q = supabase
+        // 비로그인(테스트 모드)이면 보여줄 '내 대회'가 없음 — 즉시 빈 목록.
+        // (organizer_id 필터 없는 전체 조회는 count 조인 때문에 느리고 불필요)
+        if (!user?.id) { setTournaments([]); return }
+        const { data, error } = await supabase
           .from('tournaments')
           .select('*, categories:tournament_categories(count), entries:tournament_entries(count)')
+          .eq('organizer_id', user.id)
           .order('created_at', { ascending: false })
-        // 로그인 상태면 내 대회만, 비로그인(테스트 모드)이면 전체를 데모로 표시
-        if (user?.id) q = q.eq('organizer_id', user.id)
-        const { data, error } = await q
         if (error) throw error
         if (!alive) return
         setTournaments(data ?? [])
