@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-13 — [C1] 탭 밖 경기 호출 OS 알림 — 백그라운드 선수의 호출 놓침(부전승 위험) 제거
+
+- **경기 호출·부전승 경고를 "화면 배너 안에서만"에서 "탭이 백그라운드여도 OS 알림까지"로**
+  - 파일: `src/lib/localnotify.js`(신규), `src/pages/player/MyMatches.jsx`, `tests/localnotify.test.mjs`(신규)
+  - 요약: 직전 런(C7 셀프 스코어 disputed 1탭 해소) 뒤 비-human-gated 갭이 대부분 소진됐으나, **최우선 클러스터 C1(프롬프트 "가장 큰 공백")**의 호출 도달 경로가 여전히 **탭 포커스일 때만** 작동했다. MyMatches 방송 수신 시 화면 배너 + `navigator.vibrate` 로만 알리는데, 선수는 코트 근처에서 폰 화면을 끄거나 다른 앱(카톡)을 보며 기다리는 게 보통이라 그 순간 탭이 백그라운드면 배너는 안 보이고 vibrate 는 숨김 페이지에서 무시돼 **호출을 놓쳐 노쇼 타이머가 부전승 처리**(near-zero touch 선수측 신뢰성 구멍). realtime 방송은 백그라운드에서도 계속 도착하는데 화면 밖으로 못 나갔다. **왜 non-human-gated**: 원장이 human-gated 로 묶은 "웹푸시"는 **앱이 완전히 닫혔을 때 서버가 미는 서버 푸시(VAPID/FCM 서버키)**인데, 이번에 채운 건 **앱이 열려 있는 동안 방송 받은 순간 페이지가 직접 띄우는 로컬 Notification** — `Notification.requestPermission()` 외 키·서버·마이그레이션 0(완전히 다른 레이어, 서버키 발급 시 서버 푸시가 위에 얹힘). **구현(순수·비파괴·신규 파일)**: (1) `localnotify.js` — `notificationsSupported`/`notificationPermission`/`requestNotifyPermission`(Promise·콜백)/`showLocalNotification`(조건 충족 시에만 `new Notification`·onclick window.focus·실패 degrade) + **순수 판정 `shouldShowLocalNotification`**(탭 hidden+granted+지원 시에만 true — 포커스 중이면 배너로 충분하므로 안 띄워 중복 방지). (2) MyMatches 방송 3분기(match_call·walkover_warn·match_soon)에 `showLocalNotification` 추가(배너·vibrate·ack 로직 불변, tag 로 재호출 갱신). (3) `notifyPerm` 상태 + `enableNotify`(사용자 제스처 권한 요청) + "경기 호출 알림 받기" 옵트인 카드(지원·권한 미요청·곧 뛸 경기/체크인 있을 때만). iOS 미지원이면 카드·알림 미노출(graceful), 권한 없으면 no-op, new Notification 차단 브라우저는 try-catch degrade. 회귀 5개. `npm test` **217/217**(212+5), `npx vite build` green. (자동화율 주최자 95%·선수 92→93%·심판 89%·운영 90% — 화면 밖에서도 호출이 닿아 백그라운드 선수의 오탐 부전승 제거)
+
 ## 2026-07-13 — [C7] 셀프 스코어 불일치(disputed) 주최자 1탭 해소 — 무심판 코트 완주의 마지막 dead-end 제거
 
 - **양 팀이 다른 점수를 낸 무심판 코트 경기를 "점수판 재입력"에서 "맞는 제출 1탭 채택"으로**

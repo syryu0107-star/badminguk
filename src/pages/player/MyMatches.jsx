@@ -5,6 +5,7 @@ import { getCheckinWindow, assessSelfCheckin, selfCheckin, fetchMyCheckins } fro
 import { depositGuide, shouldShowDeposit, formatWon } from '../../lib/deposit'
 import { canWithdraw, computeRefund, refundLineText } from '../../lib/refund'
 import { observedMatchMinutes, planAutoAdvance } from '../../lib/orchestrator'
+import { notificationsSupported, notificationPermission, requestNotifyPermission, showLocalNotification } from '../../lib/localnotify'
 import {
   evaluateGames, buildSelfScoreEvent, parseSelfScores, reconcileSelfScores, gamesText,
 } from '../../lib/selfScore'
@@ -481,6 +482,7 @@ export default function MyMatches() {
   const [warn, setWarn]         = useState(null) // 미입장 부전승 경고 { court, sport, secondsLeft, matchId, tournamentId, entryIds }
   const [acked, setAcked]       = useState(false) // "가고 있어요" 를 눌렀는가 (배너 확인 표시)
   const [notices, setNotices]   = useState([])   // 공지함: 받은 대회 안내·공지 (C11)
+  const [notifyPerm, setNotifyPerm] = useState(() => notificationPermission()) // OS 알림 권한 (C1)
   const myEntryIds     = useRef(new Set())        // 내가 속한 엔트리 id (호출 대상 판정용)
   const myTournamentIds = useRef([])              // 내가 참가한 대회 id (구독 대상)
 
@@ -650,6 +652,12 @@ export default function MyMatches() {
       if (payload.type === 'match_soon') {
         setSoon({ court: payload.court, sport: payload.sport, aheadCount: payload.aheadCount ?? null })
         try { if (navigator.vibrate) navigator.vibrate(120) } catch { /* noop */ }
+        // 백그라운드면 준비 안내도 OS 알림으로(코트 근처로 미리 이동하도록·C1).
+        showLocalNotification({
+          title: '⏳ 곧 경기 호출',
+          body: payload.court != null ? `곧 ${payload.court}번 코트로 호출돼요. 코트 근처에서 준비해주세요!` : '곧 호출될 예정이에요. 코트 근처에서 준비해주세요!',
+          tag: `soon-${payload.matchId ?? payload.tournamentId ?? 'x'}`,
+        })
         return
       }
       // 미입장 부전승 경고 — 가장 급함(부전승 처리 직전). 다른 배너를 덮는다.
@@ -662,6 +670,12 @@ export default function MyMatches() {
         setSoon(null)
         setAcked(false) // 재확인할 수 있게(오는 중인데 경고가 오면 다시 "가고 있어요")
         try { if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]) } catch { /* noop */ }
+        // 가장 급함(부전승 직전) — 탭 밖에서도 반드시 닿도록 OS 알림(C1).
+        showLocalNotification({
+          title: '⚠️ 미입장 부전승 경고',
+          body: payload.court != null ? `지금 바로 ${payload.court}번 코트로 입장하세요! 미입장 시 부전승 처리돼요.` : '지금 바로 코트로 입장하세요! 미입장 시 부전승 처리돼요.',
+          tag: `warn-${payload.matchId ?? payload.tournamentId ?? 'x'}`,
+        })
         return
       }
       if (payload.type !== 'match_call') return
@@ -675,6 +689,12 @@ export default function MyMatches() {
       setAcked(false) // 새 호출 → 다시 확인 필요
       // 진동·알림(있으면). 화면을 보고 있지 않아도 감지되도록.
       try { if (navigator.vibrate) navigator.vibrate([300, 120, 300]) } catch { /* noop */ }
+      // 탭이 백그라운드면(폰 화면 끔·다른 앱) OS 알림으로도 띄운다(호출 놓침 방지·C1).
+      showLocalNotification({
+        title: '🔔 경기 호출',
+        body: payload.court != null ? `지금 ${payload.court}번 코트로 입장하세요!` : '지금 코트로 입장하세요!',
+        tag: `call-${payload.matchId ?? payload.tournamentId ?? 'x'}`,
+      })
     })
     return unsub
   }, [entries, userId])
@@ -699,6 +719,13 @@ export default function MyMatches() {
       })
     }
     try { if (navigator.vibrate) navigator.vibrate(60) } catch { /* noop */ }
+  }
+
+  // "경기 호출 알림 받기" — 사용자 제스처에서 OS 알림 권한을 요청한다(C1).
+  //   허용하면 탭이 백그라운드(폰 화면 끔·다른 앱)여도 호출·부전승 경고가 OS 알림으로 닿는다.
+  async function enableNotify() {
+    const result = await requestNotifyPermission()
+    setNotifyPerm(result)
   }
 
   // 공지 읽음 처리 (라이브 수신 임시행은 서버 갱신 없이 상태만)
@@ -952,6 +979,26 @@ export default function MyMatches() {
           <>
             {/* ── 다음 경기 하이라이트 ─────────────────────────── */}
             <NextMatchHighlight info={nextMatch} />
+
+            {/* ── 경기 호출 알림 받기 (C1) ─────────────────────────
+                아직 권한을 묻지 않았고(default) 브라우저가 지원하며 곧 뛸 경기·체크인이
+                있을 때만 노출. 허용하면 폰 화면을 꺼 두거나 다른 앱을 봐도 호출·부전승
+                경고가 OS 알림으로 닿아 "배너를 못 봐서 부전승" 을 막는다. */}
+            {notificationsSupported() && notifyPerm === 'default' && (nextMatch || checkinCards.length > 0) && (
+              <button
+                onClick={enableNotify}
+                className="w-full flex items-center gap-3 rounded-2xl border border-blue-100 bg-blue-50/60 p-3.5 text-left active:scale-[.99] transition"
+              >
+                <Bell size={20} className="text-[#003478] shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-sm text-[#003478]">경기 호출 알림 받기</p>
+                  <p className="text-xs text-gray-500 leading-relaxed mt-0.5">
+                    폰 화면을 꺼 두거나 다른 앱을 봐도 호출·부전승 경고를 놓치지 않아요. 눌러서 알림을 켜세요.
+                  </p>
+                </div>
+                <span className="shrink-0 text-xs font-bold text-white bg-[#003478] rounded-lg px-3 py-2">켜기</span>
+              </button>
+            )}
 
             {/* ── 무심판 코트 셀프 점수 입력 (C7·심판) ─────────────
                 진행중 경기 우선, 없으면 코트가 배정된 가장 임박한 예정 경기.
