@@ -100,7 +100,9 @@ export function planAutoAdvance(matches, {
 //   calledAt   : { [matchId]: ts } 호출 시각 (재호출 시 갱신됨)
 //   warnedAt   : { [matchId]: ts } 이미 경고 보낸 경기 (중복 경고 방지)
 //   recalledAt : { [matchId]: { at, count } } 이미 보낸 재알림 (중복·스팸 방지)
+//   ackedAt    : { [matchId]: ts } 선수가 호출을 확인한("가고 있어요") 시각 (C1)
 //   warnAfterSec / forfeitAfterSec : 유예 임계 (기본 2분 / 5분)
+//   ackGraceSec     : 선수가 호출을 확인하면 더 주는 유예(기본 2분) — 오는 중인데 부전승 방지
 //   recallAfterSec  : 첫 재알림까지의 무응답 대기 (기본 45초)
 //   recallEverySec  : 이후 재알림 간격 (기본 45초)
 //   recallMaxCount  : 경고 전까지 최대 재알림 횟수 (기본 2회 — 스팸 방지)
@@ -109,12 +111,20 @@ export function planAutoAdvance(matches, {
 // C1 재알림: 호출은 인앱 실시간 방송이라 그 순간 앱을 안 보고 있던 선수는 놓친다.
 // warned(곧 부전승)로 넘어가기 전 waiting 구간에서 몇 번 더 부드럽게 호출을 반복해,
 // 화면을 잠깐 껐다 켠 선수도 "지금 몇 번 코트" 를 다시 받게 한다(무인 진행 시 자동).
+//
+// C1 호출 확인(ack): 호출은 지금껏 한 방향(주최자→선수)이라, "오는 중인 선수" 와
+// "정말 안 오는 선수" 를 구분할 수 없어 이동 중인 선수도 노쇼 타이머가 부전승으로
+// 밀어붙였다. 선수가 "가고 있어요" 를 누르면(ackedAt) 이 경기는 (1)재알림을 멈추고
+// (2)경고·부전승 임계를 ackGraceSec 만큼 뒤로 미뤄, 오는 중인 선수의 오탐 부전승을
+// 막는다. 유예는 확인 1회당 고정량이라 무한 연장은 없다(그 뒤엔 정상 escalation 재개).
 export function planNoShow(matches, {
   calledAt = {},
   warnedAt = {},
   recalledAt = {},
+  ackedAt = {},
   warnAfterSec = 120,
   forfeitAfterSec = 300,
+  ackGraceSec = 120,
   recallAfterSec = 45,
   recallEverySec = 45,
   recallMaxCount = 2,
@@ -123,13 +133,17 @@ export function planNoShow(matches, {
   const toWarn = []      // 지금 "곧 부전승" 경고 보낼 경기
   const toRecall = []    // 지금 부드러운 재알림(호출 반복) 보낼 경기
   const overdue = []     // 부전승 처리 대상 (사람 최종 확인)
-  const status = {}      // matchId → { phase, calledAt, warnAt, deadlineAt, secondsLeft, elapsedSec, recallCount }
+  const status = {}      // matchId → { phase, calledAt, warnAt, deadlineAt, secondsLeft, elapsedSec, recallCount, acked }
   for (const m of matches ?? []) {
     if (m.status !== 'scheduled') continue     // 시작·완료된 경기는 노쇼 대상 아님
     const c = calledAt[m.id]
     if (!c) continue                            // 호출 안 된 경기는 노쇼 판정 없음
-    const warnAt = c + warnAfterSec * 1000
-    const deadlineAt = c + forfeitAfterSec * 1000
+    // 이번 호출 이후에 들어온 확인만 인정(재호출 전의 낡은 확인은 무시).
+    const ackTs = ackedAt[m.id]
+    const acked = ackTs != null && ackTs >= c
+    const graceMs = acked ? Math.max(0, ackGraceSec) * 1000 : 0
+    const warnAt = c + warnAfterSec * 1000 + graceMs
+    const deadlineAt = c + forfeitAfterSec * 1000 + graceMs
     let phase = 'waiting'
     if (now >= deadlineAt) phase = 'overdue'
     else if (now >= warnAt) phase = 'warned'
@@ -143,10 +157,12 @@ export function planNoShow(matches, {
       secondsLeft: Math.max(0, Math.round((deadlineAt - now) / 1000)),
       elapsedSec: Math.max(0, Math.round((now - c) / 1000)),
       recallCount,
+      acked,
     }
     if (phase === 'overdue') overdue.push(m)
     else if (phase === 'warned' && !warnedAt[m.id]) toWarn.push(m)
-    else if (phase === 'waiting' && recallCount < recallMaxCount) {
+    // 선수가 확인했으면(오는 중) 재알림으로 더 조르지 않는다.
+    else if (phase === 'waiting' && !acked && recallCount < recallMaxCount) {
       // 마지막 접점(원 호출 or 직전 재알림) 이후 충분히 지났으면 재알림.
       const lastAt = rc?.at ?? c
       const gap = (recallCount === 0 ? recallAfterSec : recallEverySec) * 1000

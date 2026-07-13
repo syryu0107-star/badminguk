@@ -21,6 +21,13 @@ export const NOTIFY = {
   RESULT:         'result',          // 결과·급수 반영
 }
 
+// 선수→주최자 신호 (C1) — 호출에 대한 선수 응답. 호출(NOTIFY)과 방향이 반대라
+// 별도 이벤트로 두고, 지속 저장 없이 대회 채널 방송으로만 도달한다(무인 대시보드가
+// 실시간으로 소비하는 순간 신호 — 재호출마다 다시 확인하면 되므로 이력은 불필요).
+export const SIGNAL = {
+  CALL_ACK: 'call_ack',   // "가고 있어요" — 선수가 호출을 확인함
+}
+
 // 사후 커뮤니케이션 캠페인 종류 (C11) — 대회 생애주기 안내·공지.
 // 경기 호출(NOTIFY)과 달리 "지금 당장"이 아니라 지속 도달(공지함)이 핵심이라
 // 인앱 방송 + notifications 지속 저장으로 팬아웃한다.
@@ -294,6 +301,38 @@ export async function sendCampaign({ type, tournamentId, title, body, recipients
   const ps = await persist(payload, recipients)   // 공지함에 남으려면 지속 저장이 핵심
   const ex = dispatchExternal(payload, recipients) // 실발송은 human-gated 스텁
   return { payload, broadcast: bc, persist: ps, external: ex }
+}
+
+// ── 선수 호출 확인(ack) 발신/수신 (C1) ────────────────────────────────
+// 선수가 호출 배너에서 "가고 있어요" 를 누르면 대회 채널로 확인 신호를 방송한다.
+// 지속 저장·외부 발송 없음(오는 중인 선수를 노쇼 타이머가 봐주게 하는 순간 신호).
+export function buildCallAck({ tournamentId, matchId, entryIds = [], court = null, sport = null }) {
+  return {
+    type: SIGNAL.CALL_ACK,
+    tournamentId,
+    matchId: matchId ?? null,
+    entryIds: (entryIds ?? []).filter(Boolean),
+    court,
+    sport,
+    createdAt: new Date().toISOString(),
+  }
+}
+
+export async function ackMatchCall({ tournamentId, matchId, entryIds = [], court, sport }) {
+  const payload = buildCallAck({ tournamentId, matchId, entryIds, court, sport })
+  const bc = await broadcast(payload)   // 방송만 — 이력 저장 불필요
+  return { payload, broadcast: bc }
+}
+
+// 주최자(무인 대시보드)가 선수 호출 확인을 실시간으로 받는다. 반환값은 정리 함수.
+export function subscribeCallAcks(tournamentId, handler) {
+  if (!tournamentId) return () => {}
+  const ch = supabase.channel(notifyChannel(tournamentId))
+  ch.on('broadcast', { event: SIGNAL.CALL_ACK }, ({ payload }) => {
+    try { handler(payload) } catch { /* 수신 콜백 오류는 구독을 죽이지 않는다 */ }
+  })
+  ch.subscribe()
+  return () => supabase.removeChannel(ch)
 }
 
 // ── 수신자 헬퍼: 내 대회들의 알림 채널 구독 ────────────────────────────

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
-import { subscribeNotifications, fetchRecentCalls, markCallRead, fetchNotices, markNoticeRead, NOTICE_TYPES } from '../../lib/notify'
+import { subscribeNotifications, fetchRecentCalls, markCallRead, fetchNotices, markNoticeRead, ackMatchCall, NOTICE_TYPES } from '../../lib/notify'
 import { getCheckinWindow, assessSelfCheckin, selfCheckin, fetchMyCheckins } from '../../lib/checkin'
 import { depositGuide, shouldShowDeposit, formatWon } from '../../lib/deposit'
 import { canWithdraw, computeRefund, refundLineText } from '../../lib/refund'
@@ -475,9 +475,10 @@ export default function MyMatches() {
   const [cancelOpen, setCancelOpen] = useState(null) // 취소 확인 패널이 열린 entry id
   const [cancelling, setCancelling] = useState(null) // 취소 처리 중인 entry id
   const [cancelError, setCancelError] = useState(null) // 취소 실패한 entry id
-  const [call, setCall]         = useState(null) // 수신한 경기 호출 { court, sport, matchId, notificationId }
+  const [call, setCall]         = useState(null) // 수신한 경기 호출 { court, sport, matchId, tournamentId, entryIds, notificationId }
   const [soon, setSoon]         = useState(null) // 사전 알림 { court, sport, aheadCount }
-  const [warn, setWarn]         = useState(null) // 미입장 부전승 경고 { court, sport, secondsLeft }
+  const [warn, setWarn]         = useState(null) // 미입장 부전승 경고 { court, sport, secondsLeft, matchId, tournamentId, entryIds }
+  const [acked, setAcked]       = useState(false) // "가고 있어요" 를 눌렀는가 (배너 확인 표시)
   const [notices, setNotices]   = useState([])   // 공지함: 받은 대회 안내·공지 (C11)
   const myEntryIds     = useRef(new Set())        // 내가 속한 엔트리 id (호출 대상 판정용)
   const myTournamentIds = useRef([])              // 내가 참가한 대회 id (구독 대상)
@@ -614,12 +615,17 @@ export default function MyMatches() {
     if (userId) {
       fetchRecentCalls(userId).then(rows => {
         const hit = rows[0]
-        if (hit) setCall({
-          court: hit.payload?.court ?? null,
-          sport: hit.payload?.sport ?? null,
-          matchId: hit.match_id,
-          notificationId: hit.id,
-        })
+        if (hit) {
+          setCall({
+            court: hit.payload?.court ?? null,
+            sport: hit.payload?.sport ?? null,
+            matchId: hit.match_id,
+            tournamentId: hit.payload?.tournamentId ?? hit.tournament_id ?? null,
+            entryIds: (hit.payload?.entryIds ?? []).filter(eid => myEntryIds.current.has(eid)),
+            notificationId: hit.id,
+          })
+          setAcked(false)
+        }
       })
     }
 
@@ -652,15 +658,25 @@ export default function MyMatches() {
       }
       // 미입장 부전승 경고 — 가장 급함(부전승 처리 직전). 다른 배너를 덮는다.
       if (payload.type === 'walkover_warn') {
-        setWarn({ court: payload.court, sport: payload.sport, secondsLeft: payload.secondsLeft ?? null })
+        setWarn({
+          court: payload.court, sport: payload.sport, secondsLeft: payload.secondsLeft ?? null,
+          matchId: payload.matchId ?? null, tournamentId: payload.tournamentId ?? null,
+          entryIds: (payload.entryIds ?? []).filter(eid => myEntryIds.current.has(eid)),
+        })
         setSoon(null)
+        setAcked(false) // 재확인할 수 있게(오는 중인데 경고가 오면 다시 "가고 있어요")
         try { if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]) } catch { /* noop */ }
         return
       }
       if (payload.type !== 'match_call') return
-      setCall({ court: payload.court, sport: payload.sport, matchId: payload.matchId })
+      setCall({
+        court: payload.court, sport: payload.sport, matchId: payload.matchId,
+        tournamentId: payload.tournamentId ?? null,
+        entryIds: (payload.entryIds ?? []).filter(eid => myEntryIds.current.has(eid)),
+      })
       setSoon(null) // 진짜 호출이 왔으니 사전 알림은 내림
       setWarn(null) // 정상 호출이 다시 왔으니 경고는 내림
+      setAcked(false) // 새 호출 → 다시 확인 필요
       // 진동·알림(있으면). 화면을 보고 있지 않아도 감지되도록.
       try { if (navigator.vibrate) navigator.vibrate([300, 120, 300]) } catch { /* noop */ }
     })
@@ -670,6 +686,23 @@ export default function MyMatches() {
   function dismissCall() {
     if (call?.notificationId) markCallRead(call.notificationId)
     setCall(null)
+  }
+
+  // "가고 있어요" — 주최자(무인 대시보드)에게 호출 확인 신호를 보낸다(C1).
+  //   오는 중인 선수를 노쇼 타이머가 봐주도록(재알림 중단·부전승 유예 연장). src 는
+  //   호출/경고 배너 payload — matchId·tournamentId·entryIds 를 담고 있으면 발신.
+  function acknowledge(src) {
+    setAcked(true) // 낙관적 표시(발신 실패해도 배너 UX 는 확인됨으로)
+    if (src?.tournamentId && src?.matchId) {
+      ackMatchCall({
+        tournamentId: src.tournamentId,
+        matchId: src.matchId,
+        entryIds: src.entryIds ?? [],
+        court: src.court,
+        sport: src.sport,
+      })
+    }
+    try { if (navigator.vibrate) navigator.vibrate(60) } catch { /* noop */ }
   }
 
   // 공지 읽음 처리 (라이브 수신 임시행은 서버 갱신 없이 상태만)
@@ -805,17 +838,28 @@ export default function MyMatches() {
                 {warn.court != null ? `지금 바로 ${warn.court}번 코트로 입장하세요!` : '지금 바로 코트로 입장하세요!'}
               </p>
               <p className="text-[11px] text-white/80">
-                {typeof warn.secondsLeft === 'number' && warn.secondsLeft > 0
-                  ? `약 ${Math.max(1, Math.ceil(warn.secondsLeft / 60))}분 내 미입장 시 부전승 처리돼요`
-                  : '응답이 없으면 부전승 처리돼요'}
+                {acked
+                  ? '✓ "가고 있어요" 를 알렸어요 — 지금 바로 코트로 이동하세요'
+                  : typeof warn.secondsLeft === 'number' && warn.secondsLeft > 0
+                    ? `약 ${Math.max(1, Math.ceil(warn.secondsLeft / 60))}분 내 미입장 시 부전승 처리돼요`
+                    : '응답이 없으면 부전승 처리돼요'}
               </p>
             </div>
-            <button
-              onClick={() => setWarn(null)}
-              className="shrink-0 bg-white text-[#C60C30] font-black text-sm px-3 py-2 rounded-xl active:opacity-80"
-            >
-              확인
-            </button>
+            {acked ? (
+              <button
+                onClick={() => setWarn(null)}
+                className="shrink-0 bg-white/25 text-white font-bold text-xs px-3 py-2 rounded-xl active:opacity-80"
+              >
+                닫기
+              </button>
+            ) : (
+              <button
+                onClick={() => acknowledge(warn)}
+                className="shrink-0 bg-white text-[#C60C30] font-black text-sm px-3 py-2 rounded-xl active:opacity-80"
+              >
+                가고 있어요
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -834,13 +878,25 @@ export default function MyMatches() {
               <p className="text-lg font-black leading-tight">
                 {call.court != null ? `지금 ${call.court}번 코트로 입장하세요!` : '지금 코트로 입장하세요!'}
               </p>
+              {acked && (
+                <p className="text-[11px] font-bold text-white/90 mt-0.5">✓ "가고 있어요" 를 알렸어요 — 코트로 이동하세요</p>
+              )}
             </div>
-            <button
-              onClick={dismissCall}
-              className="shrink-0 bg-white text-[#C60C30] font-black text-sm px-3 py-2 rounded-xl active:opacity-80"
-            >
-              확인
-            </button>
+            {acked ? (
+              <button
+                onClick={dismissCall}
+                className="shrink-0 bg-white/25 text-white font-bold text-xs px-3 py-2 rounded-xl active:opacity-80"
+              >
+                닫기
+              </button>
+            ) : (
+              <button
+                onClick={() => acknowledge(call)}
+                className="shrink-0 bg-white text-[#C60C30] font-black text-sm px-3 py-2 rounded-xl active:opacity-80"
+              >
+                지금 갈게요
+              </button>
+            )}
           </div>
         </div>
       )}

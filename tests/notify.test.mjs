@@ -8,8 +8,8 @@
 import { test, assert } from './_harness.mjs'
 import { makeSupabase } from './_supabase-stub.mjs'
 import {
-  NOTIFY, CAMPAIGN, NOTICE_TYPES, notifyChannel,
-  buildMatchCall, buildMatchSoon, buildWalkoverWarn,
+  NOTIFY, SIGNAL, CAMPAIGN, NOTICE_TYPES, notifyChannel,
+  buildMatchCall, buildMatchSoon, buildWalkoverWarn, buildCallAck,
   buildCallBatchItems, notificationRow, callMatchBatch,
 } from '../src/lib/notify.js'
 import {
@@ -42,6 +42,27 @@ test('notify: NOTICE_TYPES — 공지함용 지속형만 포함, 전송성 호�
   assert.ok(!NOTICE_TYPES.includes(NOTIFY.MATCH_CALL))
   assert.ok(!NOTICE_TYPES.includes(NOTIFY.MATCH_SOON))
   assert.ok(!NOTICE_TYPES.includes(NOTIFY.WALKOVER_WARN))
+})
+
+// ══════════════════════ notify: buildCallAck (선수 호출 확인) ══════════════════════
+test('notify: buildCallAck — 선수 확인 신호 페이로드(entryIds null 제거)', () => {
+  const p = buildCallAck({ tournamentId: 't1', matchId: 'm1', entryIds: ['e1', null, 'e2'], court: 4, sport: '남복' })
+  assert.equal(p.type, SIGNAL.CALL_ACK)
+  assert.equal(p.type, 'call_ack')
+  assert.equal(p.tournamentId, 't1')
+  assert.equal(p.matchId, 'm1')
+  assert.equal(p.court, 4)
+  assert.deepEqual(p.entryIds, ['e1', 'e2'])
+  assert.ok(typeof p.createdAt === 'string')
+  // 호출 확인은 공지함에 남지 않는 순간 신호
+  assert.ok(!NOTICE_TYPES.includes(p.type))
+})
+
+test('notify: buildCallAck — 인자 없어도 안전(빈 배열·null)', () => {
+  const p = buildCallAck({ tournamentId: 't1' })
+  assert.deepEqual(p.entryIds, [])
+  assert.equal(p.matchId, null)
+  assert.equal(p.court, null)
 })
 
 // ══════════════════════ notify: buildMatchCall ══════════════════════

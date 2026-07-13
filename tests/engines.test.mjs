@@ -311,6 +311,45 @@ test('planNoShow: waiting→recall→warned→overdue 단계', () => {
   assert.equal(planNoShow([{ id: 'm1', status: 'in_progress' }], { ...opts, calledAt: { m1: NOW - 400000 }, now: NOW }).overdue.length, 0)
 })
 
+test('planNoShow: 선수 확인(ack) → 재알림 중단 + 부전승 유예 연장 (C1)', () => {
+  const m = [{ id: 'm1', status: 'scheduled' }]
+  const opts = { warnAfterSec: 120, forfeitAfterSec: 300, ackGraceSec: 120, recallAfterSec: 45, recallEverySec: 45, recallMaxCount: 2 }
+  const called = NOW - 50000 // 50초 경과(>45): 확인 없으면 재알림 대상
+
+  // 확인 없음 → 재알림 발송 대상
+  let r = planNoShow(m, { ...opts, calledAt: { m1: called }, now: NOW })
+  assert.equal(r.toRecall.length, 1)
+  assert.equal(r.status.m1.acked, false)
+
+  // 확인함(호출 이후) → 재알림 안 함 + acked 표시
+  r = planNoShow(m, { ...opts, calledAt: { m1: called }, ackedAt: { m1: NOW - 5000 }, now: NOW })
+  assert.equal(r.toRecall.length, 0)
+  assert.equal(r.status.m1.acked, true)
+
+  // 130초(>120): 확인 없으면 warned, 확인하면 유예로 아직 waiting
+  const called130 = NOW - 130000
+  assert.equal(planNoShow(m, { ...opts, calledAt: { m1: called130 }, now: NOW }).status.m1.phase, 'warned')
+  const acked130 = planNoShow(m, { ...opts, calledAt: { m1: called130 }, ackedAt: { m1: NOW - 1000 }, now: NOW })
+  assert.equal(acked130.status.m1.phase, 'waiting') // 120초 유예로 임계가 뒤로 밀림
+  assert.equal(acked130.toWarn.length, 0)
+
+  // 310초(>300): 확인 없으면 overdue, 확인하면 유예(420초)로 아직 warned
+  const called310 = NOW - 310000
+  assert.equal(planNoShow(m, { ...opts, calledAt: { m1: called310 }, now: NOW }).overdue.length, 1)
+  const acked310 = planNoShow(m, { ...opts, calledAt: { m1: called310 }, ackedAt: { m1: NOW - 1000 }, now: NOW })
+  assert.equal(acked310.overdue.length, 0) // 부전승 유예 (오는 중)
+  assert.equal(acked310.status.m1.phase, 'warned')
+
+  // 유예는 무한이 아님 — 확인해도 (forfeit+grace) 지나면 overdue 재개
+  const called500 = NOW - 500000 // 500초 > 300+120=420
+  assert.equal(planNoShow(m, { ...opts, calledAt: { m1: called500 }, ackedAt: { m1: NOW - 1000 }, now: NOW }).overdue.length, 1)
+
+  // 재호출 전의 낡은 확인(호출 이전)은 무시 — ackTs < calledAt 이면 acked=false
+  const stale = planNoShow(m, { ...opts, calledAt: { m1: called130 }, ackedAt: { m1: called130 - 10000 }, now: NOW })
+  assert.equal(stale.status.m1.acked, false)
+  assert.equal(stale.status.m1.phase, 'warned')
+})
+
 // ══════════════════════ advance.planTeamForfeit ══════════════════════
 test('advance: planTeamForfeit — 상대 정해진 경기 부전·미정 슬롯 비우기', () => {
   const matches = [

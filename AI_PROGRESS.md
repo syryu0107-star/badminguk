@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-13 — [C1] 선수 호출 확인("가고 있어요") — 경기 호출 양방향화로 오탐 부전승 제거
+
+- **경기 호출을 한 방향(주최자→선수)에서 양방향(선수 확인 응답)으로 — 코트로 이동 중인 선수의 오탐 부전승 제거**
+  - 파일: `src/lib/notify.js`, `src/lib/orchestrator.js`, `src/pages/player/MyMatches.jsx`, `src/pages/organizer/LiveDashboard.jsx`, `tests/notify.test.mjs`, `tests/engines.test.mjs`
+  - 요약: 직전 런(C2/C3 신청 자가 취소) 뒤, 비-human-gated 갭이 대부분 소진된 상태에서 **C1(가장 큰 공백·최우선 클러스터)의 호출 인프라가 한 방향**이라 `planNoShow` 노쇼 타이머가 "이동 중인 선수"와 "정말 안 오는 선수"를 구분 못 해, 무인 진행 ON 시 이동 중인 선수를 자동 부전승 처리하는 **오탐**이 남아 있었다(북극성 near-zero touch 신뢰성 구멍). **왜 non-human-gated**: 확인 신호는 기존 대회 채널 방송만으로 도달(이력 저장 불필요)·마이그레이션·외부 키 0. **구현(순수·비파괴)**: (1) `notify.js` `SIGNAL.CALL_ACK`+`buildCallAck`(순수)+`ackMatchCall`(방송)+`subscribeCallAcks`(수신). (2) `orchestrator.planNoShow`에 `ackedAt`·`ackGraceSec`(2분) — 이번 호출 이후 확인이면(`ackTs≥calledAt`) 재알림 중단+부전승 임계 유예 연장(오탐 방지), 확인 1회당 고정 유예라 무한 연장 없음, status.acked 노출, 기본값 `{}`로 미확인 경기 동작 불변(회귀 0). (3) MyMatches 호출·부전승 경고 배너에 "지금 갈게요"/"가고 있어요" 버튼→`acknowledge`+확인 표시, 배너 상태에 tournamentId·entryIds 캡처. (4) LiveDashboard `subscribeCallAcks`→`ackedIds`→`planNoShow(ackedAt)`+"선수 확인 · 오는 중" 배지+자동 로그. `ackTs≥calledAt` 가드로 재호출 시 낡은 확인 자동 무효(별도 리셋 불필요), 자동 부전승은 임계 연장으로 자연히 지연(로직 미변경). 회귀 3개. `npm test` **209/209**(206+3), `npx vite build` green. (자동화율 주최자 95%·선수 90→91%·심판 88%·운영 89→90% — 호출 양방향화로 오탐 부전승 제거)
+
 ## 2026-07-13 — [C2/C3] 신청 자가 취소 — 선수가 앱에서 직접 취소 + 취소 전 규정 환불 미리보기
 
 - **선수 신청 취소를 "단톡방 수작업"에서 "앱 자가 취소 + 규정 환불 미리보기"로 — 접수 루프의 마지막 선수측 수작업 무인화**

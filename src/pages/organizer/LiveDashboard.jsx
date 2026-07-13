@@ -4,7 +4,7 @@ import { supabase } from '../../lib/supabase'
 import { resolveMatchMMR, CERT_LEVELS } from '../../lib/mmr'
 import { calculatePoolStandings, prizeLabel } from '../../lib/tournament'
 import { completeMatch, finalizeTournament, scoresToPairs, forfeitTeamRemaining } from '../../lib/advance'
-import { callMatch, callMatchBatch } from '../../lib/notify'
+import { callMatch, callMatchBatch, subscribeCallAcks } from '../../lib/notify'
 import { planAutoAdvance, planNoShow, analyzeDelay, planRebalance } from '../../lib/orchestrator'
 import { planAutoFinalize } from '../../lib/stateMachine'
 import { summarizeCheckins, assessNoShowResolution } from '../../lib/checkin'
@@ -121,6 +121,7 @@ export default function LiveDashboard() {
   const warnedRef = useRef({})   // { [matchId]: ts } 미입장 경고 중복 방지
   const recalledRef = useRef({}) // { [matchId]: { at, count } } 재알림(호출 반복) 중복·스팸 방지
   const autoResolvedRef = useRef({}) // { [matchId]: ts } 노쇼 자동 부전승 중복 실행 방지
+  const [ackedIds, setAckedIds] = useState({}) // { [matchId]: ts } 선수가 "가고 있어요" 확인한 경기 (C1)
   const [nowTick, setNowTick] = useState(Date.now()) // 카운트다운 갱신용 틱
 
   // ── 무심판 셀프 점수 (C7·심판) ─────────────────────────────────────
@@ -174,6 +175,23 @@ export default function LiveDashboard() {
     setLoading(true)
     setRetryTick(t => t + 1)
   }
+
+  // ── 선수 호출 확인("가고 있어요") 수신 (C1) ─────────────────────────
+  //   선수가 호출 배너에서 "가고 있어요" 를 누르면 대회 채널로 확인 신호가 온다.
+  //   이 시각을 기록해 planNoShow 가 오는 중인 선수의 노쇼 타이머를 봐주게 한다
+  //   (재알림 중단 + 부전승 유예 연장). 무인 진행과 무관하게 항상 듣는다.
+  useEffect(() => {
+    if (!id) return
+    const unsub = subscribeCallAcks(id, (payload) => {
+      const mid = payload?.matchId
+      if (!mid) return
+      setAckedIds(prev => ({ ...prev, [mid]: Date.now() }))
+      const court = payload?.court
+      pushAutoLog(`${court != null ? `${court}번 코트` : '경기'} — 선수 "가고 있어요" 확인 (부전승 유예)`)
+    })
+    return unsub
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id])
 
   useEffect(() => {
     if (!activeCat) return
@@ -309,7 +327,8 @@ export default function LiveDashboard() {
   //   1회 자동 발송(warnedRef 중복 차단). 부전승 최종 처리는 사람이 확인(overdue 패널).
   useEffect(() => {
     const plan = planNoShow(matches, {
-      calledAt: calledIds, warnedAt: warnedRef.current, recalledAt: recalledRef.current, now: nowTick,
+      calledAt: calledIds, warnedAt: warnedRef.current, recalledAt: recalledRef.current,
+      ackedAt: ackedIds, now: nowTick,
     })
     setNoShow(plan.status)
     if (autoRun && (plan.toRecall.length || plan.toWarn.length)) {
@@ -358,7 +377,7 @@ export default function LiveDashboard() {
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [matches, calledIds, autoRun, nowTick, checkinSet])
+  }, [matches, calledIds, autoRun, nowTick, checkinSet, ackedIds])
 
   // ── 진행 페이스·지연 예측 (C6) — 계획 대비 실시간 지연을 예측(nowTick 로 라이브 갱신) ──
   const delay = useMemo(
@@ -1484,9 +1503,14 @@ export default function LiveDashboard() {
                       )}
                       {m.status === 'scheduled' && (noShow[m.id]?.phase === 'waiting' || noShow[m.id]?.phase === 'warned') && (
                         <span className={`flex items-center gap-0.5 font-bold
-                          ${noShow[m.id].phase === 'warned' ? 'text-[#C60C30]' : 'text-amber-600'}`}>
-                          <AlertTriangle size={10} /> 미응답 부전승까지 {fmtCountdown(noShow[m.id].secondsLeft)}
-                          {noShow[m.id].recallCount > 0 && (
+                          ${noShow[m.id].acked ? 'text-emerald-600'
+                            : noShow[m.id].phase === 'warned' ? 'text-[#C60C30]' : 'text-amber-600'}`}>
+                          {noShow[m.id].acked ? (
+                            <><CheckCircle size={10} /> 선수 확인 · 오는 중</>
+                          ) : (
+                            <><AlertTriangle size={10} /> 미응답 부전승까지 {fmtCountdown(noShow[m.id].secondsLeft)}</>
+                          )}
+                          {noShow[m.id].recallCount > 0 && !noShow[m.id].acked && (
                             <span className="text-gray-400 font-semibold">· 재호출 {noShow[m.id].recallCount}회</span>
                           )}
                         </span>
