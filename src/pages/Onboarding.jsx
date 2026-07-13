@@ -1,10 +1,20 @@
 import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { GRADES, getInitialMMR, getGradeIndex } from '../lib/grades'
+import { GRADES, getInitialMMR, getGradeIndex, getGradeInfo, unitLabel, modeLabel } from '../lib/grades'
 import { surveyToRating, crossCheckSandbag } from '../lib/rating'
 import { MIN_RANKED_GAMES } from '../lib/reliability'
-import { ChevronRight, ShieldCheck, Camera, Sparkles, Check } from 'lucide-react'
+import { ChevronRight, ShieldCheck, Camera, Sparkles, Check, Search, UserCheck, Trophy } from 'lucide-react'
+
+// 실명 마스킹 — 홍길동 → 홍*동 (017 bmg_mask_name와 동일 규칙).
+// 미가입 명단(imported_players)은 타인 PII라 후보 표시 때도 항상 가린다.
+function maskName(name) {
+  const s = (name ?? '').trim()
+  if (s.length === 0) return ''
+  if (s.length === 1) return s
+  if (s.length === 2) return s[0] + '*'
+  return s[0] + '*'.repeat(s.length - 2) + s[s.length - 1]
+}
 
 // ── 온보딩 예측변수 옵션 (전략 3-2: "감"이 아니라 검증가능 사실) ──────────
 // 각 답은 rating.js.surveyToRating 입력으로 변환된다(점 추정 아닌 밴드).
@@ -90,6 +100,12 @@ export default function Onboarding() {
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState('')
 
+  // ── 지난 기록 이어받기(claim) — 이름 입력 직후 미가입 명단에서 본인 후보 검색 ──
+  const [showClaim,      setShowClaim]      = useState(false)  // 후보 카드 화면 표시
+  const [claimSearching, setClaimSearching] = useState(false)
+  const [claimCandidates, setClaimCandidates] = useState([])
+  const [claiming,       setClaiming]       = useState(false)
+
   function toggleSport(s) {
     setSports(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s])
   }
@@ -113,8 +129,62 @@ export default function Onboarding() {
     setUploading(false)
   }
 
-  function goNext() {
+  async function goNext() {
     if (current === 'sports') { finish(); return }
+    // 이름 입력 직후(신규 유저): 같은 이름의 미가입 명단 후보를 찾아 "이어받기" 제안.
+    // 복귀 유저(gradeIsLocked)는 phone_records로 이미 기록이 복원되므로 생략.
+    if (current === 'name' && !gradeIsLocked && !showClaim) {
+      const found = await searchClaimCandidates(name)
+      if (found.length) { setClaimCandidates(found); setShowClaim(true); return }
+    }
+    setStep(s => Math.min(steps.length - 1, s + 1))
+  }
+
+  // 미가입 선수 명단에서 같은 이름 + 미claim 후보 검색(공개 SELECT).
+  async function searchClaimCandidates(nm) {
+    const q = (nm ?? '').trim()
+    if (q.length < 2) return []
+    setClaimSearching(true)
+    const { data } = await supabase
+      .from('imported_players')
+      .select('id, name, unit, mode, grade, mmr, source_label, created_at')
+      .ilike('name', q)
+      .is('claimed_by', null)
+      .order('created_at', { ascending: false })
+      .limit(10)
+    setClaimSearching(false)
+    return data ?? []
+  }
+
+  // "이게 나예요" 확정 — 최소 프로필 생성 후 claim RPC로 급수·MMR 상향 이관(설문 생략).
+  async function confirmClaim(candidate) {
+    setClaiming(true); setError('')
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user ?? null
+    if (!user) { setError('로그인이 필요합니다.'); setClaiming(false); return }
+
+    // 1) 기본 프로필(없으면 생성). 급수/MMR은 왕초심 기본값 → claim이 상향만 덮어씀(하향 없음).
+    const base = {
+      id: user.id, name, phone, role,
+      official_grade: '왕초심', self_reported_grade: '왕초심',
+      preferred_sports: sports,
+      mmr: 1000, mmr_rd: 350, mmr_source: 'self_report', provisional: true, mmr_games_played: 0,
+      singles_mmr: 1000, singles_mmr_rd: 350, singles_mmr_source: 'self_report', singles_provisional: true,
+      onboarding_done: true,
+    }
+    const { error: pErr } = await supabase.from('profiles').upsert(base)
+    if (pErr) { setError(pErr.message); setClaiming(false); return }
+
+    // 2) claim — 지난 급수·MMR·RD를 내 프로필로 이관(유리할 때만).
+    const { error: cErr } = await supabase.rpc('claim_imported_player', { p_imported_id: candidate.id })
+    if (cErr) { setError('이어받기에 실패했어요: ' + cErr.message); setClaiming(false); return }
+
+    navigate(role === 'organizer' ? '/organizer' : '/home', { replace: true })
+  }
+
+  // "제 기록이 아니에요" — 후보 무시하고 일반 설문 흐름으로 진행.
+  function skipClaim() {
+    setShowClaim(false)
     setStep(s => Math.min(steps.length - 1, s + 1))
   }
 
@@ -210,6 +280,71 @@ export default function Onboarding() {
   const lockedGradeList = gradeIsLocked
     ? GRADES.filter((g) => getGradeIndex(g.key) >= getGradeIndex(phoneRecord.peak_grade))
     : GRADES
+
+  // ── 지난 기록 찾음! 이어받기 제안 화면(이름 입력 직후 인터스티셜) ──────────
+  if (showClaim) {
+    return (
+      <div className="min-h-screen bg-white flex flex-col px-6 pt-12 pb-8">
+        <div className="flex-1 fade-up overflow-y-auto">
+          <div className="w-14 h-14 rounded-2xl bg-red-50 flex items-center justify-center mb-4">
+            <Trophy size={26} className="text-[#C60C30]" />
+          </div>
+          <h2 className="text-2xl font-black mb-1">지난 대회 기록을 찾았어요! 🔎</h2>
+          <p className="text-gray-500 mb-5 text-sm leading-relaxed">
+            <strong className="text-gray-700">{name.trim()}</strong>님과 같은 이름으로 지난 대회 명단이 있어요.<br/>
+            내 기록이 맞으면 <strong>이어받기</strong>로 지난 급수·MMR을 그대로 가져올 수 있어요.
+          </p>
+
+          <div className="space-y-2.5">
+            {claimCandidates.map(c => {
+              const info = getGradeInfo(c.grade)
+              return (
+                <div key={c.id} className="p-4 rounded-2xl border-2 border-gray-100 bg-white">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <span className="text-lg">{info?.flair ?? '🏸'}</span>
+                    <p className="font-bold flex-1">{maskName(c.name)}</p>
+                    <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                      {unitLabel(c.unit)} {modeLabel(c.mode)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-gray-500 mb-3">
+                    {c.grade && <span className="font-bold text-[#003478]">{c.grade}</span>}
+                    {c.source_label && <span className="truncate">· {c.source_label}</span>}
+                  </div>
+                  <button
+                    onClick={() => confirmClaim(c)}
+                    disabled={claiming}
+                    className="w-full py-2.5 rounded-xl font-bold text-white text-sm
+                               flex items-center justify-center gap-1.5 active:scale-[.98] transition disabled:opacity-50"
+                    style={{ background: 'linear-gradient(135deg, #C60C30, #003478)' }}
+                  >
+                    <UserCheck size={16} />
+                    {claiming ? '이어받는 중...' : '이게 나예요 · 이어받기'}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+
+          {error && <p className="text-red-500 text-sm mt-4">{error}</p>}
+
+          <p className="text-[11px] text-gray-400 mt-4 leading-relaxed">
+            급수는 지금보다 <strong>유리할 때만</strong> 올라가요(하락 없음). 다른 사람의 기록을
+            잘못 가져오지 않도록 대회 이름·급수를 꼭 확인해주세요.
+          </p>
+        </div>
+
+        <button
+          onClick={skipClaim}
+          disabled={claiming}
+          className="w-full py-4 rounded-2xl font-bold text-gray-500 text-base mt-4
+                     border-2 border-gray-200 active:scale-[.97] transition disabled:opacity-50"
+        >
+          제 기록이 아니에요 · 처음이에요
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-white flex flex-col px-6 pt-12 pb-8">
@@ -512,13 +647,15 @@ export default function Onboarding() {
 
       <button
         onClick={goNext}
-        disabled={!canNext}
+        disabled={!canNext || claimSearching}
         className="w-full py-4 rounded-2xl font-bold text-white text-lg mt-6
                    transition active:scale-[.97] disabled:opacity-40 flex items-center justify-center gap-2"
         style={{ background: 'linear-gradient(135deg, #C60C30, #003478)' }}
       >
         {current === 'sports'
           ? (saving ? '저장 중...' : '배드민국 시작하기 🏸')
+          : current === 'name' && claimSearching
+          ? <><Search size={18} /><span>지난 기록 찾는 중...</span></>
           : <><span>다음</span><ChevronRight size={20} /></>
         }
       </button>

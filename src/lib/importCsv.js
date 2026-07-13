@@ -156,6 +156,17 @@ function toInt(raw) {
   return m ? parseInt(m, 10) : null
 }
 
+// 실명 마스킹 — 홍길동 → 홍*동 (017 SQL bmg_mask_name과 1:1 파리티).
+//   0자→'' · 1자→그대로 · 2자→앞1+'*'(김철→김*) · 3자+→앞1 + '*'×(len-2) + 뒤1.
+//   ⚠️ 미가입(imported) 선수 표시 전용. 가입 프로필은 동의했으므로 마스킹하지 않는다.
+export function maskName(raw) {
+  const s = norm(raw)
+  if (s.length === 0) return ''
+  if (s.length === 1) return s
+  if (s.length === 2) return s[0] + '*'
+  return s[0] + '*'.repeat(s.length - 2) + s[s.length - 1]
+}
+
 // ══════════════════════════════════════════════════════════════════
 // 4. 헤더 매핑 — 표준 필드 인덱스 찾기
 //    반환: { indexByField, missingRequired, unmapped }

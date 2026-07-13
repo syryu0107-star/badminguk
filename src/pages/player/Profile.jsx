@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
-import { getGradeInfo, getMMRPercentile, GRADES, promotionHint, UNITS, MODES, trackGrade, unitLabel } from '../../lib/grades'
+import { getGradeInfo, getMMRPercentile, GRADES, promotionHint, UNITS, MODES, trackGrade, unitLabel, modeLabel } from '../../lib/grades'
 import { CERT_LEVELS } from '../../lib/mmr'
 import { calcReliability, MIN_RANKED_GAMES, MIN_RANKED_RELIABILITY, isRanked } from '../../lib/reliability'
 import { computeCareerRecord, hasCareerRecord } from '../../lib/record'
@@ -9,10 +9,20 @@ import BottomNav from '../../components/BottomNav'
 import GradeChip from '../../components/GradeChip'
 import ReliabilityBadge from '../../components/ReliabilityBadge'
 import Spinner from '../../components/Spinner'
-import { LogOut, Upload, Award, Shield, TrendingUp, TrendingDown, ChevronsUp, PartyPopper, Swords } from 'lucide-react'
+import { LogOut, Upload, Award, Shield, TrendingUp, TrendingDown, ChevronsUp, PartyPopper, Swords, Search, UserCheck, Trophy } from 'lucide-react'
 
 // MMR 출처 라벨 (016 mmr_source: self_report|import|match) — 초보용 쉬운 우리말
 const SOURCE_LABEL = { self_report: '자기 신고', import: '불러온 기록', match: '경기 기록' }
+
+// 실명 마스킹 — 홍길동 → 홍*동 (017 bmg_mask_name와 동일 규칙).
+// 미가입 명단(imported_players)은 타인 PII라 후보 표시 때도 항상 가린다.
+function maskName(name) {
+  const s = (name ?? '').trim()
+  if (s.length === 0) return ''
+  if (s.length === 1) return s
+  if (s.length === 2) return s[0] + '*'
+  return s[0] + '*'.repeat(s.length - 2) + s[s.length - 1]
+}
 
 // 미니 MMR 추이 차트 (SVG)
 function MiniChart({ history }) {
@@ -143,8 +153,18 @@ export default function Profile() {
   const [record, setRecord] = useState(null)             // 통합 전적 (전 대회 실경기 W/L + 상대 전적)
   const [loading, setLoading]     = useState(true)
   const [uploading, setUploading] = useState(false)
-  const [tab, setTab]             = useState('mmr')  // 'mmr' | 'career'
+  const [tab, setTab]             = useState('mmr')  // 'mmr' | 'career' | 'cert'
   const fileRef = useRef()
+
+  // ── 지난 기록 이어받기(claim) — 미가입 명단에서 본인 기록 찾아 프로필로 이관 ──
+  const [claimOpen,      setClaimOpen]      = useState(false)
+  const [claimName,      setClaimName]      = useState('')
+  const [claimSearching, setClaimSearching] = useState(false)
+  const [claimSearched,  setClaimSearched]  = useState(false)
+  const [claimCands,     setClaimCands]     = useState([])   // 미claim 후보
+  const [claimedMine,    setClaimedMine]    = useState([])   // 내가 이미 이어받은 기록
+  const [claimBusyId,    setClaimBusyId]    = useState(null)
+  const [claimNote,      setClaimNote]      = useState('')
 
   useEffect(() => {
     async function load() {
@@ -240,10 +260,65 @@ export default function Profile() {
         console.warn('[프로필] 통합 전적 조회 실패 — 전적 카드 생략:', e?.message || e)
       }
 
+      // 내가 이미 이어받은 미가입 기록(claimed_by = 나) — "이어받음"으로 표시
+      try {
+        const { data: mine } = await supabase
+          .from('imported_players')
+          .select('id, name, unit, mode, grade, mmr, source_label, claimed_at')
+          .eq('claimed_by', user.id)
+          .order('claimed_at', { ascending: false })
+        setClaimedMine(mine ?? [])
+      } catch { /* 명단 조회 실패는 조용히 무시 */ }
+
+      // 후보 검색 기본값 = 내 이름
+      if (p?.name) setClaimName(p.name)
+
       setLoading(false)
     }
     load()
   }, [])
+
+  // claim 반영 후 프로필만 다시 읽어 헤더/급수 갱신
+  async function reloadProfile() {
+    const { data: { session } } = await supabase.auth.getSession(); const user = session?.user ?? null
+    if (!user) return
+    const { data: p } = await supabase.from('profiles').select('*').eq('id', user.id).single()
+    if (p) setProfile(p)
+  }
+
+  // 미가입 명단에서 같은 이름 + 미claim 후보 검색(공개 SELECT)
+  async function searchImported() {
+    const q = claimName.trim()
+    if (q.length < 2) { setClaimNote('이름을 2글자 이상 입력해주세요.'); return }
+    setClaimSearching(true); setClaimNote('')
+    const { data } = await supabase
+      .from('imported_players')
+      .select('id, name, unit, mode, grade, mmr, source_label, created_at')
+      .ilike('name', q)
+      .is('claimed_by', null)
+      .order('created_at', { ascending: false })
+      .limit(10)
+    setClaimCands(data ?? [])
+    setClaimSearched(true)
+    setClaimSearching(false)
+  }
+
+  // "이게 나예요" — claim RPC로 지난 급수·MMR을 내 프로필로 상향 이관(하향 없음)
+  async function doClaim(cand) {
+    setClaimBusyId(cand.id); setClaimNote('')
+    const { data, error } = await supabase.rpc('claim_imported_player', { p_imported_id: cand.id })
+    if (error) { setClaimNote('이어받기에 실패했어요: ' + error.message); setClaimBusyId(null); return }
+    // 후보에서 제거 → 이어받은 목록으로 이동
+    setClaimCands(prev => prev.filter(c => c.id !== cand.id))
+    setClaimedMine(prev => [{ ...cand, claimed_at: new Date().toISOString() }, ...prev])
+    setClaimNote(
+      data?.grade_applied
+        ? `🎉 ${data.grade_applied} 급수 기록을 이어받았어요! 지난 실력이 반영됐어요.`
+        : '🎉 지난 기록을 이어받았어요!'
+    )
+    await reloadProfile()
+    setClaimBusyId(null)
+  }
 
   async function uploadProof(e) {
     const file = e.target.files?.[0]
@@ -634,6 +709,122 @@ export default function Profile() {
       {/* 급수 인증 탭 */}
       {tab === 'cert' && (
         <section className="px-4 py-4">
+          {/* 내 지난 기록 찾기 — 미가입 명단(imported_players)에서 본인 기록 이어받기 */}
+          <div className="bg-white rounded-2xl border border-gray-100 p-4 mb-4">
+            <div className="flex items-center gap-2 mb-1">
+              <Trophy size={16} className="text-[#C60C30]" />
+              <h3 className="font-bold text-sm">내 지난 기록 찾기</h3>
+            </div>
+            <p className="text-xs text-gray-400 mb-3 leading-relaxed">
+              가입 전 대회 명단에 이름이 올라가 있다면, 그때 급수·MMR을 지금 프로필로 가져올 수 있어요.
+              <br/>지난 기록이 <strong>지금보다 좋을 때만</strong> 반영돼요(하락 없음).
+            </p>
+
+            {/* 이미 이어받은 기록 */}
+            {claimedMine.length > 0 && (
+              <div className="space-y-1.5 mb-3">
+                {claimedMine.map(c => (
+                  <div key={c.id} className="flex items-center gap-2 bg-emerald-50 rounded-xl px-3 py-2">
+                    <UserCheck size={15} className="text-emerald-600 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-gray-700 truncate">
+                        {maskName(c.name)}
+                        <span className="ml-1.5 text-[11px] font-normal text-gray-400">
+                          {unitLabel(c.unit)} {modeLabel(c.mode)}{c.grade ? ` · ${c.grade}` : ''}
+                        </span>
+                      </p>
+                      {c.source_label && <p className="text-[11px] text-gray-400 truncate">{c.source_label}</p>}
+                    </div>
+                    <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full shrink-0">
+                      이어받음
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {!claimOpen ? (
+              <button
+                onClick={() => { setClaimOpen(true); setClaimNote(''); setClaimSearched(false) }}
+                className="w-full py-2.5 border-2 border-dashed border-gray-200 rounded-xl
+                           text-sm text-gray-500 font-semibold flex items-center justify-center gap-2 active:bg-gray-50"
+              >
+                <Search size={15} /> 지난 기록 찾아보기
+              </button>
+            ) : (
+              <div className="fade-up">
+                <div className="flex gap-2">
+                  <input
+                    value={claimName}
+                    onChange={e => setClaimName(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && searchImported()}
+                    placeholder="대회 명단에 적힌 이름"
+                    className="flex-1 border-2 border-gray-200 focus:border-[#C60C30] outline-none
+                               rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors"
+                  />
+                  <button
+                    onClick={searchImported}
+                    disabled={claimSearching}
+                    className="px-4 rounded-xl font-bold text-white text-sm shrink-0 active:scale-[.97] transition disabled:opacity-50"
+                    style={{ background: 'linear-gradient(135deg, #C60C30, #003478)' }}
+                  >
+                    {claimSearching ? '찾는 중' : '찾기'}
+                  </button>
+                </div>
+
+                {/* 후보 목록 */}
+                {claimCands.length > 0 && (
+                  <div className="space-y-2 mt-3">
+                    {claimCands.map(c => {
+                      const info = getGradeInfo(c.grade)
+                      return (
+                        <div key={c.id} className="p-3 rounded-xl border-2 border-gray-100 bg-white">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-base">{info?.flair ?? '🏸'}</span>
+                            <p className="font-bold text-sm flex-1">{maskName(c.name)}</p>
+                            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                              {unitLabel(c.unit)} {modeLabel(c.mode)}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 text-[11px] text-gray-500 mb-2.5">
+                            {c.grade && <span className="font-bold text-[#003478]">{c.grade}</span>}
+                            {c.source_label && <span className="truncate">· {c.source_label}</span>}
+                          </div>
+                          <button
+                            onClick={() => doClaim(c)}
+                            disabled={claimBusyId === c.id}
+                            className="w-full py-2 rounded-lg font-bold text-white text-sm
+                                       flex items-center justify-center gap-1.5 active:scale-[.98] transition disabled:opacity-50"
+                            style={{ background: 'linear-gradient(135deg, #C60C30, #003478)' }}
+                          >
+                            <UserCheck size={15} />
+                            {claimBusyId === c.id ? '이어받는 중...' : '이게 나예요 · 이어받기'}
+                          </button>
+                        </div>
+                      )
+                    })}
+                    <p className="text-[11px] text-gray-400 leading-relaxed">
+                      다른 사람의 기록을 잘못 가져오지 않도록 대회 이름·급수를 꼭 확인해주세요.
+                    </p>
+                  </div>
+                )}
+
+                {claimSearched && claimCands.length === 0 && !claimSearching && (
+                  <p className="text-xs text-gray-400 text-center py-4 leading-relaxed">
+                    앗, 아직 이어받을 지난 기록을 못 찾았어요.<br/>
+                    대회 주최자가 명단을 올리면 여기서 찾을 수 있어요.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {claimNote && (
+              <p className={`text-xs mt-3 leading-relaxed ${claimNote.startsWith('🎉') ? 'text-emerald-600 font-semibold' : 'text-amber-600'}`}>
+                {claimNote}
+              </p>
+            )}
+          </div>
+
           {/* 내 급수 — 단위(구/시/전국) × 종목(복식/단식) 6트랙 표 */}
           <div className="bg-white rounded-2xl border border-gray-100 p-4 mb-4">
             <div className="flex items-center gap-2 mb-1">

@@ -7,7 +7,7 @@ import Spinner from '../../components/Spinner'
 import {
   IMPORT_FIELDS, TEMPLATE_CSV,
   decodeCsvBuffer, parseCsvGrid, buildImportPlan,
-  buildLedgerRow, planToSeedRows,
+  buildLedgerRow, planToSeedRows, maskName,
 } from '../../lib/importCsv'
 import {
   Upload, Download, FileSpreadsheet, ClipboardPaste, ShieldAlert, ShieldCheck,
@@ -15,9 +15,11 @@ import {
 } from 'lucide-react'
 
 // 매칭 상태별 배지 스타일
+//   matched = "이미 가입한 회원" — 명단(imported_players)에는 담지 않고 중복 방지로 제외.
+//   (기존 프로필 MMR 병합은 이 작업 범위 밖이라 '병합'이 아니라 '가입회원'으로 표기)
 const MATCH_META = {
-  new:       { label: '신규',   cls: 'text-[#003478] bg-blue-50' },
-  matched:   { label: '기존 병합', cls: 'text-emerald-600 bg-emerald-50' },
+  new:       { label: '신규',       cls: 'text-[#003478] bg-blue-50' },
+  matched:   { label: '가입회원',    cls: 'text-emerald-600 bg-emerald-50' },
   ambiguous: { label: '동명이인 확인', cls: 'text-amber-600 bg-amber-50' },
 }
 
@@ -97,9 +99,10 @@ export default function ImportResults() {
     URL.revokeObjectURL(url)
   }
 
-  // ── 가져오기: imported_results(대장) 기록 + 참가자 시드 RPC 시도 ──
-  //   RLS·auth.users FK 때문에 프로필 생성/시드는 SECURITY DEFINER RPC 필요.
-  //   RPC(bmg_import_participants)가 아직 없으면 대장만 남기고 "시드 대기"로 정직 안내.
+  // ── 가져오기: imported_results(대장) 기록 + 미가입 선수 명단 시드 RPC ──
+  //   미가입 선수는 profiles(auth.users FK)에 넣을 수 없어 imported_players 명단에 담는다.
+  //   RLS상 명단 INSERT는 SECURITY DEFINER RPC(bmg_import_participants, 017)로만.
+  //   RPC가 아직 없으면(구버전 DB) 대장만 남기고 "명단 등재 대기"로 정직 안내.
   async function commit() {
     if (!plan?.ok || committing) return
     setCommitting(true)
@@ -119,9 +122,14 @@ export default function ImportResults() {
       if (insErr) throw insErr
       const importId = ins.id
 
-      // 2) 참가자 시드 — 백엔드 RPC 위임(없으면 우아하게 대기 처리).
+      // 2) 미가입 선수 명단 시드 — 백엔드 RPC(017) 위임.
+      //    is_new 행만 imported_players에 담기고, 이미 가입한(matched) 회원은
+      //    중복 방지로 제외된다. 초기 MMR/RD/급수는 RPC가 SQL 헬퍼로 재산정.
+      //    RPC 미배포(구버전 DB) 시엔 대장만 남기고 '등재 대기'로 정직 안내.
       const rows = planToSeedRows(plan)
-      let seeded = false, matched = summary.matched, created = summary.newCount
+      let seeded = false
+      let matched = summary.matched, created = summary.newCount, skipped = 0
+      let seededList = []
       try {
         const { data: rpc, error: rpcErr } = await supabase.rpc('bmg_import_participants', {
           p_import_id: importId, p_unit: unit, p_rows: rows,
@@ -130,15 +138,33 @@ export default function ImportResults() {
         seeded = true
         matched = rpc?.matched ?? matched
         created = rpc?.created ?? created
+        skipped = rpc?.skipped ?? 0
+
+        // 실제로 명단에 담긴 행을 되읽어 마스킹 목록을 만든다(공개 SELECT).
+        //   source_import_id로 이번 임포트가 만든 행만 정확히 집는다.
+        const { data: seededRows } = await supabase
+          .from('imported_players')
+          .select('id,name,grade,mode,mmr')
+          .eq('source_import_id', importId)
+          .order('mmr', { ascending: false })
+        seededList = (seededRows ?? []).map(r => ({
+          id: r.id,
+          nameMasked: maskName(r.name),
+          grade: r.grade,
+          mode: r.mode,
+          mmr: r.mmr,
+        }))
+
+        // 대장(016) 갱신 — 명단 등재 완료(merged) + 실제 카운트.
         await supabase.from('imported_results')
           .update({ status: 'merged', matched_count: matched, created_count: created })
           .eq('id', importId)
       } catch (rpcErr) {
-        // RPC 미배포(PGRST202 등) → 대장은 남았고 시드만 대기. 정직하게 알림.
+        // RPC 미배포(PGRST202 등) → 대장은 남았고 명단 등재만 대기. 정직하게 알림.
         seeded = false
       }
 
-      setResult({ ok: true, seeded, matched, created, importId })
+      setResult({ ok: true, seeded, matched, created, skipped, seededList, importId })
     } catch (err) {
       setResult({ ok: false, error: err?.message ?? '가져오기에 실패했어요.' })
     }
@@ -159,10 +185,11 @@ export default function ImportResults() {
           <div className="flex items-start gap-2">
             <Sparkles size={18} className="text-[#C60C30] mt-0.5 shrink-0" />
             <div>
-              <p className="font-bold text-sm">한 번 올리면 참가자 전원이 등록돼요</p>
+              <p className="font-bold text-sm">한 번 올리면 참가자 전원이 명단에 담겨요</p>
               <p className="text-xs text-gray-500 leading-relaxed mt-0.5">
-                내 대회의 <b>결과표(엑셀·CSV)</b>를 올리면 참가자마다 프로필과 <b>초기 실력점수(MMR)</b>가
-                자동으로 만들어져요. 급수를 바탕으로 시작 점수를 정하고, 경기를 치를수록 실제 실력으로 맞춰집니다.
+                내 대회의 <b>결과표(엑셀·CSV)</b>를 올리면 아직 <b>가입 안 한 선수</b>도 명단에 담기고,
+                급수를 바탕으로 <b>초기 실력점수(MMR)</b>가 매겨져 랭킹에 이름을 가려(예: 홍*동) 보여줘요.
+                본인이 가입하면 그 기록을 <b>자기 프로필로 이어받습니다</b>.
               </p>
               <p className="text-[11px] text-gray-400 leading-relaxed mt-1.5">
                 내 대회 데이터만 올려 주세요(다른 사이트 크롤링·타인 대회 무단 업로드 금지).
@@ -281,8 +308,8 @@ export default function ImportResults() {
               <div className="grid grid-cols-4 gap-1.5 text-center">
                 {[
                   { n: summary.total,     label: '전체',     cls: 'text-gray-700' },
-                  { n: summary.newCount,  label: '신규',     cls: 'text-[#003478]' },
-                  { n: summary.matched,   label: '기존 병합', cls: 'text-emerald-600' },
+                  { n: summary.newCount,  label: '명단 등재', cls: 'text-[#003478]' },
+                  { n: summary.matched,   label: '가입회원', cls: 'text-emerald-600' },
                   { n: summary.errors + summary.ambiguous, label: '확인 필요', cls: 'text-amber-600' },
                 ].map(b => (
                   <div key={b.label} className="bg-gray-50 rounded-xl py-2">
@@ -405,25 +432,59 @@ export default function ImportResults() {
                 {result.seeded
                   ? <ShieldCheck size={18} className="text-emerald-600 mt-0.5 shrink-0" />
                   : <Check size={18} className="text-[#003478] mt-0.5 shrink-0" />}
-                <div>
+                <div className="min-w-0">
                   {result.seeded ? (
                     <>
-                      <p className="font-bold text-sm text-emerald-700">가져오기 완료</p>
-                      <p className="text-xs text-emerald-600 mt-0.5">
-                        신규 {result.created}명 등록 · 기존 {result.matched}명 병합 — 초기 MMR이 부여됐어요.
+                      <p className="font-bold text-sm text-emerald-700">
+                        {result.created}명 명단 등재 완료
                       </p>
+                      <p className="text-xs text-emerald-600 mt-0.5 leading-relaxed">
+                        이들이 배드민국에 <b>가입하면</b> 이 대회의 급수·기록을 <b>본인 프로필로 이어받아요</b>.
+                        그전까지는 랭킹에 이름을 가려(예: 홍*동) 보여줘요.
+                      </p>
+                      {result.matched > 0 && (
+                        <p className="text-[11px] text-gray-500 mt-1.5">
+                          이미 가입한 회원 {result.matched}명은 명단에서 제외했어요(중복 방지).
+                        </p>
+                      )}
+                      {result.skipped > 0 && (
+                        <p className="text-[11px] text-gray-400 mt-0.5">
+                          형식 오류·중복 {result.skipped}건은 건너뛰었어요.
+                        </p>
+                      )}
                     </>
                   ) : (
                     <>
-                      <p className="font-bold text-sm text-[#003478]">업로드 기록됨 · 프로필 생성 대기</p>
+                      <p className="font-bold text-sm text-[#003478]">업로드 기록됨 · 명단 등재 대기</p>
                       <p className="text-xs text-gray-600 mt-0.5 leading-relaxed">
-                        업로드 내역은 저장됐어요(신규 {result.created} · 병합 {result.matched}).
-                        참가자 프로필 <b>자동 생성·MMR 부여</b>는 서버 처리(관리자 승인)가 켜지면 반영돼요.
+                        업로드 내역은 저장됐어요(등재 예정 {result.created}명 · 이미 가입 {result.matched}명).
+                        미가입 선수 <b>명단 등재</b>는 서버 준비가 끝나면 반영돼요.
                       </p>
                     </>
                   )}
                 </div>
               </div>
+
+              {/* 등재된 선수 마스킹 목록 */}
+              {result.seeded && result.seededList?.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-emerald-100">
+                  <p className="text-[11px] font-bold text-emerald-700 mb-2 flex items-center gap-1">
+                    <Users size={12} /> 명단에 담긴 선수
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {result.seededList.map(p => (
+                      <span
+                        key={p.id}
+                        className="inline-flex items-center gap-1 bg-white border border-emerald-100 rounded-full pl-2 pr-2 py-1"
+                      >
+                        <span className="text-xs font-semibold text-gray-700">{p.nameMasked}</span>
+                        {p.grade && <GradeChip grade={p.grade} size="sm" />}
+                        <span className="text-[10px] text-gray-400">{p.mode === 'singles' ? '단' : '복'}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-start gap-2">
@@ -445,8 +506,8 @@ export default function ImportResults() {
             style={{ background: '#C60C30' }}
           >
             {committing
-              ? '가져오는 중…'
-              : <><UserPlus size={17} /> {summary.newCount + summary.matched}명 가져오기</>}
+              ? '명단에 담는 중…'
+              : <><UserPlus size={17} /> 미가입 {summary.newCount}명 명단 등재</>}
           </button>
           {!consent && (
             <p className="text-center text-[11px] text-gray-400 mt-1.5">위 개인정보 동의에 체크하면 활성화돼요</p>
