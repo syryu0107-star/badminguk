@@ -17,10 +17,17 @@ import { completeMatch } from '../../lib/advance'
 import Spinner from '../../components/Spinner'
 import ConnectionStatus from '../../components/ConnectionStatus'
 import { useOnline } from '../../lib/useOnline'
-import { ChevronLeft, Undo2, Flag, AlertTriangle, Trophy, Play, Volume2, VolumeX } from 'lucide-react'
+import { ChevronLeft, Undo2, Flag, AlertTriangle, Trophy, Play, Volume2, VolumeX, Gavel } from 'lucide-react'
 
 const RED = '#C60C30'
 const BLUE = '#003478'
+
+// 경기 → 소속 대회 id (코트별 심판 모드 링크용). 조인 형태가 배열이든 객체든 안전하게.
+function tournamentIdOf(match) {
+  const cat = Array.isArray(match?.category) ? match.category[0] : match?.category
+  const trn = Array.isArray(cat?.tournament) ? cat.tournament[0] : cat?.tournament
+  return trn?.id ?? cat?.tournament_id ?? null
+}
 
 // ── 음성 콜(TTS): 브라우저 SpeechSynthesis, 키·서버 불필요. 미지원 시 조용히 무시 ──
 function speak(text) {
@@ -659,9 +666,28 @@ export default function Scoreboard() {
             <p className="text-lg font-mono text-gray-300">{scoreSummary(state)}</p>
           )}
           <p className="text-sm text-gray-400">이미 끝난 경기예요.</p>
-          <button onClick={() => navigate(-1)} className="px-6 py-2.5 rounded-xl bg-white/10 text-sm font-bold">
-            돌아가기
-          </button>
+          {/* 심판 완주 루프: 끝난 경기에서 막다른 "돌아가기" 대신, 이 코트의 다음 경기로
+              바로 이동한다. CourtReferee(코트별 심판 모드)가 다음 경기를 자동 계산·표시하므로
+              심판은 URL 을 몰라도 한 탭으로 다음 경기 점수판을 이어 연다(코트배정 자동배포).
+              뒤로가기(navigate(-1))는 공유 링크로 진입·새로고침 시 히스토리가 없어 불안정. */}
+          {tournamentIdOf(match) && match.court_number != null ? (
+            <div className="flex flex-col items-center gap-2.5 w-full max-w-xs">
+              <button
+                onClick={() => navigate(`/referee/court/${tournamentIdOf(match)}/${match.court_number}`)}
+                className="w-full px-6 py-3 rounded-xl text-white text-base font-bold active:opacity-80 flex items-center justify-center gap-2"
+                style={{ background: `linear-gradient(135deg, ${RED}, ${BLUE})` }}
+              >
+                <Gavel size={18} /> {match.court_number}번 코트 다음 경기로
+              </button>
+              <button onClick={() => navigate(-1)} className="px-6 py-2 text-sm font-bold text-gray-400 active:text-gray-200">
+                돌아가기
+              </button>
+            </div>
+          ) : (
+            <button onClick={() => navigate(-1)} className="px-6 py-2.5 rounded-xl bg-white/10 text-sm font-bold">
+              돌아가기
+            </button>
+          )}
         </div>
       )}
 
