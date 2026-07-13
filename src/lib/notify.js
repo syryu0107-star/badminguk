@@ -385,6 +385,38 @@ export async function sendCampaign({ type, tournamentId, title, body, recipients
   return { payload, broadcast: bc, persist: ps, external: ex }
 }
 
+// ── 일정 지연 안내 (C6 · C1) — 진행이 밀릴 때 선수에게 프로액티브 통지 ──────
+// analyzeDelay(주최자 대시보드)가 낸 예상 지연을 지금껏 주최자만 봤다. 선수는 앱을
+// 직접 열어 "예상 시작" 카드를 봐야 지연을 알았다. 이 안내는 진행이 계획보다 크게
+// 밀리면 아직 순서가 안 온 선수에게 "약 N분 지연되고 있어요 — 여유있게 준비하세요"를
+// 밀어준다. 경기 호출(match_call, "지금 오세요")과 달리 **대회 전체 안내**라 엔트리
+// 타겟이 없고, 대회 채널로 방송해 공지함(NOTICE_TYPES ∋ SCHEDULE_SHIFT)에 남긴다.
+// buildScheduleShift 는 순수 — 발송은 sendScheduleShift 가 담당.
+export function buildScheduleShift({ tournamentId, delayMin, kind = 'delay' }) {
+  const mins = Math.max(0, Math.round(delayMin ?? 0))
+  return {
+    type: NOTIFY.SCHEDULE_SHIFT,
+    tournamentId: tournamentId ?? null,
+    matchId: null,
+    kind,
+    delayMin: mins,
+    title: '⏳ 경기 진행 지연 안내',
+    body: `현재 예상보다 약 ${mins}분 지연되고 있어요. 순서가 되면 다시 알려드릴게요 — 여유있게 준비해주세요.`,
+    createdAt: new Date().toISOString(),
+  }
+}
+
+// 대회 전체 지연 안내 발송 — 방송(연결된 선수 공지함 즉시 도달) + 지속 저장(오프라인·복귀
+// 선수 도달). 방송은 대회 채널이라 done 선수도 인앱으로 보지만 대회 정보라 무해하고,
+// persist recipients 는 아직 대기 중인(미완료 경기) 선수로 좁혀 알림 이력을 남긴다.
+export async function sendScheduleShift({ tournamentId, delayMin, kind = 'delay', recipients = [] }) {
+  if (!tournamentId) return { sent: false, reason: 'no_tournament' }
+  const payload = buildScheduleShift({ tournamentId, delayMin, kind })
+  const bc = await broadcast(payload)
+  const ps = await persist(payload, recipients)
+  return { payload, broadcast: bc, persist: ps }
+}
+
 // ── 고수준 진입점: 결과·급수 개인 알림 (C11 · C10) ─────────────────────
 // finalizeTournament 직후 호출부(LiveDashboard)가 부른다. 엔트리→선수 매핑만 조회하고
 // 선수별 personalized 결과를 **한 번의 insert 로 지속 저장**한다(방송 없음 — 개인 결과라

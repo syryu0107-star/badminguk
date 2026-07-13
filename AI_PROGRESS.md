@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-13 — [C6/C1] 선수 일정 지연 프로액티브 안내 — 정의만 되고 발신 0이던 NOTIFY.SCHEDULE_SHIFT 공백 완성
+
+- **대회가 밀리면 아직 순서가 안 온 선수에게 "약 N분 지연되고 있어요 — 여유있게 준비하세요" 를 앱이 먼저 통지**
+  - 파일: `src/lib/notify.js`, `src/pages/organizer/LiveDashboard.jsx`, `tests/notify.test.mjs`
+  - 요약: 직전 런(C11 결과 개인 알림)에 이어 코드 실측으로 **커뮤니케이션 레이어의 마지막 미발신 NOTIFY 타입**을 찾았다 — `SCHEDULE_SHIFT`(일정 앞당김/지연 재조정)가 `NOTIFY`에 정의되고 `NOTICE_TYPES`에 포함돼 MyMatches 공지함 수신·렌더까지 있는데 **정작 만들거나 보내는 코드가 0**(grep: 정의·NOTICE_TYPES·테스트만·builder/sender 부재 — RESULT와 똑같은 공백). 그래서 `analyzeDelay`(C6) 예상 지연은 **주최자 대시보드에만** 떴고 선수는 앱을 직접 열어 "예상 시작" 카드를 봐야 지연을 알았다(북극성 "…지연재조정→…공지" 선수측 공지 조각 부재). **트리거 선정(anti-stall)**: 직전 원장이 제안한 "planRebalance 이동 시 통지"는 재검토 후 기각 — 재배치는 유휴 코트로 옮겨 다음 틱에 곧 `MATCH_CALL`(새 코트)이 나가 SCHEDULE_SHIFT와 **중복·노이즈**가 된다. 대신 호출과 겹치지 않는 진짜 공백 = **아직 순서가 안 온 선수에게 대회 전체 지연을 미리 알림**(호출="지금 오세요" vs 지연 안내="예상보다 N분 밀려요")을 택했다. **왜 non-human-gated**: 013·기존 broadcast/persist·NOTICE_TYPES 공지함 경로 재사용, 새 마이그레이션·외부 키 0, 웹푸시(human-gated)와 무관하게 인앱 공지함 즉시 도달. **구현(순수·비파괴·엔진 재사용)**: (1) 순수 `buildScheduleShift`(SCHEDULE_SHIFT 타입·delayMin 반올림·음수/누락 0 방어·matchId null=대회 전체) + 얇은 `sendScheduleShift`(broadcast=연결 선수 공지함 + persist=미완료 경기 참가자 지속 저장). 엔트리 타겟 없이 대회 전체 방송이라 SCHEDULE_SHIFT ∈ NOTICE_TYPES 로 MyMatches `subscribeNotifications`가 별도 배선 없이 공지함에 자동 추가(campaign 과 동일 경로·기존 코드 0 변경). (2) LiveDashboard `delay`(analyzeDelay·nowTick) useMemo 뒤 발송 effect: 무인 ON·in_progress이고 `Math.floor(delayMin/15)` 버킷이 직전 안내 버킷보다 커질 때만 1회 발송(recipients=미완료 경기 `recipientsOf`), `shiftBucketRef`로 같은 버킷 차단·지연<15분이면 리셋(재차 악화 시 다시 안내). analyzeDelay/broadcast/persist 로직 0 복제, 방송 실패·013 미적용 시 degrade, 기존 호출·재알림·경고·결과·캠페인 경로 불변, autoRun OFF면 발송 0(무인 전용). 회귀 2개. `npm test` **236/236**(234+2), `npx vite build` green. (자동화율 주최자 95%·선수 94→95%·심판 89%·운영 91% — 지연 시 앱이 선수에게 먼저 알려 커뮤니케이션 레이어 마지막 미발신 타입 소진)
+
 ## 2026-07-13 — [C11/C10] 결과·급수 개인 알림 자동 발송 — 정의만 되고 발신 0이던 NOTIFY.RESULT 공백 완성
 
 - **대회 시상 확정 직후 선수별 "결과 나왔어요 · 최종 N위 · 급수 승급 · 상장 확인" 을 공지함으로 자동 발송**

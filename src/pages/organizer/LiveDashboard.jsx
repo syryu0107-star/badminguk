@@ -4,7 +4,7 @@ import { supabase } from '../../lib/supabase'
 import { resolveMatchMMR, CERT_LEVELS } from '../../lib/mmr'
 import { calculatePoolStandings, prizeLabel } from '../../lib/tournament'
 import { completeMatch, finalizeTournament, scoresToPairs, forfeitTeamRemaining } from '../../lib/advance'
-import { callMatch, callMatchBatch, subscribeCallAcks, sendResultNotices } from '../../lib/notify'
+import { callMatch, callMatchBatch, subscribeCallAcks, sendResultNotices, sendScheduleShift } from '../../lib/notify'
 import { planAutoAdvance, planNoShow, analyzeDelay, planRebalance } from '../../lib/orchestrator'
 import { planAutoFinalize } from '../../lib/stateMachine'
 import { summarizeCheckins, assessNoShowResolution } from '../../lib/checkin'
@@ -121,6 +121,7 @@ export default function LiveDashboard() {
   const warnedRef = useRef({})   // { [matchId]: ts } 미입장 경고 중복 방지
   const recalledRef = useRef({}) // { [matchId]: { at, count } } 재알림(호출 반복) 중복·스팸 방지
   const autoResolvedRef = useRef({}) // { [matchId]: ts } 노쇼 자동 부전승 중복 실행 방지
+  const shiftBucketRef = useRef(0)   // 마지막으로 안내한 지연 버킷(15분 단위) — 같은 버킷 재발송 방지
   const [ackedIds, setAckedIds] = useState({}) // { [matchId]: ts } 선수가 "가고 있어요" 확인한 경기 (C1)
   const [nowTick, setNowTick] = useState(Date.now()) // 카운트다운 갱신용 틱
 
@@ -384,6 +385,30 @@ export default function LiveDashboard() {
     () => analyzeDelay(matches, { matchMinutes: categories.find(c => c.id === activeCat)?.match_duration_min ?? 30, now: nowTick }),
     [matches, categories, activeCat, nowTick]
   )
+
+  // ── 일정 지연 안내 자동 발송 (C6·C1) — 진행이 크게 밀리면 선수에게 프로액티브 통지 ──
+  //   지금껏 analyzeDelay 예상 지연은 주최자 대시보드에만 떠, 선수는 앱을 직접 열어야
+  //   지연을 알았다(정의만 되고 발신 0이던 NOTIFY.SCHEDULE_SHIFT). 무인 진행 ON이면
+  //   예상 지연이 15분 단위 문턱을 넘을 때마다 1회, 아직 순서가 안 온 선수(미완료 경기
+  //   참가자) 공지함으로 "약 N분 지연" 을 밀어준다. 같은 버킷은 재발송 안 하고(스팸 방지),
+  //   지연이 다시 줄면 버킷을 리셋해 재차 악화 시에만 다시 안내. 경기 호출과 달리 "지금
+  //   오세요"가 아니라 대회 전체 지연 안내라 대회 채널 방송(공지함)으로 도달한다.
+  useEffect(() => {
+    if (!autoRun || tournament?.status !== 'in_progress') return
+    const STEP = 15
+    const bucket = Math.floor((delay?.delayMin ?? 0) / STEP) // 0=지연<15분(안내 안 함)
+    if (bucket <= 0) { shiftBucketRef.current = 0; return }
+    if (bucket <= shiftBucketRef.current) return             // 이미 이 이상 안내함
+    shiftBucketRef.current = bucket
+    const recipients = [...new Set(
+      matches.filter(m => !DONE_STATUSES.includes(m.status)).flatMap(recipientsOf)
+    )]
+    const announced = bucket * STEP
+    sendScheduleShift({ tournamentId: id, delayMin: announced, recipients })
+      .then(() => pushAutoLog(`일정 지연 안내 발송 — 약 ${announced}분 지연 (대기 선수 ${recipients.length}명)`))
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [delay?.delayMin, autoRun, tournament?.status])
 
   // ── 무심판 셀프 점수 판정 (C7·심판) — 경기별 선수 제출 → 합의 상태 산출 ──
   //   미완료 경기 중 self_score 제출이 있는 것만. agreed=양팀 일치(자동 확정 가능),

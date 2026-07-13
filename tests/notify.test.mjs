@@ -11,7 +11,7 @@ import {
   NOTIFY, SIGNAL, CAMPAIGN, NOTICE_TYPES, notifyChannel,
   buildMatchCall, buildMatchSoon, buildWalkoverWarn, buildCallAck,
   buildCallBatchItems, notificationRow, callMatchBatch,
-  buildResultNotice, buildResultNotices,
+  buildResultNotice, buildResultNotices, buildScheduleShift,
 } from '../src/lib/notify.js'
 import {
   localDateStr, dayDiff, planCampaigns, pendingCampaigns,
@@ -329,6 +329,24 @@ test('notify: buildResultNotices — 순위 없는 종목·매핑 없는 엔트�
 
 test('notify: buildResultNotices — 빈 입력 → 빈 배열', () => {
   assert.deepEqual(buildResultNotices({ tournamentId: 't' }), [])
+})
+
+// ══════════════════════ notify: buildScheduleShift (일정 지연 안내) ══════════════════════
+test('notify: buildScheduleShift — SCHEDULE_SHIFT 타입·지연 분수·공지함 대상', () => {
+  const p = buildScheduleShift({ tournamentId: 't1', delayMin: 30 })
+  assert.equal(p.type, NOTIFY.SCHEDULE_SHIFT)
+  assert.equal(p.type, 'schedule_shift')
+  assert.equal(p.tournamentId, 't1')
+  assert.equal(p.matchId, null)          // 대회 전체 안내 — 특정 경기 없음
+  assert.equal(p.delayMin, 30)
+  assert.ok(p.body.includes('30분'))
+  assert.ok(NOTICE_TYPES.includes(p.type)) // 공지함에 남는 지속형
+})
+
+test('notify: buildScheduleShift — delayMin 반올림·음수/누락 방어', () => {
+  assert.equal(buildScheduleShift({ tournamentId: 't', delayMin: 14.6 }).delayMin, 15)
+  assert.equal(buildScheduleShift({ tournamentId: 't', delayMin: -5 }).delayMin, 0)
+  assert.equal(buildScheduleShift({ tournamentId: 't' }).delayMin, 0)
 })
 
 // ══════════════════════ campaign: 날짜 유틸 ══════════════════════
