@@ -4,6 +4,7 @@ import { subscribeNotifications, fetchRecentCalls, markCallRead, fetchNotices, m
 import { getCheckinWindow, assessSelfCheckin, selfCheckin, fetchMyCheckins } from '../../lib/checkin'
 import { depositGuide, shouldShowDeposit, formatWon } from '../../lib/deposit'
 import { canWithdraw, computeRefund, refundLineText } from '../../lib/refund'
+import { observedMatchMinutes, planAutoAdvance } from '../../lib/orchestrator'
 import {
   evaluateGames, buildSelfScoreEvent, parseSelfScores, reconcileSelfScores, gamesText,
 } from '../../lib/selfScore'
@@ -569,22 +570,17 @@ export default function MyMatches() {
           // ② 주최자가 지정한 예정시각이 미래면 그대로 사용
           nm.estimate = { at: sched, ahead: null }
         } else if (m.court_number != null) {
-          // ③ 코트 큐 기반 추정 (보조 쿼리 1건)
+          // ③ 코트 큐 기반 추정 — 주최자 무인 진행과 똑같은 엔진(planAutoAdvance)으로 계산.
+          //    경기당 소요는 계획값이 아니라 '관측 페이스'(진행 중 경기 경과 평균)를 써서,
+          //    경기가 길어지면 내 예상 시작 시각도 함께 밀린다(실제보다 이른 예상 방지).
           const { data: queue } = await supabase
             .from('tournament_matches')
-            .select('id,court_number,scheduled_time,match_number,round_number,status,actual_start')
+            .select('id,category_id,court_number,scheduled_time,match_number,round_number,status,actual_start,team1_entry_id,team2_entry_id')
             .eq('category_id', m.category_id)
-            .eq('court_number', m.court_number)
-          const perMatch = (m.category?.match_duration_min ?? 30) * 60000
-          const running = (queue ?? []).find(q => q.status === 'in_progress')
-          const base = running?.actual_start ? new Date(running.actual_start).getTime() : now
-          const ahead = (queue ?? []).filter(q => {
-            if (q.id === m.id) return false
-            if (DONE_STATUSES.includes(q.status)) return false
-            if (q.status === 'in_progress') return true      // 진행중 경기는 항상 앞선 것으로
-            return cmpMatches(q, m) < 0
-          }).length
-          nm.estimate = { at: base + ahead * perMatch, ahead }
+          const planned = m.category?.match_duration_min ?? 30
+          const observedMin = observedMatchMinutes(queue ?? [], { matchMinutes: planned, now })
+          const plan = planAutoAdvance(queue ?? [], { matchMinutes: observedMin, now })
+          nm.estimate = plan.estimates[m.id] ?? null
         }
       }
       setNextMatch(nm)

@@ -14,7 +14,7 @@ import {
 import {
   planTournamentState, planAutoFinalize, planAutoApprovals,
 } from '../src/lib/stateMachine.js'
-import { planNoShow } from '../src/lib/orchestrator.js'
+import { planNoShow, observedMatchMinutes, planAutoAdvance } from '../src/lib/orchestrator.js'
 import { planTeamForfeit } from '../src/lib/advance.js'
 import {
   predictNoShow, buildNoShowIndex, entryNoShowRisk, recommendWaitlist, worseNoShow,
@@ -348,6 +348,50 @@ test('planNoShow: 선수 확인(ack) → 재알림 중단 + 부전승 유예 연
   const stale = planNoShow(m, { ...opts, calledAt: { m1: called130 }, ackedAt: { m1: called130 - 10000 }, now: NOW })
   assert.equal(stale.status.m1.acked, false)
   assert.equal(stale.status.m1.phase, 'warned')
+})
+
+// ══════════════════════ orchestrator.observedMatchMinutes ══════════════════════
+test('observedMatchMinutes: 진행 중 없으면 계획값, 길어지면 관측 페이스(계획 하한)', () => {
+  // 진행 중 경기 없음 → 계획값 그대로
+  assert.equal(observedMatchMinutes([{ id: 'a', status: 'scheduled' }], { matchMinutes: 30, now: NOW }), 30)
+  assert.equal(observedMatchMinutes([], { matchMinutes: 25, now: NOW }), 25)
+
+  // 진행 중 경기가 40분째 → 관측 페이스 40분(계획 30분보다 김)
+  const m40 = [{ id: 'a', status: 'in_progress', actual_start: new Date(NOW - 40 * 60000).toISOString() }]
+  assert.equal(observedMatchMinutes(m40, { matchMinutes: 30, now: NOW }), 40)
+
+  // 진행 중 경기가 계획보다 짧게 경과(10분) → 계획값 하한 유지(이른 예상 방지)
+  const m10 = [{ id: 'a', status: 'in_progress', actual_start: new Date(NOW - 10 * 60000).toISOString() }]
+  assert.equal(observedMatchMinutes(m10, { matchMinutes: 30, now: NOW }), 30)
+
+  // 여러 진행 경기 평균(30·50 → 40)
+  const two = [
+    { id: 'a', status: 'in_progress', actual_start: new Date(NOW - 30 * 60000).toISOString() },
+    { id: 'b', status: 'in_progress', actual_start: new Date(NOW - 50 * 60000).toISOString() },
+  ]
+  assert.equal(observedMatchMinutes(two, { matchMinutes: 30, now: NOW }), 40)
+
+  // actual_start 없는 진행 경기는 무시(계획값)
+  assert.equal(observedMatchMinutes([{ id: 'a', status: 'in_progress' }], { matchMinutes: 30, now: NOW }), 30)
+})
+
+test('observedMatchMinutes: 선수 예상 시작 시각이 관측 페이스로 밀린다(planAutoAdvance 연동)', () => {
+  // 1번 코트: 진행 중 경기(50분째, 계획 30분)+대기 2경기(내 경기 mine)
+  const matches = [
+    { id: 'run', status: 'in_progress', court_number: 1, actual_start: new Date(NOW - 50 * 60000).toISOString(),
+      team1_entry_id: 'A', team2_entry_id: 'B' },
+    { id: 'q1', status: 'scheduled', court_number: 1, match_number: 1, team1_entry_id: 'C', team2_entry_id: 'D' },
+    { id: 'mine', status: 'scheduled', court_number: 1, match_number: 2, team1_entry_id: 'E', team2_entry_id: 'F' },
+  ]
+  const planned = observedMatchMinutes(matches, { matchMinutes: 30, now: NOW })
+  assert.equal(planned, 50) // 진행 경기 50분째라 관측 페이스 50분
+
+  // 관측 페이스로 계획한 예상: 내 경기는 앞에 진행1+대기1 = 2경기, at = freeAt + 1*step
+  const paced = planAutoAdvance(matches, { matchMinutes: planned, now: NOW })
+  const naive = planAutoAdvance(matches, { matchMinutes: 30, now: NOW })
+  assert.equal(paced.estimates.mine.ahead, 2)
+  // 페이스가 길수록 예상 시작 시각이 더 뒤로(더 정확) — 이른 예상 방지
+  assert.ok(paced.estimates.mine.at > naive.estimates.mine.at)
 })
 
 // ══════════════════════ advance.planTeamForfeit ══════════════════════

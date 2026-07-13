@@ -242,6 +242,18 @@ export function planRebalance(matches, {
   return { moves, idleCourts, overloadedCourts: overloaded.map(q => q.court) }
 }
 
+// 관측 경기 페이스(분) — 진행 중 경기의 경과 시간을 계획 소요와 blend 해 "지금 이 대회가
+// 실제로 얼마나 빠른지" 를 낸다. 진행 중 경기가 계획보다 오래 걸리면 그만큼 페이스를
+// 보수적으로 늦춘다(계획값 아래로는 안 내려감). 진행 중 경기가 없으면 계획값 그대로.
+// analyzeDelay(주최자 예상 종료)와 선수 예상 시작 시각이 이 한 함수를 공유해 일관된다.
+export function observedMatchMinutes(matches, { matchMinutes = 30, now = Date.now() } = {}) {
+  const running = (matches ?? []).filter(m => m.status === 'in_progress' && m.actual_start)
+  if (!running.length) return matchMinutes
+  const elapsed = running.map(m => Math.max(0, (now - new Date(m.actual_start).getTime()) / 60000))
+  const avg = elapsed.reduce((a, b) => a + b, 0) / elapsed.length
+  return Math.max(matchMinutes, Math.round(avg))
+}
+
 // 진행 페이스·지연 재조정 분석 (C6) — 계획 대비 실시간 지연을 예측하고 재배치안을 제시.
 // ──────────────────────────────────────────────────────────────────────
 // scheduler 가 미리 깔아둔 scheduled_time(계획)과 실시간 상태(진행 중 경과·시작 대기
@@ -260,12 +272,7 @@ export function analyzeDelay(matches, { matchMinutes = 30, now = Date.now() } = 
   const step = Math.max(1, matchMinutes) * 60000
 
   // 1) 관측 페이스 — 진행 중 경기의 경과 시간(최소한 이만큼은 걸렸음)을 계획과 blend.
-  let observedMin = matchMinutes
-  if (running.length) {
-    const elapsed = running.map(m => Math.max(0, (now - new Date(m.actual_start).getTime()) / 60000))
-    const avg = elapsed.reduce((a, b) => a + b, 0) / elapsed.length
-    observedMin = Math.max(matchMinutes, Math.round(avg))
-  }
+  const observedMin = observedMatchMinutes(list, { matchMinutes, now })
   const obsStep = Math.max(1, observedMin) * 60000
 
   // 2) 시작 대기 밀림 — 예정 시각이 지났는데 아직 시작 안 한 경기.

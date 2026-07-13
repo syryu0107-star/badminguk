@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-13 — [C1/C6] 선수 예상 시작 시각 관측 페이스 보정 — AI 호출시각 예측을 선수 화면에 연결
+
+- **선수 "예상 시작 약 HH:MM쯤·앞에 N경기"를 계획값 고정에서 관측 페이스(진행 중 경기 실경과 평균)로 정확화**
+  - 파일: `src/lib/orchestrator.js`, `src/pages/player/MyMatches.jsx`, `tests/engines.test.mjs`
+  - 요약: 직전 런(C1 호출 확인) 뒤 비-human-gated 클러스터 갭이 대부분 소진돼(심판=015 대기·잔여=PG/계좌 human-gated) **AI 차별화 티어**로 내려가, 프롬프트 예측 #2("호출시각 예측 — per-court rolling average")가 **주최자 오케스트레이터엔 있고 선수 화면엔 없던** 불일치를 채웠다. MyMatches 예상시각은 `perMatch = category.match_duration_min ?? 30` 고정값이라 (1)경기가 길어지면 예상이 늘 실제보다 이르고(선수 늦게 옴→노쇼 위험), (2)진행 경기 계획 초과 시 과거 시각으로 찍히며, (3)오케스트레이터 큐 로직을 화면에서 임시 재구현(중복)이었다. **구현(순수·비파괴·엔진 재사용)**: (1) `orchestrator.observedMatchMinutes` 신설(진행 중 경기 경과 평균을 계획값 하한으로 반환·진행 없으면 계획값), `analyzeDelay`의 인라인 관측 페이스 블록을 이 함수로 대체(동작 불변·주최자/선수 공유). (2) MyMatches ③ 코트 큐 추정을 종목 전체 조회→`observedMatchMinutes`→`planAutoAdvance(…,{matchMinutes:observedMin})`→`plan.estimates[m.id]`로 교체(주최자와 동일 엔진·같은 `{at,ahead}`, 임시 running/ahead/base 제거·과거시각 결함 해소, 쿼리에 team1/2_entry_id·category_id 추가). planAutoAdvance/analyzeDelay 로직 0 복제(중복 제거), 진행 경기 없으면 계획값 하한이라 기존 값 이상, 미래 예정시각·코트 미배정 경로 불변. 회귀 2개(observedMatchMinutes 5케이스+planAutoAdvance 연동). `npm test` **211/211**(209+2), `npx vite build` green. (자동화율 주최자 95%·선수 91→92%·심판 88%·운영 90% — 예상시각이 실제 페이스로 정확해져 지각·노쇼 위험↓, 주최자·선수 예측 일관)
+
 ## 2026-07-13 — [C1] 선수 호출 확인("가고 있어요") — 경기 호출 양방향화로 오탐 부전승 제거
 
 - **경기 호출을 한 방향(주최자→선수)에서 양방향(선수 확인 응답)으로 — 코트로 이동 중인 선수의 오탐 부전승 제거**
