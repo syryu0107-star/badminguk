@@ -24,7 +24,7 @@ export default function OrganizerDashboard() {
     let alive = true
     async function load() {
       try {
-        const { data: { user } } = await supabase.auth.getUser()
+        const { data: { session } } = await supabase.auth.getSession(); const user = session?.user ?? null
         let q = supabase
           .from('tournaments')
           .select('*, categories:tournament_categories(count), entries:tournament_entries(count)')

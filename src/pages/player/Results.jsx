@@ -51,7 +51,7 @@ export default function Results() {
   const load = useCallback(async () => {
     setLoadError(false)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { session } } = await supabase.auth.getSession(); const user = session?.user ?? null
       setUserId(user?.id ?? null)
 
       // 내 이번 대회 MMR 총 변동(하이라이트용, 없거나 미적용이면 조용히 null)

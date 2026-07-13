@@ -46,7 +46,7 @@ export default function Tournaments() {
     let cancelled = false
     async function loadMe() {
       try {
-        const { data: { user } } = await supabase.auth.getUser()
+        const { data: { session } } = await supabase.auth.getSession(); const user = session?.user ?? null
         if (!user || cancelled) return
         const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle()
         if (!cancelled) setProfile(prof ?? null)

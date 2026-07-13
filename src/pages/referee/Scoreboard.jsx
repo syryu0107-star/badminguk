@@ -139,7 +139,7 @@ export default function Scoreboard() {
           .select('*')
           .eq('match_id', matchId)
           .order('created_at', { ascending: true }),
-        supabase.auth.getUser(),
+        supabase.auth.getSession(),
       ])
       if (!alive) return
       if (me || !m) {
@@ -147,7 +147,7 @@ export default function Scoreboard() {
         setLoading(false)
         return
       }
-      userIdRef.current = auth?.user?.id ?? null
+      userIdRef.current = auth?.session?.user?.id ?? null
 
       const cfg = {
         gamesPerMatch: m.category?.games_per_match ?? 3,

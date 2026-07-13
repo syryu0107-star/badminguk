@@ -28,7 +28,7 @@ export default function Onboarding() {
 
   async function finish() {
     setSaving(true)
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { session } } = await supabase.auth.getSession(); const user = session?.user ?? null
 
     // 복원 MMR: 이전 기록 있으면 그 값 사용, 없으면 급수 기반 초기값
     const restoredMMR = phoneRecord?.current_mmr ?? getInitialMMR(grade)

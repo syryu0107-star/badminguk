@@ -370,7 +370,7 @@ export default function CreateTournament() {
       setError('대회명, 장소, 날짜는 필수입니다.'); return
     }
     setSaving(true); setError('')
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { session } } = await supabase.auth.getSession(); const user = session?.user ?? null
 
     const { data: t, error: te } = await supabase
       .from('tournaments')

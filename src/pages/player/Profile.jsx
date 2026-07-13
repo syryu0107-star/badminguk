@@ -145,7 +145,7 @@ export default function Profile() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { session } } = await supabase.auth.getSession(); const user = session?.user ?? null
       if (!user) { setLoading(false); return }
 
       // 6개 급수 트랙(단위 × 종목)별 승급 진행 프리뷰 (014 v2 RPC)
@@ -246,7 +246,7 @@ export default function Profile() {
     const file = e.target.files?.[0]
     if (!file) return
     setUploading(true)
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { session } } = await supabase.auth.getSession(); const user = session?.user ?? null
     const path = `grade-proofs/${user.id}/${Date.now()}.${file.name.split('.').pop()}`
     const { error } = await supabase.storage.from('proofs').upload(path, file)
     if (!error) {

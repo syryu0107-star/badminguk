@@ -48,7 +48,7 @@ export default function Ranking() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { session } } = await supabase.auth.getSession(); const user = session?.user ?? null
 
       // 내 프로필
       let me = null

@@ -144,7 +144,7 @@ export default function Auth() {
     }
 
     // profiles에도 저장
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { session } } = await supabase.auth.getSession(); const user = session?.user ?? null
     if (user) {
       await supabase.from('profiles').update({
         verified_name: data.verified_name,

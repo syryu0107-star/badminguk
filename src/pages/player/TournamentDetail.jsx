@@ -85,7 +85,7 @@ export default function TournamentDetail() {
   const load = useCallback(async () => {
     setLoadError(false)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { session } } = await supabase.auth.getSession(); const user = session?.user ?? null
       const [{ data: t }, { data: c }] = await Promise.all([
         supabase.from('tournaments').select('*').eq('id', id).single(),
         supabase.from('tournament_categories').select('*').eq('tournament_id', id),
@@ -203,7 +203,7 @@ export default function TournamentDetail() {
     if (doubles && !selectedPartner) { setEntryError('파트너를 선택하세요'); return }
 
     setSubmitting(true); setEntryError('')
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { session } } = await supabase.auth.getSession(); const user = session?.user ?? null
 
     let p2id = null
     let entryStatus = 'applied'
