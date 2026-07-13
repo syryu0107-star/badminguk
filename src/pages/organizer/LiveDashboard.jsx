@@ -8,6 +8,7 @@ import { callMatch, callMatchBatch } from '../../lib/notify'
 import { planAutoAdvance, planNoShow, analyzeDelay, planRebalance } from '../../lib/orchestrator'
 import { planAutoFinalize } from '../../lib/stateMachine'
 import { summarizeCheckins, assessNoShowResolution } from '../../lib/checkin'
+import { parseSelfScores, reconcileSelfScores, selfScoreToCompleteArgs, gamesText } from '../../lib/selfScore'
 import { buildCertificates, printCertificates } from '../../lib/certificate'
 import TopBar from '../../components/TopBar'
 import Spinner from '../../components/Spinner'
@@ -122,6 +123,13 @@ export default function LiveDashboard() {
   const autoResolvedRef = useRef({}) // { [matchId]: ts } 노쇼 자동 부전승 중복 실행 방지
   const [nowTick, setNowTick] = useState(Date.now()) // 카운트다운 갱신용 틱
 
+  // ── 무심판 셀프 점수 (C7·심판) ─────────────────────────────────────
+  //   심판 없는 코트에서 선수가 제출한 최종 점수(match_events.self_score). 양 팀이
+  //   같은 결과를 내면(agreed) 무인 진행 ON 일 때 자동 확정, 어긋나면 주최자 확인.
+  const [selfEvents, setSelfEvents] = useState([]) // 현재 종목 경기들의 self_score 이벤트
+  const [applyingSelf, setApplyingSelf] = useState(null) // 확정 처리 중인 match id
+  const selfAppliedRef = useRef({}) // { [matchId]: ts } 셀프 점수 자동 확정 중복 실행 방지
+
   // 체크인한 선수 id 집합 (뷰와 무관하게 상시 유지) — 노쇼 자동 부전승 판정용.
   const [checkinSet, setCheckinSet] = useState(() => new Set())
 
@@ -179,6 +187,10 @@ export default function LiveDashboard() {
         const row = payload.new ?? payload.old
         if (row && row.category_id !== activeCat) return
         loadMatches()
+      })
+      // 선수 셀프 점수 제출(match_events.self_score)이 오면 즉시 반영해 자동 확정 타이밍을 놓치지 않게.
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'match_events' }, (payload) => {
+        if (payload.new?.event_type === 'self_score') loadMatches()
       })
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
@@ -354,6 +366,62 @@ export default function LiveDashboard() {
     [matches, categories, activeCat, nowTick]
   )
 
+  // ── 무심판 셀프 점수 판정 (C7·심판) — 경기별 선수 제출 → 합의 상태 산출 ──
+  //   미완료 경기 중 self_score 제출이 있는 것만. agreed=양팀 일치(자동 확정 가능),
+  //   pending=한 팀만, disputed=서로 다름(주최자 확인). 확정은 completeMatch 재사용.
+  const selfScoreItems = useMemo(() => {
+    if (!selfEvents.length) return []
+    const byMatch = {}
+    for (const e of selfEvents) {
+      (byMatch[e.match_id] ??= []).push(e)
+    }
+    const out = []
+    for (const m of matches) {
+      if (DONE_STATUSES.includes(m.status)) continue
+      const evs = byMatch[m.id]
+      if (!evs) continue
+      const rec = reconcileSelfScores(parseSelfScores(evs))
+      if (rec.status === 'none') continue
+      out.push({ match: m, rec })
+    }
+    return out
+  }, [selfEvents, matches])
+
+  // 셀프 점수로 경기 확정 (자동·수동 공용) — 기존 completeMatch 재사용(점수·진출·MMR).
+  async function applySelfScore(match, submission) {
+    const args = selfScoreToCompleteArgs(match, submission)
+    if (!args) return false
+    setApplyingSelf(match.id)
+    try {
+      await completeMatch(supabase, match.id, args)
+      await loadMatches()
+      return true
+    } catch (e) {
+      console.error('[셀프 점수 확정] 실패', e)
+      return false
+    } finally {
+      setApplyingSelf(null)
+    }
+  }
+
+  // 무인 자동 확정: 무인 진행 ON 이고 양 팀이 같은 점수를 냈으면(agreed) 스스로 확정.
+  //   selfAppliedRef 로 중복 실행 차단, 실패 시 재시도 허용(delete).
+  useEffect(() => {
+    if (!autoRun) return
+    for (const { match, rec } of selfScoreItems) {
+      if (rec.status !== 'agreed') continue
+      if (selfAppliedRef.current[match.id]) continue
+      selfAppliedRef.current[match.id] = Date.now() // 먼저 표시해 중복 실행 차단
+      applySelfScore(match, rec.submission)
+        .then(ok => {
+          if (ok) pushAutoLog(`셀프 점수 자동 확정: ${sportOf(match)} · ${gamesText(rec.submission.games)}`)
+          else delete selfAppliedRef.current[match.id]
+        })
+        .catch(() => { delete selfAppliedRef.current[match.id] })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selfScoreItems, autoRun])
+
   // ── 무인 시상 확정 (C2) — 전 종목 종료 + 유예 경과 시 스스로 대회 종료·시상 확정 ──
   //   MMR 은 경기 완료(completeMatch) 때 이미 반영되므로, 여기서 추가되는 것은 최종
   //   순위(final_rank)·급수 승급뿐이다. 그래도 점수 오류·이의제기를 흡수할 유예 창을 두고,
@@ -442,6 +510,23 @@ export default function LiveDashboard() {
       .order('scheduled_time', { ascending: true })
     setMatches(data ?? [])
     setLastSync(new Date())
+    loadSelfScores(data ?? [])
+  }
+
+  // 현재 종목 미완료 경기들의 셀프 점수 이벤트를 한 번에 로드(무심판 코트).
+  async function loadSelfScores(ms) {
+    try {
+      const ids = (ms ?? []).filter(m => !DONE_STATUSES.includes(m.status)).map(m => m.id)
+      if (!ids.length) { setSelfEvents([]); return }
+      const { data, error } = await supabase
+        .from('match_events')
+        .select('match_id, event_type, team_no, meta, created_by, created_at')
+        .in('match_id', ids)
+        .eq('event_type', 'self_score')
+        .order('created_at', { ascending: true })
+      if (error) return // 마이그레이션 015 미적용 등 — 조용히 미노출
+      setSelfEvents(data ?? [])
+    } catch { /* degrade */ }
   }
 
   async function loadCheckins() {
@@ -1126,6 +1211,76 @@ export default function LiveDashboard() {
                 >
                   빈 코트로 재배치
                 </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── 무심판 코트 셀프 점수 (선수 제출 → 확정) ─────────────────── */}
+          {selfScoreItems.length > 0 && (
+            <div className="px-4 pt-4">
+              <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+                <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
+                  <Gavel size={16} className="text-[#C60C30]" />
+                  <div className="min-w-0">
+                    <p className="font-bold text-sm">선수 제출 점수 · 무심판 코트</p>
+                    <p className="text-[11px] text-gray-400 leading-snug">
+                      선수가 직접 낸 최종 점수예요. {autoRun ? '양 팀이 일치하면 자동 확정돼요.' : '확인 후 확정하세요.'}
+                    </p>
+                  </div>
+                </div>
+                <div className="divide-y divide-gray-50">
+                  {selfScoreItems.map(({ match, rec }) => {
+                    const sub = rec.submission
+                    return (
+                      <div key={match.id} className="px-4 py-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-semibold break-keep leading-snug min-w-0">
+                            {match.court_number != null && (
+                              <span className="text-[11px] font-bold text-gray-400 mr-1.5">{match.court_number}번</span>
+                            )}
+                            {teamNamesOf(match)}
+                          </p>
+                          {rec.status === 'agreed' && (
+                            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 shrink-0">양 팀 일치</span>
+                          )}
+                          {rec.status === 'pending' && (
+                            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 shrink-0">한 팀만 제출</span>
+                          )}
+                          {rec.status === 'disputed' && (
+                            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-red-50 text-[#C60C30] shrink-0">점수 불일치</span>
+                          )}
+                        </div>
+
+                        {rec.status === 'disputed' ? (
+                          <div className="mt-1.5 text-xs text-gray-500 space-y-0.5">
+                            <p>팀1 제출: <span className="font-semibold tabular-nums">{gamesText(rec.team1?.games)}</span></p>
+                            <p>팀2 제출: <span className="font-semibold tabular-nums">{gamesText(rec.team2?.games)}</span></p>
+                            <p className="text-[11px] text-[#C60C30] font-semibold">점수가 달라요. 점수판에서 직접 확인해 확정하세요.</p>
+                          </div>
+                        ) : (
+                          <div className="mt-1.5 flex items-center justify-between gap-2">
+                            <p className="text-xs text-gray-500">
+                              제출 점수 <span className="font-bold text-gray-700 tabular-nums">{gamesText(sub?.games)}</span>
+                              {sub?.winnerTeam && (
+                                <span className="ml-1 text-gray-400">
+                                  · {(sub.winnerTeam === 1 ? teamNamesOf(match).split(' vs ')[0] : teamNamesOf(match).split(' vs ')[1]) || `팀${sub.winnerTeam}`} 승
+                                </span>
+                              )}
+                            </p>
+                            <button
+                              onClick={() => applySelfScore(match, sub)}
+                              disabled={applyingSelf === match.id}
+                              className="shrink-0 px-3 py-1.5 rounded-lg text-white text-xs font-bold active:opacity-80 disabled:opacity-50"
+                              style={{ background: rec.status === 'agreed' ? '#059669' : '#003478' }}
+                            >
+                              {applyingSelf === match.id ? '확정 중…' : rec.status === 'agreed' ? '이 점수로 확정' : '확인 후 확정'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             </div>
           )}

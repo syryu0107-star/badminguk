@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-12 — [C7·심판] 무심판 코트 셀프 스코어 — 선수 자가 점수 제출 → 무인/1탭 경기 확정
+
+- **심판 플로우의 유일한 잔여 공백(무심판 코트) 해소 — 선수가 자기 폰으로 최종 점수를 내면 앱이 경기를 확정**
+  - 파일: `src/lib/selfScore.js`(신규), `src/pages/player/MyMatches.jsx`, `src/pages/organizer/LiveDashboard.jsx`, `supabase/migrations/015_self_score_event.sql`(신규), `tests/selfscore.test.mjs`(신규)
+  - 요약: 직전 런이 C5 녹아웃 시드 최적화로 C5 비-human-gated 갭을 소진했고, 그 앞 다수가 UI 하드닝. 비-human-gated 클러스터 갭이 거의 소진된 상태에서 **가장 낮은 플로우(심판 83%)의 유일한 명시 갭 = 무심판 코트 셀프 스코어**를 골랐다. 동호인 대회는 코트마다 심판을 둘 인원이 없어 선수가 스스로 점수를 부르는데, 배드민국은 심판/주최자가 코트마다 매 득점을 입력해야만 경기가 completed 로 넘어가(승자 진출·급수 반영) 무심판 코트에서 자동화가 멈췄다(북극성 near-zero touch 의 큰 구멍). **설계 전환(안전)**: 초기 계획(선수가 `tournament_matches` 직접 UPDATE → 새 RLS 필요·human-gated 큼)을 버리고, 선수는 `match_events` 에 `self_score` 로 **append 만**(008 "인증 사용자 삽입" RLS 그대로, 쓰기 권한 확장 불필요) 하고 실제 확정은 기존 `advance.completeMatch`(주최자 브라우저·양 팀 합의 시 무인 오케스트레이터 자동 / 아니면 1탭)가 하도록 함 → **새 RLS 없이 match_events 의 chk_event_type CHECK 완화(015)만** 하면 발화. **구현(순수·비파괴·엔진 재사용)**: (1) `selfScore.js` — `participantTeam`·`evaluateGames`(bwf.isGameOver 재사용해 심판 점수판과 동일 규칙으로 최종 게임 점수 검증·결승까지만 인정·gamesWon/winnerTeam 산출)·`buildSelfScoreEvent`·`parseSelfScores`(팀별 최신)·`reconcileSelfScores`(none/pending/agreed/disputed)·`selfScoreToCompleteArgs`(→ completeMatch 인자). (2) MyMatches "셀프 점수 입력" 패널(진행중/코트 배정된 임박 경기·양 팀 확정 시 노출, 게임별 점수 입력·인라인 검증·상대 제출 표시·"같은 점수로 확인" 원터치·배지, insert CHECK 위반 23514=기능 미활성 graceful). (3) LiveDashboard "선수 제출 점수" 패널(현재 종목 self_score 배치 로드+match_events INSERT 실시간 구독·agreed/pending/disputed 배지·1탭 확정) + **무인 자동 확정 useEffect**(autoRun ON·agreed → applySelfScore(completeMatch), selfAppliedRef 중복 차단·실패 재시도·pushAutoLog). completeMatch 로직 0 복제, 선수는 tournament_matches 못 씀, disputed 는 자동 확정 안 함(사람 확인), 015 미적용 시 graceful 미노출. 회귀 16개. `npm test` **201/201 통과**(185+16), `npx vite build` green(deps 설치 후). (자동화율 주최자 95%·선수 89%·심판 83%→88%·운영 88%→89% — 무심판 코트가 앱만으로 완결)
+
 ## 2026-07-12 — [C5] 토너먼트 대진 AI 최적화 — 녹아웃(single_elim) 시드 최적화(강팀 조기 대결 회피)
 
 - **무작위 단판 토너먼트의 "강강 조기 대결" 쏠림을 후보 대진 시뮬레이션으로 제거 — C5의 마지막 비-human-gated 실질 갭 완성**

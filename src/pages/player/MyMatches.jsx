@@ -3,10 +3,13 @@ import { supabase } from '../../lib/supabase'
 import { subscribeNotifications, fetchRecentCalls, markCallRead, fetchNotices, markNoticeRead, NOTICE_TYPES } from '../../lib/notify'
 import { getCheckinWindow, assessSelfCheckin, selfCheckin, fetchMyCheckins } from '../../lib/checkin'
 import { depositGuide, shouldShowDeposit, formatWon } from '../../lib/deposit'
+import {
+  evaluateGames, buildSelfScoreEvent, parseSelfScores, reconcileSelfScores, gamesText,
+} from '../../lib/selfScore'
 import BottomNav from '../../components/BottomNav'
 import MatchCard from '../../components/MatchCard'
 import Spinner from '../../components/Spinner'
-import { CalendarDays, Mail, Check, X, Clock, Megaphone, AlertTriangle, UserCheck, ShieldCheck, MapPin, Bell } from 'lucide-react'
+import { CalendarDays, Mail, Check, X, Clock, Megaphone, AlertTriangle, UserCheck, ShieldCheck, MapPin, Bell, Gavel, Send, CheckCircle2 } from 'lucide-react'
 
 // ── 다음 경기 하이라이트용 상수·헬퍼 ────────────────────────────
 // 이미 끝난 경기 상태 (다음 경기 후보에서 제외)
@@ -223,6 +226,239 @@ const PAY_BADGE = {
   refunded:  { label: '환불됨',   cls: 'bg-gray-100 text-gray-500' },
 }
 
+// ── 무심판 코트 셀프 점수 입력 (C7·심판) ─────────────────────────────
+// 심판 없는 코트에서 경기에 뛴 선수가 자기 폰으로 최종 게임 점수를 제출한다.
+// match_events 에 self_score 로 append(양 팀 각자 제출) → 양 팀이 같은 결과를 내면
+// 주최자 실시간 진행 화면이 자동(무인)으로 경기를 확정하고, 어긋나면 주최자가 확인.
+// 이 패널은 "제출·현황 표시"만 담당하고 확정은 하지 않는다(선수는 경기 결과를 못 바꿈).
+function SelfScorePanel({ match, myTeam, config, userId, t1Name, t2Name }) {
+  const [events, setEvents] = useState([])
+  const [rows, setRows] = useState([])     // [[t1,t2], ...] 입력값(문자열)
+  const [error, setError] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [notActive, setNotActive] = useState(false) // 마이그레이션 미적용(기능 비활성)
+
+  const gpm = config?.gamesPerMatch ?? 3
+  const ppg = config?.pointsPerGame ?? 21
+
+  const loadEvents = useCallback(async () => {
+    try {
+      const { data, error: e } = await supabase
+        .from('match_events')
+        .select('event_type, team_no, meta, created_by, created_at')
+        .eq('match_id', match.id)
+        .eq('event_type', 'self_score')
+        .order('created_at', { ascending: true })
+      if (e) return
+      setEvents(data ?? [])
+    } catch { /* degrade: 셀프 점수 없음 */ }
+  }, [match.id])
+
+  useEffect(() => {
+    setRows(Array.from({ length: gpm }, () => ['', '']))
+    setError(null); setNotActive(false); setOpen(false)
+    loadEvents()
+    const ch = supabase
+      .channel(`selfscore-${match.id}`)
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'match_events' },
+        (payload) => { if (payload.new?.match_id === match.id) loadEvents() })
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [match.id, gpm, loadEvents])
+
+  const subs = parseSelfScores(events)
+  const rec = reconcileSelfScores(subs)
+  const mine = myTeam === 1 ? subs.team1 : subs.team2
+  const theirs = myTeam === 1 ? subs.team2 : subs.team1
+
+  async function submit() {
+    setError(null)
+    const games = rows
+      .map(r => [r[0], r[1]])
+      .filter(r => r[0] !== '' || r[1] !== '')
+      .map(r => [Number(r[0]), Number(r[1])])
+    const ev = evaluateGames(games, { pointsPerGame: ppg, gamesPerMatch: gpm })
+    if (!ev.valid) { setError(ev.error); return }
+    setSaving(true)
+    try {
+      const row = buildSelfScoreEvent(ev, myTeam)
+      const { error: e } = await supabase.from('match_events').insert({
+        ...row, match_id: match.id, created_by: userId,
+      })
+      if (e) {
+        // CHECK 제약(23514) = 마이그레이션 015 미적용 → 기능 비활성 안내
+        if (e.code === '23514' || /chk_event_type|check constraint/i.test(e.message || '')) {
+          setNotActive(true)
+        } else {
+          setError('점수 제출에 실패했어요. 잠시 후 다시 시도해주세요.')
+        }
+        setSaving(false)
+        return
+      }
+      setOpen(false)
+      await loadEvents()
+    } catch {
+      setError('점수 제출에 실패했어요.')
+    }
+    setSaving(false)
+  }
+
+  // 상대가 낸 점수를 그대로 채워 넣기(동일 확인 → 합의 확정 유도)
+  function fillFromTheirs() {
+    if (!theirs?.games?.length) return
+    const filled = Array.from({ length: gpm }, (_, i) => {
+      const g = theirs.games[i]
+      return g ? [String(g[0]), String(g[1])] : ['', '']
+    })
+    setRows(filled); setOpen(true); setError(null)
+  }
+
+  const oppLabel = myTeam === 1 ? (t2Name || '상대 팀') : (t1Name || '상대 팀')
+
+  return (
+    <section className="rounded-2xl bg-white border border-gray-100 shadow-sm overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
+        <Gavel size={16} className="text-[#C60C30] shrink-0" />
+        <div className="min-w-0">
+          <p className="font-bold text-sm">셀프 점수 입력</p>
+          <p className="text-[11px] text-gray-400 leading-snug">
+            심판이 없는 코트라면, 경기 후 최종 점수를 직접 제출하세요.
+          </p>
+        </div>
+      </div>
+
+      <div className="px-4 py-3.5 space-y-3">
+        {/* 현황 배지 */}
+        {rec.status === 'agreed' && (
+          <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-2.5 flex items-start gap-2">
+            <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+            <p className="text-xs text-emerald-700 leading-relaxed">
+              <strong>양 팀 점수가 일치</strong>해요 ({gamesText(rec.submission.games)}).<br />
+              곧 결과가 자동으로 확정돼요.
+            </p>
+          </div>
+        )}
+        {rec.status === 'disputed' && (
+          <div className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2.5 flex items-start gap-2">
+            <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-700 leading-relaxed">
+              양 팀이 낸 점수가 <strong>서로 달라요</strong>. 주최자가 확인 후 확정해요.<br />
+              우리 팀: {gamesText(mine?.games)} · {oppLabel}: {gamesText(theirs?.games)}
+            </p>
+          </div>
+        )}
+        {rec.status !== 'agreed' && rec.status !== 'disputed' && (
+          <>
+            {mine && (
+              <div className="rounded-xl bg-blue-50 border border-blue-100 px-3 py-2.5 flex items-start gap-2">
+                <Check size={15} className="text-[#003478] shrink-0 mt-0.5" />
+                <p className="text-xs text-[#003478] leading-relaxed">
+                  <strong>제출 완료</strong> ({gamesText(mine.games)}) · {oppLabel}의 확인을 기다리는 중이에요.
+                </p>
+              </div>
+            )}
+            {theirs && !mine && (
+              <div className="rounded-xl bg-gray-50 border border-gray-100 px-3 py-2.5">
+                <p className="text-xs text-gray-600 leading-relaxed">
+                  {oppLabel}이 점수를 제출했어요: <strong>{gamesText(theirs.games)}</strong>
+                </p>
+                <button
+                  onClick={fillFromTheirs}
+                  className="mt-2 text-xs font-bold text-[#003478] underline underline-offset-2"
+                >
+                  이 점수가 맞아요 → 같은 점수로 확인
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
+        {notActive && (
+          <div className="rounded-xl bg-gray-50 border border-gray-100 px-3 py-2.5">
+            <p className="text-xs text-gray-500 leading-relaxed">
+              아직 셀프 점수 기능이 켜지지 않은 대회예요. 주최자에게 코트 심판 배정을 요청해주세요.
+            </p>
+          </div>
+        )}
+
+        {/* 입력 폼 (합의 전까지 언제든 다시 제출 가능) */}
+        {rec.status !== 'agreed' && !notActive && (
+          open ? (
+            <div className="space-y-2">
+              <div className="grid grid-cols-[auto_1fr_auto_1fr] items-center gap-2">
+                <span className="text-[11px] text-gray-400" />
+                <span className="text-[11px] font-bold text-center truncate" style={{ color: '#C60C30' }}>{t1Name || '팀1'}</span>
+                <span className="text-[11px] text-gray-300 text-center">:</span>
+                <span className="text-[11px] font-bold text-center truncate" style={{ color: '#003478' }}>{t2Name || '팀2'}</span>
+                {rows.map((r, i) => (
+                  <FragmentRow
+                    key={i}
+                    idx={i}
+                    r={r}
+                    onChange={(a, b) => setRows(rs => rs.map((x, j) => j === i ? [a, b] : x))}
+                  />
+                ))}
+              </div>
+              {error && <p className="text-xs text-[#C60C30] font-semibold px-1">{error}</p>}
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={() => setOpen(false)}
+                  className="flex-1 py-2.5 rounded-xl bg-gray-100 text-gray-600 text-sm font-bold active:opacity-80"
+                >
+                  취소
+                </button>
+                <button
+                  onClick={submit}
+                  disabled={saving}
+                  className="flex-[2] py-2.5 rounded-xl text-white text-sm font-bold active:opacity-80 disabled:opacity-50 flex items-center justify-center gap-1.5"
+                  style={{ background: 'linear-gradient(135deg, #C60C30, #003478)' }}
+                >
+                  <Send size={15} /> {mine ? '점수 다시 제출' : '점수 제출'}
+                </button>
+              </div>
+              <p className="text-[11px] text-gray-400 leading-relaxed px-1">
+                {gpm}판 {Math.floor(gpm / 2) + 1}선승 · {ppg}점제. 진행한 게임만 입력하면 돼요.
+              </p>
+            </div>
+          ) : (
+            <button
+              onClick={() => setOpen(true)}
+              className="w-full py-3 rounded-xl text-white text-sm font-bold active:opacity-80 flex items-center justify-center gap-1.5"
+              style={{ background: 'linear-gradient(135deg, #C60C30, #003478)' }}
+            >
+              <Gavel size={16} /> {mine ? '점수 수정하기' : '우리 경기 점수 입력'}
+            </button>
+          )
+        )}
+      </div>
+    </section>
+  )
+}
+
+// 한 게임 점수 입력 행 (grid 셀 4개)
+function FragmentRow({ idx, r, onChange }) {
+  return (
+    <>
+      <span className="text-[11px] text-gray-400 tabular-nums">{idx + 1}게임</span>
+      <input
+        type="number" inputMode="numeric" min="0" value={r[0]}
+        onChange={e => onChange(e.target.value, r[1])}
+        className="w-full text-center text-base font-bold border border-gray-200 rounded-lg py-1.5 tabular-nums"
+        aria-label={`${idx + 1}게임 팀1 점수`}
+      />
+      <span className="text-gray-300 text-center">:</span>
+      <input
+        type="number" inputMode="numeric" min="0" value={r[1]}
+        onChange={e => onChange(r[0], e.target.value)}
+        className="w-full text-center text-base font-bold border border-gray-200 rounded-lg py-1.5 tabular-nums"
+        aria-label={`${idx + 1}게임 팀2 점수`}
+      />
+    </>
+  )
+}
+
 export default function MyMatches() {
   const [userId, setUserId]     = useState(null)
   const [profile, setProfile]   = useState(null) // 내 프로필(디지털 선수증·인증여부)
@@ -300,7 +536,7 @@ export default function MyMatches() {
         .from('tournament_matches')
         .select(`
           *,
-          category:tournament_categories(match_duration_min),
+          category:tournament_categories(match_duration_min, games_per_match, points_per_game),
           team1:tournament_entries!team1_entry_id(id,player1:profiles!player1_id(name),player2:profiles!player2_id(name)),
           team2:tournament_entries!team2_entry_id(id,player1:profiles!player1_id(name),player2:profiles!player2_id(name)),
           scores:match_scores(*)
@@ -493,6 +729,18 @@ export default function MyMatches() {
       .sort((a, b) => (a.tournament.date ?? '').localeCompare(b.tournament.date ?? ''))
   })()
 
+  // 무심판 셀프 점수 대상 경기: 진행중 우선, 없으면 코트 배정된 가장 임박한 예정 경기.
+  // 양 팀이 확정된(entry_id 둘 다 있는) 경기만 — 아직 상대 미정이면 점수 낼 수 없음.
+  const selfScoreMatch = (() => {
+    const eligible = matches.filter(m =>
+      !DONE_STATUSES.includes(m.status) && m.team1_entry_id && m.team2_entry_id && m.myTeamEntryId)
+    const live = eligible.find(m => m.status === 'in_progress')
+    if (live) return live
+    return eligible
+      .filter(m => m.court_number != null)
+      .sort(cmpMatches)[0] ?? null
+  })()
+
   // 받은 초대 = 내가 파트너(player2)이고 아직 수락 대기 중
   const invites = entries.filter(
     e => e.entry_status === 'partner_pending' && e.player2_id === userId,
@@ -625,6 +873,23 @@ export default function MyMatches() {
           <>
             {/* ── 다음 경기 하이라이트 ─────────────────────────── */}
             <NextMatchHighlight info={nextMatch} />
+
+            {/* ── 무심판 코트 셀프 점수 입력 (C7·심판) ─────────────
+                진행중 경기 우선, 없으면 코트가 배정된 가장 임박한 예정 경기.
+                양 팀 확정된 경기에만. */}
+            {selfScoreMatch && (
+              <SelfScorePanel
+                match={selfScoreMatch}
+                myTeam={selfScoreMatch.team1_entry_id === selfScoreMatch.myTeamEntryId ? 1 : 2}
+                config={{
+                  gamesPerMatch: selfScoreMatch.category?.games_per_match ?? 3,
+                  pointsPerGame: selfScoreMatch.category?.points_per_game ?? 21,
+                }}
+                userId={userId}
+                t1Name={selfScoreMatch.team1Name}
+                t2Name={selfScoreMatch.team2Name}
+              />
+            )}
 
             {/* ── 셀프 체크인 · 디지털 선수증 (C4) ─────────────── */}
             {checkinCards.length > 0 && (
