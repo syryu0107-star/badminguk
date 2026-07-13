@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-13 — [C2/C3] 신청 자가 취소 — 선수가 앱에서 직접 취소 + 취소 전 규정 환불 미리보기
+
+- **선수 신청 취소를 "단톡방 수작업"에서 "앱 자가 취소 + 규정 환불 미리보기"로 — 접수 루프의 마지막 선수측 수작업 무인화**
+  - 파일: `src/lib/refund.js`, `src/pages/player/MyMatches.jsx`, `tests/refund.test.mjs`
+  - 요약: 직전 런이 C7 무심판 셀프 스코어(심판 갭)를 채웠고 그 앞이 C5·C3·다수 하드닝. 안티스톨·코드 실측: 비-human-gated 갭 소진 기록을 직접 검증하니 `withdrawn`(철회) 상태가 뱃지·환불(refundPending)·정산·노쇼예측·입금 엔진 **전부에 배선돼 있는데 그 상태로 바꾸는 UI 가 없어**(grep withdrawn = 읽기만·쓰기 0) 신청 취소가 통째 수작업(선수→주최자 문의→수동 처리)이었다. RLS `본인/주최자 수정`(001)이 이미 `player1_id` UPDATE 를 허용하고 `chk_entry_status`에 `withdrawn`이 이미 있어 **새 RLS·마이그레이션·외부 키 0**. **구현(순수·비파괴·엔진 재사용)**: (1) `refund.js` `canWithdraw`(신청자 본인·applied/approved/waitlisted/partner_pending·대회 진행중/종료/취소 잠금) 순수 판정. (2) MyMatches "내 신청 내역" 카드에 "신청 취소" 링크→인라인 확인 패널(입금 완료건은 `computeRefund` "₩N 환불 예정·규정" 미리보기·당일 이후 requiresReview 안내·입금 전/무료는 즉시 취소 문구)→확인 시 `entry_status='withdrawn'` UPDATE+낙관적 반영·실패 graceful. entry select 에 `registration_end` 추가. (3) **끝단 자동 연결**: 취소된 입금 완료건은 주최자 EntryManagement `refundPending`(confirmed+withdrawn)가 자동 픽업→규정 환불액 계산→주최자는 송금만. completeMatch/refund 로직 0 복제, 선수는 자기 entry(player1)만 UPDATE, withdrawn→canWithdraw false 라 멱등, deposit.shouldShowDeposit 가 withdrawn 제외. 회귀 5개(허용 4상태·파트너 불가·진행중 잠금·터미널 멱등·인자없음). `npm test` **206/206**(201+5), `npx vite build` green. (자동화율 주최자 95%·선수 89%→90%·심판 88%·운영 89% — 접수 루프 선수측 마지막 수작업 제거)
+
 ## 2026-07-12 — [C7·심판] 무심판 코트 셀프 스코어 — 선수 자가 점수 제출 → 무인/1탭 경기 확정
 
 - **심판 플로우의 유일한 잔여 공백(무심판 코트) 해소 — 선수가 자기 폰으로 최종 점수를 내면 앱이 경기를 확정**

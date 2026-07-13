@@ -4,7 +4,7 @@
 import { test, assert } from './_harness.mjs'
 import {
   DEFAULT_REFUND_POLICY, computeRefund, pickTier, isBeforeDeadline,
-  daysUntil, refundLineText, policyLines,
+  daysUntil, refundLineText, policyLines, canWithdraw,
 } from '../src/lib/refund.js'
 
 // 기준 시각 고정(로컬 자정 밀림 회피 위해 정오)
@@ -122,4 +122,33 @@ test('refund: refundLineText·policyLines 표기', () => {
   assert.match(lines[0], /접수 마감 전/)
   assert.ok(lines.some(l => /100%/.test(l)))
   assert.ok(lines.some(l => /50%/.test(l)))
+})
+
+// ── 신청 자가 취소 가능 판정(canWithdraw) ─────────────────────────────
+test('canWithdraw: 신청자 본인·진행 전 취소 가능', () => {
+  for (const st of ['applied', 'approved', 'waitlisted', 'partner_pending']) {
+    assert.equal(canWithdraw({ entryStatus: st, tournamentStatus: 'open', isApplicant: true }), true, st)
+    assert.equal(canWithdraw({ entryStatus: st, tournamentStatus: 'closed', isApplicant: true }), true, st)
+  }
+})
+
+test('canWithdraw: 파트너(비신청자)는 취소 불가', () => {
+  assert.equal(canWithdraw({ entryStatus: 'approved', tournamentStatus: 'open', isApplicant: false }), false)
+})
+
+test('canWithdraw: 대회 진행중·종료·취소면 잠금', () => {
+  for (const ts of ['in_progress', 'completed', 'cancelled']) {
+    assert.equal(canWithdraw({ entryStatus: 'approved', tournamentStatus: ts, isApplicant: true }), false, ts)
+  }
+})
+
+test('canWithdraw: 이미 철회·거절 상태는 취소 불가(멱등)', () => {
+  for (const st of ['withdrawn', 'rejected', 'partner_rejected']) {
+    assert.equal(canWithdraw({ entryStatus: st, tournamentStatus: 'open', isApplicant: true }), false, st)
+  }
+})
+
+test('canWithdraw: 인자 없어도 안전(기본 미허용)', () => {
+  assert.equal(canWithdraw(), false)
+  assert.equal(canWithdraw({}), false)
 })

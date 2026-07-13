@@ -47,6 +47,24 @@ export function isBeforeDeadline(registrationEnd, now = new Date()) {
   return now.getTime() < t.getTime()
 }
 
+// 선수가 자기 신청을 스스로 취소(철회)할 수 있는가 판정(순수).
+//   - 신청자(player1) 본인만 취소 가능(파트너=player2 는 초대 거절 플로우가 별도).
+//   - 취소 가능한 신청 상태: 신청/승인/대기/파트너대기(아직 진행 전 단계).
+//   - 대회가 이미 진행중·종료·취소면 잠금(진행 후 이탈은 노쇼·기권 처리 대상).
+export const WITHDRAWABLE_ENTRY_STATUSES = Object.freeze([
+  'applied', 'approved', 'waitlisted', 'partner_pending',
+])
+export const WITHDRAW_LOCKED_TOURNAMENT_STATUSES = Object.freeze([
+  'in_progress', 'completed', 'cancelled',
+])
+
+export function canWithdraw({ entryStatus, tournamentStatus, isApplicant = true } = {}) {
+  if (!isApplicant) return false
+  if (!WITHDRAWABLE_ENTRY_STATUSES.includes(entryStatus)) return false
+  if (WITHDRAW_LOCKED_TOURNAMENT_STATUSES.includes(tournamentStatus)) return false
+  return true
+}
+
 // daysBefore 에 맞는 tier 선택(minDaysBefore 이상 첫 항목). 마지막 tier 는 -Infinity 라 항상 매칭.
 export function pickTier(daysBefore, policy = DEFAULT_REFUND_POLICY) {
   const tiers = policy?.tiers ?? DEFAULT_REFUND_POLICY.tiers

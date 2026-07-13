@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { subscribeNotifications, fetchRecentCalls, markCallRead, fetchNotices, markNoticeRead, NOTICE_TYPES } from '../../lib/notify'
 import { getCheckinWindow, assessSelfCheckin, selfCheckin, fetchMyCheckins } from '../../lib/checkin'
 import { depositGuide, shouldShowDeposit, formatWon } from '../../lib/deposit'
+import { canWithdraw, computeRefund, refundLineText } from '../../lib/refund'
 import {
   evaluateGames, buildSelfScoreEvent, parseSelfScores, reconcileSelfScores, gamesText,
 } from '../../lib/selfScore'
@@ -471,6 +472,9 @@ export default function MyMatches() {
   const [loading, setLoading]   = useState(true)
   const [loadError, setLoadError] = useState(false) // 불러오기 실패(네트워크 등) → 재시도 안내
   const [acting, setActing]     = useState(null) // 처리 중인 entry id
+  const [cancelOpen, setCancelOpen] = useState(null) // 취소 확인 패널이 열린 entry id
+  const [cancelling, setCancelling] = useState(null) // 취소 처리 중인 entry id
+  const [cancelError, setCancelError] = useState(null) // 취소 실패한 entry id
   const [call, setCall]         = useState(null) // 수신한 경기 호출 { court, sport, matchId, notificationId }
   const [soon, setSoon]         = useState(null) // 사전 알림 { court, sport, aheadCount }
   const [warn, setWarn]         = useState(null) // 미입장 부전승 경고 { court, sport, secondsLeft }
@@ -501,7 +505,7 @@ export default function MyMatches() {
         category:tournament_categories(
           sport_type,
           entry_fee,
-          tournament:tournaments(id, title, date, status, location)
+          tournament:tournaments(id, title, date, status, location, registration_end)
         ),
         p1:profiles!player1_id(id, name),
         p2:profiles!player2_id(id, name)
@@ -690,6 +694,29 @@ export default function MyMatches() {
     setActing(null)
     if (error) { alert('처리 중 오류가 발생했습니다: ' + error.message); return }
     await load()
+  }
+
+  // ── 신청 자가 취소(철회) (C2/C3) ────────────────────────────────
+  // 신청자(player1) 본인이 대회 진행 전에 스스로 신청을 취소한다. RLS "본인/주최자 수정"이
+  // player1_id 를 이미 허용하므로 새 권한 불필요. 입금 완료건은 취소 후 주최자 환불 큐
+  // (EntryManagement)가 규정 환불액을 자동 계산 → 사람은 송금만.
+  async function handleCancel(entry) {
+    if (cancelling) return
+    setCancelling(entry.id)
+    setCancelError(null)
+    try {
+      const { error } = await supabase
+        .from('tournament_entries')
+        .update({ entry_status: 'withdrawn' })
+        .eq('id', entry.id)
+      if (error) throw error
+      setEntries(prev => prev.map(x => (x.id === entry.id ? { ...x, entry_status: 'withdrawn' } : x)))
+      setCancelOpen(null)
+    } catch {
+      setCancelError(entry.id) // 패널 유지 + 재시도 안내(graceful)
+    } finally {
+      setCancelling(null)
+    }
   }
 
   // ── 셀프 체크인 (C4) ────────────────────────────────────────────
@@ -1022,6 +1049,20 @@ export default function MyMatches() {
                     const dep = shouldShowDeposit(e, fee)
                       ? depositGuide(e, { fee, myName: myDepositName, partnerName: pn })
                       : null
+                    // 자가 취소 가능 여부(신청자 본인·진행 전) + 취소 시 환불 미리보기
+                    const cancelable = canWithdraw({
+                      entryStatus: e.entry_status,
+                      tournamentStatus: t?.status,
+                      isApplicant: !iAmPartner,
+                    })
+                    const refundCalc = cancelable && fee > 0 && e.payment_status === 'confirmed'
+                      ? computeRefund({
+                          fee,
+                          tournamentDate: t?.date,
+                          registrationEnd: t?.registration_end,
+                          paymentStatus: 'confirmed',
+                        })
+                      : null
                     return (
                       <div key={e.id} className="bg-white rounded-2xl border border-gray-100 p-4">
                         <div className="flex items-start justify-between gap-2">
@@ -1111,6 +1152,65 @@ export default function MyMatches() {
                           <p className="text-xs text-red-500 mt-2">
                             파트너가 초대를 거절했어요. 다른 파트너로 다시 신청할 수 있습니다.
                           </p>
+                        )}
+
+                        {/* ── 신청 자가 취소(철회) ───────────────────────── */}
+                        {cancelable && (
+                          <div className="mt-3 pt-3 border-t border-gray-100">
+                            {cancelOpen === e.id ? (
+                              <div className="rounded-xl bg-gray-50 border border-gray-200 p-3 space-y-2">
+                                <p className="text-xs font-bold text-gray-700">이 신청을 취소할까요?</p>
+                                {fee > 0 ? (
+                                  e.payment_status === 'confirmed' ? (
+                                    refundCalc?.requiresReview ? (
+                                      <p className="text-[11px] text-amber-600 leading-snug">
+                                        {refundCalc.reason} 취소하면 주최자가 환불을 확인해 처리해요.
+                                      </p>
+                                    ) : (
+                                      <p className="text-[11px] text-gray-500 leading-snug">
+                                        {refundLineText(refundCalc)} · 취소 후 주최자가 환불금을 보내드려요.
+                                      </p>
+                                    )
+                                  ) : (
+                                    <p className="text-[11px] text-gray-500 leading-snug">
+                                      아직 입금 전이라 환불할 참가비가 없어요. 바로 취소돼요.
+                                    </p>
+                                  )
+                                ) : (
+                                  <p className="text-[11px] text-gray-500 leading-snug">
+                                    참가비가 없는 신청이라 바로 취소돼요.
+                                  </p>
+                                )}
+                                {cancelError === e.id && (
+                                  <p className="text-[11px] text-[#C60C30] font-semibold">
+                                    취소하지 못했어요. 잠시 후 다시 시도해주세요.
+                                  </p>
+                                )}
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => { setCancelOpen(null); setCancelError(null) }}
+                                    className="flex-1 py-2 rounded-lg bg-white border border-gray-200 text-gray-500 text-xs font-bold active:opacity-80"
+                                  >
+                                    닫기
+                                  </button>
+                                  <button
+                                    onClick={() => handleCancel(e)}
+                                    disabled={cancelling === e.id}
+                                    className="flex-1 py-2 rounded-lg bg-[#C60C30] text-white text-xs font-bold active:opacity-80 disabled:opacity-50"
+                                  >
+                                    {cancelling === e.id ? '취소 중...' : '신청 취소'}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => { setCancelOpen(e.id); setCancelError(null) }}
+                                className="text-xs text-gray-400 font-semibold underline underline-offset-2 active:text-gray-600"
+                              >
+                                신청 취소
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
                     )
