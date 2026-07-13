@@ -155,6 +155,22 @@ test('selfScoreToCompleteArgs: 승자 엔트리·게임 승수·점수 매핑', 
   assert.equal(args.resultType, 'normal')
 })
 
+// 주최자 disputed 1탭 해소: 불일치 시 rec.team1/rec.team2 각각을 그대로
+// selfScoreToCompleteArgs 에 넘겨 확정할 수 있어야 한다(각기 다른 승자로 매핑).
+test('disputed: 양 팀 제출을 각각 확정 인자로 매핑(주최자 1탭 채택)', () => {
+  const rec = reconcileSelfScores(parseSelfScores([
+    evOf(1, [[21, 15], [21, 18]], 't1'), // 팀1 주장: 팀1 승
+    evOf(2, [[15, 21], [18, 21]], 't2'), // 팀2 주장: 팀2 승
+  ]))
+  assert.equal(rec.status, 'disputed')
+  const a1 = selfScoreToCompleteArgs(MATCH, rec.team1)
+  const a2 = selfScoreToCompleteArgs(MATCH, rec.team2)
+  assert.equal(a1.winnerEntryId, 'e1')
+  assert.equal(a2.winnerEntryId, 'e2') // 다른 팀 채택 시 다른 승자
+  assert.deepEqual([a1.gamesWonT1, a1.gamesWonT2], [2, 0])
+  assert.deepEqual([a2.gamesWonT1, a2.gamesWonT2], [0, 2])
+})
+
 test('selfScoreToCompleteArgs: 승자 팀 엔트리 없으면 null (안전)', () => {
   const sub = { winnerTeam: 2, gamesWon: [0, 2], games: [[10, 21], [12, 21]] }
   assert.equal(selfScoreToCompleteArgs({ team1_entry_id: 'e1', team2_entry_id: null }, sub), null)

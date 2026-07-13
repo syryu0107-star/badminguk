@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-13 — [C7] 셀프 스코어 불일치(disputed) 주최자 1탭 해소 — 무심판 코트 완주의 마지막 dead-end 제거
+
+- **양 팀이 다른 점수를 낸 무심판 코트 경기를 "점수판 재입력"에서 "맞는 제출 1탭 채택"으로**
+  - 파일: `src/pages/organizer/LiveDashboard.jsx`, `tests/selfscore.test.mjs`
+  - 요약: 직전 런들(C1 호출 확인·선수 예상시각 관측 보정)로 비-human-gated 갭이 대부분 소진된 상태에서, 코드 실측으로 **셀프 스코어 플로우의 유일한 남은 막다른길**을 찾았다: LiveDashboard "선수 제출 점수" 패널의 `disputed` 분기(양 팀이 서로 다른 최종 점수 제출)가 두 점수를 보여주긴 하나 **"점수판에서 직접 확인해 확정하세요"라는 행동 경로 없는 문구로 끝나** 주최자가 점수판(`/referee/:matchId`)을 열어도 0-0부터 경기 전체를 재입력해야 확정되는 수작업 구멍이었다(무심판 코트 결과 확정 정지·near-zero touch 정반대). **왜 non-human-gated**: `reconcileSelfScores`의 disputed 레코드가 이미 `rec.team1`/`rec.team2` 각각의 완전한 제출(games·gamesWon·winnerTeam)을 담고 `applySelfScore(match, submission)`→`selfScoreToCompleteArgs`→`completeMatch`가 임의 제출을 받으므로 엔진·스키마·키 변경 0(UI 배선만). **구현(순수·비파괴·엔진 재사용)**: disputed 분기를 두 팀 제출 카드(팀명·`gamesText`·승자)+각 "이 점수로 확정" 버튼(맞는 쪽 1탭 채택·재입력 없음)+둘 다 틀린 예외만 "점수판에서 직접 확인" 딥링크 폴백으로 교체. autoRun 자동확정은 여전히 `agreed`만(disputed 는 사람이 채택)·`applyingSelf` 중복 클릭 가드·agreed/pending UI 전부 불변. 회귀 1개(disputed 시 rec.team1/team2 각각 다른 승자·gamesWon 매핑). `npm test` **212/212**(211+1), `npx vite build` green. (자동화율 주최자 95%·선수 92%·심판 88→89%·운영 90% — 셀프 스코어 불일치가 1탭으로 확정돼 무심판 코트 완주의 마지막 dead-end 제거)
+
 ## 2026-07-13 — [C1/C6] 선수 예상 시작 시각 관측 페이스 보정 — AI 호출시각 예측을 선수 화면에 연결
 
 - **선수 "예상 시작 약 HH:MM쯤·앞에 N경기"를 계획값 고정에서 관측 페이스(진행 중 경기 실경과 평균)로 정확화**

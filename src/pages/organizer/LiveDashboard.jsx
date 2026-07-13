@@ -1271,10 +1271,33 @@ export default function LiveDashboard() {
                         </div>
 
                         {rec.status === 'disputed' ? (
-                          <div className="mt-1.5 text-xs text-gray-500 space-y-0.5">
-                            <p>팀1 제출: <span className="font-semibold tabular-nums">{gamesText(rec.team1?.games)}</span></p>
-                            <p>팀2 제출: <span className="font-semibold tabular-nums">{gamesText(rec.team2?.games)}</span></p>
-                            <p className="text-[11px] text-[#C60C30] font-semibold">점수가 달라요. 점수판에서 직접 확인해 확정하세요.</p>
+                          <div className="mt-1.5 space-y-2">
+                            <p className="text-[11px] text-[#C60C30] font-semibold leading-snug">양 팀이 다른 점수를 냈어요. 맞는 점수를 골라 1탭으로 확정하거나, 점수판에서 직접 확인하세요.</p>
+                            {[{ t: 1, sub: rec.team1 }, { t: 2, sub: rec.team2 }].map(({ t, sub }) => {
+                              if (!sub) return null
+                              const names = teamNamesOf(match).split(' vs ')
+                              const winnerName = sub.winnerTeam === 1 ? names[0] : sub.winnerTeam === 2 ? names[1] : null
+                              return (
+                                <div key={t} className="flex items-center justify-between gap-2 rounded-lg bg-gray-50 px-2.5 py-1.5">
+                                  <p className="text-xs text-gray-600 min-w-0 break-keep">
+                                    <span className="font-semibold text-gray-500">{names[t - 1] || `팀${t}`} 제출</span>{' '}
+                                    <span className="font-bold text-gray-700 tabular-nums">{gamesText(sub.games)}</span>
+                                    {winnerName && <span className="text-gray-400"> · {winnerName} 승</span>}
+                                  </p>
+                                  <button
+                                    onClick={() => applySelfScore(match, sub)}
+                                    disabled={applyingSelf === match.id}
+                                    className="shrink-0 px-2.5 py-1 rounded-lg bg-[#003478] text-white text-[11px] font-bold active:opacity-80 disabled:opacity-50">
+                                    {applyingSelf === match.id ? '확정 중…' : '이 점수로 확정'}
+                                  </button>
+                                </div>
+                              )
+                            })}
+                            <button
+                              onClick={() => window.open(`/referee/${match.id}`, '_blank', 'noopener')}
+                              className="w-full py-1.5 rounded-lg bg-gray-100 text-gray-600 text-[11px] font-bold active:opacity-80 flex items-center justify-center gap-1">
+                              <Gavel size={12} /> 점수판에서 직접 확인
+                            </button>
                           </div>
                         ) : (
                           <div className="mt-1.5 flex items-center justify-between gap-2">
