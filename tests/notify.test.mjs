@@ -11,6 +11,7 @@ import {
   NOTIFY, SIGNAL, CAMPAIGN, NOTICE_TYPES, notifyChannel,
   buildMatchCall, buildMatchSoon, buildWalkoverWarn, buildCallAck,
   buildCallBatchItems, notificationRow, callMatchBatch,
+  buildResultNotice, buildResultNotices,
 } from '../src/lib/notify.js'
 import {
   localDateStr, dayDiff, planCampaigns, pendingCampaigns,
@@ -242,6 +243,92 @@ test('notify: callMatchBatch — 재알림(calls)+경고(warns)를 한 채널로
   assert.equal(res.broadcast.count, 2)     // 재알림 1 + 경고 1을 단일 구독으로 방송
   const kinds = res.items.map(i => i.kind)
   assert.ok(kinds.includes('call') && kinds.includes('warn'))
+})
+
+// ══════════════════════ notify: buildResultNotice (결과·급수 개인 알림) ══════════════════════
+test('notify: buildResultNotice — 순위 요약 + 승급 문구 + 메달', () => {
+  const p = buildResultNotice({
+    tournamentId: 't1', tournamentName: '여름오픈',
+    ranks: [{ categoryName: '혼합복식', rank: 1 }, { categoryName: '남자복식', rank: 3 }],
+    gradeTo: 'A',
+  })
+  assert.equal(p.type, NOTIFY.RESULT)
+  assert.equal(p.tournamentId, 't1')
+  assert.equal(p.matchId, null)          // 결과 알림은 특정 경기에 안 묶임
+  assert.ok(NOTICE_TYPES.includes(p.type)) // 공지함에 남는 지속형
+  assert.ok(p.title.includes('여름오픈'))
+  assert.ok(p.title.startsWith('🥇'))     // 최고 순위 1위 → 금메달
+  assert.ok(p.body.includes('혼합복식 1위'))
+  assert.ok(p.body.includes('남자복식 3위'))
+  assert.ok(p.body.includes('A 급수로 승급'))
+  assert.equal(p.podium, true)
+})
+
+test('notify: buildResultNotice — 승급 없음·시상권 밖(4위) → 트로피·podium false', () => {
+  const p = buildResultNotice({ tournamentId: 't', tournamentName: '가을컵', ranks: [{ categoryName: '여복', rank: 4 }] })
+  assert.ok(p.title.startsWith('🏆'))
+  assert.equal(p.gradeTo, null)
+  assert.equal(p.podium, false)
+  assert.ok(!p.body.includes('승급'))
+  assert.ok(p.body.includes('상장'))     // 안내 문구는 항상
+})
+
+test('notify: buildResultNotice — 이름 없음/빈 순위 안전', () => {
+  const p = buildResultNotice({ ranks: [], gradeTo: null })
+  assert.equal(p.type, NOTIFY.RESULT)
+  assert.ok(p.title.includes('대회'))    // tournamentName 폴백
+  assert.deepEqual(p.ranks, [])
+  assert.equal(p.podium, false)
+})
+
+// ══════════════════════ notify: buildResultNotices (선수별 집계) ══════════════════════
+test('notify: buildResultNotices — 엔트리→선수 매핑, 종목명 부착, 승급 결합', () => {
+  const items = buildResultNotices({
+    tournamentId: 't1', tournamentName: '여름오픈',
+    byCategory: {
+      c1: [{ entryId: 'e1', rank: 1 }, { entryId: 'e2', rank: 2 }],
+      c2: [{ entryId: 'e3', rank: 1 }],
+    },
+    categories: [{ id: 'c1', sport_type: '남자복식' }, { id: 'c2', sport_type: '혼합복식' }],
+    entries: [
+      { id: 'e1', player1_id: 'p1', player2_id: 'p2' }, // 우승팀 두 명
+      { id: 'e2', player1_id: 'p3', player2_id: null },  // 준우승(파트너 null)
+      { id: 'e3', player1_id: 'p1', player2_id: null },  // p1 은 혼복 우승도
+    ],
+    promotions: [{ player_id: 'p1', to_grade: 'A' }],
+  })
+  // p1, p2, p3 = 3명 (null player 제외)
+  assert.equal(items.length, 3)
+  const byPid = Object.fromEntries(items.map(i => [i.recipients[0], i.payload]))
+  // p1 은 두 종목(남복 1위 + 혼복 1위) 한 알림에 모임 + 승급
+  assert.equal(byPid.p1.ranks.length, 2)
+  assert.ok(byPid.p1.body.includes('남자복식 1위'))
+  assert.ok(byPid.p1.body.includes('혼합복식 1위'))
+  assert.ok(byPid.p1.body.includes('A 급수로 승급'))
+  assert.deepEqual(byPid.p1.ranks.map(r => r.rank), [1, 1])
+  // p3 은 남복 2위 한 건, 승급 없음
+  assert.equal(byPid.p3.ranks.length, 1)
+  assert.equal(byPid.p3.ranks[0].rank, 2)
+  assert.equal(byPid.p3.gradeTo, null)
+})
+
+test('notify: buildResultNotices — 순위 없는 종목·매핑 없는 엔트리·게스트 안전', () => {
+  const items = buildResultNotices({
+    tournamentId: 't', tournamentName: '컵',
+    byCategory: { c1: [{ entryId: 'e1', rank: null }, { entryId: 'e2', rank: 1 }] },
+    categories: [{ id: 'c1', sport_type: '남복' }],
+    entries: [
+      { id: 'e2', player1_id: 'p1', player2_id: null },
+      { id: 'e9', player1_id: 'pX', player2_id: null }, // byCategory 에 없는 엔트리 → 무시
+    ],
+  })
+  assert.equal(items.length, 1)          // rank null(e1) 제외, 매핑없음(e9) 제외
+  assert.equal(items[0].recipients[0], 'p1')
+  assert.equal(items[0].payload.ranks[0].rank, 1)
+})
+
+test('notify: buildResultNotices — 빈 입력 → 빈 배열', () => {
+  assert.deepEqual(buildResultNotices({ tournamentId: 't' }), [])
 })
 
 // ══════════════════════ campaign: 날짜 유틸 ══════════════════════

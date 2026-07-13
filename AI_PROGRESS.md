@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-13 — [C11/C10] 결과·급수 개인 알림 자동 발송 — 정의만 되고 발신 0이던 NOTIFY.RESULT 공백 완성
+
+- **대회 시상 확정 직후 선수별 "결과 나왔어요 · 최종 N위 · 급수 승급 · 상장 확인" 을 공지함으로 자동 발송**
+  - 파일: `src/lib/notify.js`, `src/pages/organizer/LiveDashboard.jsx`, `tests/notify.test.mjs`
+  - 요약: 직전 런(C4 키오스크)까지 비-human-gated 갭이 대부분 소진된 상태에서, 코드 실측으로 **커뮤니케이션 레이어의 실질 공백**을 찾았다 — `NOTIFY.RESULT`(결과·급수) 타입이 정의되고 공지함 `NOTICE_TYPES`에 들어 MyMatches 공지함 수신 배선까지 있는데 **정작 발송하는 코드가 0**(grep RESULT: 정의·인박스·테스트만). 대회가 무인 시상 확정돼도 선수는 자기 순위·급수를 **앱이 밀어주지 않아** Results를 직접 열어야 알았다(북극성 체인 "…시상→급수반영→**공지**" 마지막 조각·프롬프트가 "MISSING=커뮤니케이션 레이어"로 명시한 층). **왜 non-human-gated**: 013 notifications 테이블 이미 적용(2026-07-10)·기존 `persistBatch`·RLS(본인 알림만) 재사용, 새 마이그레이션·외부 키 0, 웹푸시(human-gated)와 무관하게 인앱 공지함 도달로 즉시 동작. **구현(순수 분리·비파괴)**: (1) 순수 `buildResultNotice`(순위 요약+메달 🥇🥈🥉🏆+승급 문구+상장 안내·podium)·`buildResultNotices`(finalize byCategory·promotions+엔트리→선수 매핑을 **선수별 {payload,recipients:[pid]}** 집계·여러 종목이면 한 알림에 모음·게스트 null 제외). (2) 얇은 `sendResultNotices`(엔트리 조회→집계→**persistBatch 한 번 insert**). **개인 결과라 broadcast 안 함** — 방송 시 `subscribeNotifications`가 대회 전체에 뿌려 남의 결과 노출되므로 recipient 스코프 persist만(013 RLS `own notifications read`). (3) LiveDashboard 무인 자동 확정 useEffect + 수동 finalize 핸들러 **양쪽** 배선(실패 try-catch 삼킴·시상 확정 안 막음·무인 경로 자동 로그). finalizeTournament/persistBatch 로직 0 복제, 013 미적용/실패 시 degrade, 기존 캠페인·호출·공지함 경로 불변. 회귀 6개. `npm test` **234/234**(228+6), `npx vite build` green. (자동화율 주최자 95%·선수 93→94%·심판 89%·운영 91% — 시상 확정→개인 결과 공지 자동화, 커뮤니케이션 레이어 공백 축소)
+
 ## 2026-07-13 — [C4] 셀프 체크인 키오스크 — 입구 체크인을 주최자 수작업에서 선수 셀프로 이관
 
 - **입구 공용 태블릿에서 선수가 이름을 찾아 스스로 체크인 — C4의 유일한 0-코드 갭(키오스크) 완성**

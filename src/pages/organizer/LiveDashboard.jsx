@@ -4,7 +4,7 @@ import { supabase } from '../../lib/supabase'
 import { resolveMatchMMR, CERT_LEVELS } from '../../lib/mmr'
 import { calculatePoolStandings, prizeLabel } from '../../lib/tournament'
 import { completeMatch, finalizeTournament, scoresToPairs, forfeitTeamRemaining } from '../../lib/advance'
-import { callMatch, callMatchBatch, subscribeCallAcks } from '../../lib/notify'
+import { callMatch, callMatchBatch, subscribeCallAcks, sendResultNotices } from '../../lib/notify'
 import { planAutoAdvance, planNoShow, analyzeDelay, planRebalance } from '../../lib/orchestrator'
 import { planAutoFinalize } from '../../lib/stateMachine'
 import { summarizeCheckins, assessNoShowResolution } from '../../lib/checkin'
@@ -498,6 +498,17 @@ export default function LiveDashboard() {
           pushAutoLog(
             `시상 자동 확정 완료 — 순위·급수 반영${res?.promotions?.length ? ` · 승급 ${res.promotions.length}명` : ''}`
           )
+          // 참가자 각자에게 최종 순위·급수 개인 알림을 공지함으로 발송(방송 없음·recipient 스코프).
+          try {
+            const rn = await sendResultNotices({
+              tournamentId: id,
+              tournamentName: tournament?.title,
+              byCategory: res?.byCategory,
+              categories,
+              promotions: res?.promotions,
+            })
+            if (rn?.count) pushAutoLog(`결과·급수 개인 알림 ${rn.count}명 공지함 발송`)
+          } catch { /* 알림 실패는 시상 확정을 막지 않는다 */ }
         } catch (e) {
           autoFinalizingRef.current = false // 재시도 허용
           pushAutoLog('시상 자동 확정 실패 — 수동 확정이 필요해요')
@@ -985,6 +996,16 @@ export default function LiveDashboard() {
       const res = await finalizeTournament(supabase, id, catIds)
       setTournament(t => ({ ...t, status: 'completed' }))
       if (res?.promotions?.length) setPromotions(res.promotions)
+      // 참가자 각자에게 최종 순위·급수 개인 알림을 공지함으로 발송(방송 없음·recipient 스코프).
+      try {
+        await sendResultNotices({
+          tournamentId: id,
+          tournamentName: tournament?.title,
+          byCategory: res?.byCategory,
+          categories,
+          promotions: res?.promotions,
+        })
+      } catch { /* 알림 실패는 시상 확정을 막지 않는다 */ }
       alert('대회가 종료되었습니다! 🏆 순위표 탭에서 시상 결과를 확인하세요.')
       setViewMode('standings')
     } catch (e) {

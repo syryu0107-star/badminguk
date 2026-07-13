@@ -112,6 +112,88 @@ export function buildWalkoverWarn({ match, tournamentId, court, sport, secondsLe
   }
 }
 
+// ── 결과·급수 개인 알림 (C11 · C10) ───────────────────────────────────
+// 대회 종료(finalizeTournament) 직후 참가자 각자에게 "최종 순위·급수 승급" 을 담아
+// 공지함에 남긴다. 캠페인(THANKS)이 대회 전체에 같은 문구를 뿌리는 것과 달리 이건
+// **선수별 개인 결과**라, 대회 채널로 방송하면 다른 선수 화면에 남의 결과가 노출된다
+// → 방송하지 않고 recipient 로 스코프되는 지속 저장(persist)만 쓴다. 선수는 다음에
+// 공지함(fetchNotices)·결과 화면을 열 때 자기 결과만 본다(013 RLS: 본인 알림만 조회).
+//
+// buildResultNotice: 한 선수의 순위 요약 + 승급을 초보용 문구로 조립(순수).
+export function buildResultNotice({ tournamentId, tournamentName, ranks = [], gradeTo = null }) {
+  const name = tournamentName || '대회'
+  const valid = (ranks ?? []).filter(r => r && r.rank != null)
+  const best = valid.reduce((m, r) => (m == null || r.rank < m ? r.rank : m), null)
+  const medal = best === 1 ? '🥇' : best === 2 ? '🥈' : best === 3 ? '🥉' : '🏆'
+  const rankText = valid.map(r => `${r.categoryName ?? '종목'} ${r.rank}위`).join(' · ')
+  const parts = []
+  if (rankText) parts.push(rankText)
+  if (gradeTo) parts.push(`🎉 ${gradeTo} 급수로 승급했어요`)
+  parts.push('상장과 급수 반영을 앱에서 확인해보세요.')
+  return {
+    type: NOTIFY.RESULT,
+    tournamentId: tournamentId ?? null,
+    matchId: null,
+    title: `${medal} ${name} 결과가 나왔어요`,
+    body: parts.join(' · '),
+    ranks: valid,
+    gradeTo: gradeTo ?? null,
+    podium: best != null && best <= 3,
+    createdAt: new Date().toISOString(),
+  }
+}
+
+// buildResultNotices: finalize 산출물(byCategory·promotions) + 엔트리→선수 매핑을 받아
+// 선수별 { payload, recipients:[playerId] } 배열로 만든다(순수 — DB 접근 없음).
+//   byCategory : { [categoryId]: [{ entryId, rank }] }  (finalizeTournament 반환)
+//   categories : [{ id, sport_type }]                   (종목 이름)
+//   entries    : [{ id, player1_id, player2_id }]        (엔트리→선수)
+//   promotions : [{ player_id, to_grade }]               (승급 심사 결과)
+// 한 선수가 여러 종목에 나갔으면 한 알림에 순위를 모아 담는다(순위 오름차순).
+// 게스트·미가입(player_id null)은 수신 대상에서 제외한다.
+export function buildResultNotices({
+  tournamentId, tournamentName, byCategory = {}, categories = [], entries = [], promotions = [],
+}) {
+  const catName = {}
+  for (const c of categories ?? []) catName[c.id] = c.sport_type ?? c.name ?? '종목'
+
+  const entryMeta = {} // entryId → { categoryId, rank, total }
+  for (const [catId, ranks] of Object.entries(byCategory ?? {})) {
+    const total = (ranks ?? []).length
+    for (const r of ranks ?? []) {
+      if (!r || r.entryId == null || r.rank == null) continue
+      entryMeta[r.entryId] = { categoryId: catId, rank: r.rank, total }
+    }
+  }
+
+  const gradeBy = {} // playerId → to_grade
+  for (const p of promotions ?? []) {
+    if (p?.player_id) gradeBy[p.player_id] = p.to_grade ?? p.grade ?? null
+  }
+
+  const byPlayer = {} // playerId → [{ categoryName, rank, total }]
+  for (const e of entries ?? []) {
+    const meta = entryMeta[e?.id]
+    if (!meta) continue
+    const line = { categoryName: catName[meta.categoryId] ?? '종목', rank: meta.rank, total: meta.total }
+    for (const pid of [e.player1_id, e.player2_id]) {
+      if (!pid) continue
+      if (!byPlayer[pid]) byPlayer[pid] = []
+      byPlayer[pid].push(line)
+    }
+  }
+
+  return Object.keys(byPlayer).map(pid => ({
+    payload: buildResultNotice({
+      tournamentId,
+      tournamentName,
+      ranks: byPlayer[pid].slice().sort((a, b) => a.rank - b.rank),
+      gradeTo: gradeBy[pid] ?? null,
+    }),
+    recipients: [pid],
+  }))
+}
+
 // 채널이 SUBSCRIBED 될 때까지 기다린다(최대 2초). 방송은 구독 완료 후에만 도달한다.
 function waitSubscribed(ch) {
   return new Promise(resolve => {
@@ -301,6 +383,35 @@ export async function sendCampaign({ type, tournamentId, title, body, recipients
   const ps = await persist(payload, recipients)   // 공지함에 남으려면 지속 저장이 핵심
   const ex = dispatchExternal(payload, recipients) // 실발송은 human-gated 스텁
   return { payload, broadcast: bc, persist: ps, external: ex }
+}
+
+// ── 고수준 진입점: 결과·급수 개인 알림 (C11 · C10) ─────────────────────
+// finalizeTournament 직후 호출부(LiveDashboard)가 부른다. 엔트리→선수 매핑만 조회하고
+// 선수별 personalized 결과를 **한 번의 insert 로 지속 저장**한다(방송 없음 — 개인 결과라
+// 대회 채널 방송 시 남의 결과가 노출됨). 013 미적용 시 persistBatch 가 조용히 degrade.
+export async function sendResultNotices({ tournamentId, tournamentName, byCategory = {}, categories = [], promotions = [] }) {
+  if (!tournamentId) return { sent: false, count: 0, reason: 'no_tournament' }
+  const entryIds = [...new Set(
+    Object.values(byCategory ?? {}).flatMap(ranks => (ranks ?? []).map(r => r?.entryId).filter(Boolean))
+  )]
+  if (!entryIds.length) return { sent: false, count: 0, reason: 'no_ranks' }
+
+  let entries = []
+  try {
+    const { data, error } = await supabase
+      .from('tournament_entries')
+      .select('id, player1_id, player2_id')
+      .in('id', entryIds)
+    if (error) throw error
+    entries = data ?? []
+  } catch {
+    return { sent: false, count: 0, reason: 'entries_unavailable' } // 조회 실패 시 시상은 이미 확정 — 막지 않음
+  }
+
+  const items = buildResultNotices({ tournamentId, tournamentName, byCategory, categories, entries, promotions })
+  if (!items.length) return { sent: false, count: 0, reason: 'no_recipients' }
+  const ps = await persistBatch(items)
+  return { sent: ps.persisted === true, count: items.length, persist: ps }
 }
 
 // ── 선수 호출 확인(ack) 발신/수신 (C1) ────────────────────────────────
