@@ -78,6 +78,7 @@ export function resolveMatchMMR({ team1, team2, winner, certLevel = 'c' }) {
   const r2 = winner === 2 ? 1 : 0
 
   function calcPlayer(p, partner, opponentAvg, result) {
+    if (!p) return null   // 단식: team[1]이 없으면 건너뜀 (반환 배열에서 filter)
     const rd = p.rd ?? null
     const baseDelta = calcMMRDelta(p.mmr, opponentAvg, result, p.gamesPlayed, certLevel, rd)
     const adj = partner ? partnerAdjustment(p.mmr, partner.mmr) : 1
@@ -99,5 +100,5 @@ export function resolveMatchMMR({ team1, team2, winner, certLevel = 'c' }) {
     calcPlayer(team1[1], team1[0], t2avg, r1),
     calcPlayer(team2[0], team2[1], t1avg, r2),
     calcPlayer(team2[1], team2[0], t1avg, r2),
-  ]
+  ].filter(Boolean)   // 단식은 각 팀 1명이라 null(빈 파트너)을 걸러 2명만 반환
 }
