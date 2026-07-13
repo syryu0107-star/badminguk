@@ -18,6 +18,7 @@
 //   }
 
 import { computeRefund, refundLineText, policyLines } from './refund'
+import { bankTransferInfo } from './deposit'
 
 // ─── 포맷 헬퍼 ────────────────────────────────────────────────────────
 
@@ -170,10 +171,15 @@ const TOPICS = [
     },
   },
   {
-    id: 'payment', personal: false,
-    keywords: ['입금', '계좌', '무통장', '송금', '입금확인', '결제방법', '어떻게내', '돈내', '입금언제', '카드결제'],
-    answer: () =>
-      '참가비는 주최자가 안내한 계좌로 무통장 입금하면 돼요. 입금자명이 신청자명과 맞으면 앱이 자동으로 대조해 "입금 확인"으로 바꿔주고, 그러면 참가 확정 처리도 자동으로 이어져요. 카드·간편결제는 아직 준비 중이에요.',
+    id: 'payment', personal: true,
+    keywords: ['입금', '계좌', '무통장', '송금', '입금확인', '결제방법', '어떻게내', '돈내', '입금언제', '카드결제', '계좌번호', '어디로'],
+    answer: (ctx) => {
+      const bank = bankTransferInfo(ctx.tournament ?? {})
+      const head = bank
+        ? `참가비는 아래 계좌로 무통장 입금하면 돼요.\n💳 ${bank.line}${bank.bankHolder ? ` (예금주 ${bank.bankHolder})` : ''}`
+        : '참가비는 주최자가 안내한 계좌로 무통장 입금하면 돼요.'
+      return `${head}\n입금자명을 신청자 본인(또는 파트너) 실명으로 넣으면 앱이 자동으로 대조해 "입금 확인"으로 바꿔주고, 참가 확정도 자동으로 이어져요. 카드·간편결제는 아직 준비 중이에요.`
+    },
   },
   {
     id: 'checkin', personal: false,

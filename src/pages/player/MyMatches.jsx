@@ -466,6 +466,8 @@ export default function MyMatches() {
   const [userId, setUserId]     = useState(null)
   const [profile, setProfile]   = useState(null) // 내 프로필(디지털 선수증·인증여부)
   const [copiedName, setCopiedName] = useState(false) // 입금자명 복사 피드백
+  const [copiedAcct, setCopiedAcct] = useState(false) // 계좌번호 복사 피드백
+  const [banks, setBanks] = useState({}) // { [tournamentId]: {bank_name,bank_account,bank_holder} } (018 적용 시)
   const [entries, setEntries]   = useState([])   // 내가 신청자(A) 또는 파트너(B)인 모든 신청
   const [matches, setMatches]   = useState([])   // 경기 일정
   const [nextMatch, setNextMatch] = useState(null) // 다음 경기 하이라이트
@@ -518,6 +520,34 @@ export default function MyMatches() {
       .order('created_at', { ascending: false })
 
     setEntries(es ?? [])
+
+    // ── 무통장 입금 계좌 (018) — 입금 대기 신청이 있는 대회만 best-effort 조회 ──
+    // 컬럼(018 bank_*)이 아직 적용 전이면 조회가 실패하므로 try-catch 로 degrade
+    // (계좌 미표시 — 기존 "주최자가 안내한 계좌" 문구로 자연 폴백). 별도 쿼리라
+    // 기존 entries 조회(명시 컬럼)를 깨지 않는다.
+    try {
+      const depTids = [...new Set(
+        (es ?? [])
+          .filter(e => shouldShowDeposit(e, e.category?.entry_fee ?? 0)
+            && e.payment_status !== 'confirmed' && e.payment_status !== 'refunded')
+          .map(e => e.category?.tournament?.id)
+          .filter(Boolean),
+      )]
+      if (depTids.length) {
+        const { data: bts, error: be } = await supabase
+          .from('tournaments')
+          .select('id, bank_name, bank_account, bank_holder')
+          .in('id', depTids)
+        if (be) throw be
+        const map = {}
+        for (const b of bts ?? []) map[b.id] = b
+        setBanks(map)
+      } else {
+        setBanks({})
+      }
+    } catch {
+      setBanks({}) // 018 미적용 → 계좌 안내 없이 진행
+    }
 
     // ── 내 체크인 상태 (참가 확정 대회 대상) ─────────────────────────
     const tIds = [...new Set(
@@ -1145,8 +1175,9 @@ export default function MyMatches() {
                     const fee = e.category?.entry_fee ?? 0
                     const myDepositName =
                       (profile?.identity_verified && profile?.verified_name) || profile?.name || ''
+                    const bankRow = banks[t?.id]
                     const dep = shouldShowDeposit(e, fee)
-                      ? depositGuide(e, { fee, myName: myDepositName, partnerName: pn })
+                      ? depositGuide(e, { fee, myName: myDepositName, partnerName: pn, bank: bankRow })
                       : null
                     // 자가 취소 가능 여부(신청자 본인·진행 전) + 취소 시 환불 미리보기
                     const cancelable = canWithdraw({
@@ -1220,6 +1251,32 @@ export default function MyMatches() {
                                 </span>
                                 <span className="text-xs font-semibold text-[#003478] shrink-0">
                                   {copiedName === e.id ? '복사됨 ✓' : '복사'}
+                                </span>
+                              </button>
+                            )}
+                            {/* 무통장 입금 계좌 (018 적용 시) — 계좌번호 복사 */}
+                            {dep.bank && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await navigator.clipboard.writeText(dep.bank.bankAccount)
+                                    setCopiedAcct(e.id)
+                                    setTimeout(() => setCopiedAcct(false), 1500)
+                                  } catch { /* 클립보드 미지원 무시 */ }
+                                }}
+                                className="mt-2 w-full flex items-center justify-between gap-2 rounded-lg
+                                  bg-white border border-amber-200 px-3 py-2 text-left active:scale-[0.99]"
+                              >
+                                <span className="text-xs text-gray-500 min-w-0">
+                                  입금 계좌{' '}
+                                  <strong className="text-gray-800 text-sm break-all">{dep.bank.line}</strong>
+                                  {dep.bank.bankHolder && (
+                                    <span className="text-gray-400"> (예금주 {dep.bank.bankHolder})</span>
+                                  )}
+                                </span>
+                                <span className="text-xs font-semibold text-[#003478] shrink-0">
+                                  {copiedAcct === e.id ? '복사됨 ✓' : '복사'}
                                 </span>
                               </button>
                             )}

@@ -37,10 +37,24 @@ export function shouldShowDeposit(entry, fee) {
 }
 
 /**
+ * 무통장 입금 계좌 정보 정규화 (순수). 컬럼 미적용/미입력 시 null.
+ * @param {object} bank { bankName, bankAccount, bankHolder } — 대회 계좌 필드
+ * @returns {object|null} { bankName, bankAccount, bankHolder, line } 또는 null
+ */
+export function bankTransferInfo(bank = {}) {
+  const bankName = (bank.bankName ?? bank.bank_name ?? '').toString().trim()
+  const bankAccount = (bank.bankAccount ?? bank.bank_account ?? '').toString().trim()
+  const bankHolder = (bank.bankHolder ?? bank.bank_holder ?? '').toString().trim()
+  if (!bankAccount) return null // 계좌번호가 없으면 안내할 수 없음
+  const line = [bankName, bankAccount].filter(Boolean).join(' ')
+  return { bankName, bankAccount, bankHolder, line }
+}
+
+/**
  * 선수 화면용 입금 안내 데이터 생성 (순수).
  * @param {object} entry  tournament_entries row (payment_status, payment_amount)
- * @param {object} opts   { fee, myName, partnerName }
- * @returns {object} { applicable, done, tone, title, amount, status, steps[], note, payerName }
+ * @param {object} opts   { fee, myName, partnerName, bank:{bankName,bankAccount,bankHolder} }
+ * @returns {object} { applicable, done, tone, title, amount, status, steps[], note, payerName, bank }
  */
 export function depositGuide(entry, opts = {}) {
   if (!entry) return { applicable: false }
@@ -69,22 +83,29 @@ export function depositGuide(entry, opts = {}) {
   }
 
   // pending — 입금 대기
+  const bank = bankTransferInfo(opts.bank ?? {})
   const nameLine = myName
     ? `입금자명을 반드시 "${myName}" (본인 실명)으로 넣어 주세요.`
     : '입금자명을 신청한 본인 실명으로 넣어 주세요.'
   const steps = [
-    `참가비 ${formatWon(amount)}을(를) 주최자가 안내한 계좌로 입금해요.`,
+    bank
+      ? `참가비 ${formatWon(amount)}을(를) 아래 계좌로 입금해요.`
+      : `참가비 ${formatWon(amount)}을(를) 주최자가 안내한 계좌로 입금해요.`,
     `${nameLine} 앱이 입금자명을 보고 자동으로 확인해요.`,
     '입금이 확인되면 이 카드가 "입금 완료"로 바뀌어요 (보통 몇 분 내).',
   ]
+  // 계좌가 앱에 있으면 "문의로 물어보라"는 안내는 불필요.
   const note = partnerName
     ? `본인(${myName || '신청자'}) 또는 파트너(${partnerName}) 실명 중 하나로 입금하면 자동 확인돼요.`
-    : '계좌 번호를 모르면 대회 상세의 "문의"로 물어보거나 주최자 공지를 확인하세요.'
+    : (bank
+        ? '입금자명(실명)만 맞으면 앱이 자동으로 확인해요.'
+        : '계좌 번호를 모르면 대회 상세의 "문의"로 물어보거나 주최자 공지를 확인하세요.')
 
   return {
     applicable: true, done: false, status, amount,
     tone: 'pending', title: '입금 대기',
     payerName: myName || null,
+    bank,
     steps, note,
   }
 }

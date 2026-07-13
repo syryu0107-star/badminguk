@@ -346,6 +346,9 @@ export default function CreateTournament() {
     registration_end: '',
     description: '',
     unit: 'gu',   // 대회 단위(구/시/전국). 저장 시 DB 트리거가 cert_level·K를 자동 세팅.
+    bank_name: '',    // 무통장 입금 은행명 (선택·018)
+    bank_account: '', // 무통장 입금 계좌번호 (선택·018)
+    bank_holder: '',  // 무통장 입금 예금주 (선택·018)
   })
   const [categories, setCategories] = useState([{ ...DEFAULT_CAT }])
   const [expandedCats, setExpandedCats] = useState({})
@@ -372,12 +375,28 @@ export default function CreateTournament() {
     setSaving(true); setError('')
     const { data: { session } } = await supabase.auth.getSession(); const user = session?.user ?? null
 
+    // 무통장 입금 계좌(018)는 컬럼 미적용 시 insert 를 깨뜨리지 않도록 분리 —
+    // 기본 대회는 항상 생성되고, 계좌는 적용 시 별도 UPDATE 로 채운다(degrade-safe).
+    const { bank_name, bank_account, bank_holder, ...baseForm } = form
     const { data: t, error: te } = await supabase
       .from('tournaments')
-      .insert({ ...form, organizer_id: user?.id ?? null, status: 'draft' })
+      .insert({ ...baseForm, organizer_id: user?.id ?? null, status: 'draft' })
       .select().single()
 
     if (te) { setError(te.message); setSaving(false); return }
+
+    // 계좌 입력이 있으면 best-effort 저장 — 018 미적용이면 조용히 생략(대회는 이미 생성됨).
+    if (bank_name || bank_account || bank_holder) {
+      try {
+        const { error: be } = await supabase
+          .from('tournaments')
+          .update({ bank_name, bank_account, bank_holder })
+          .eq('id', t.id)
+        if (be) throw be
+      } catch (err) {
+        if (import.meta.env.DEV) console.warn('[create] 입금 계좌 저장 생략(018 미적용?):', err.message)
+      }
+    }
 
     await supabase.from('tournament_categories').insert(
       categories.map(c => ({
@@ -441,6 +460,48 @@ export default function CreateTournament() {
                 placeholder="대회 규정, 상품, 주의사항 등"
                 rows={3}
                 className="w-full text-sm mt-0.5 outline-none resize-none"
+              />
+            </div>
+          </div>
+        </section>
+
+        {/* 무통장 입금 계좌 (선택·018) — 입력하면 선수 "입금 안내"에 계좌가 자동 표시 */}
+        <section>
+          <h2 className="font-bold mb-1 text-gray-700">입금 계좌 <span className="text-xs font-normal text-gray-400">(선택)</span></h2>
+          <p className="text-xs text-gray-400 mb-3 leading-relaxed">
+            참가비가 있는 대회라면 입금받을 계좌를 적어 두세요. 선수 "입금 안내" 화면에
+            계좌번호가 <strong>복사 버튼과 함께</strong> 자동으로 떠, 단톡방으로 따로 물어볼
+            필요가 없어요. (카드·간편결제는 준비 중이에요.)
+          </p>
+          <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-50">
+            <div className="flex px-4 py-3 gap-3">
+              <div className="w-28 shrink-0">
+                <label className="text-xs text-gray-400 font-semibold">은행</label>
+                <input
+                  value={form.bank_name}
+                  onChange={e => update('bank_name', e.target.value)}
+                  placeholder="예) 국민"
+                  className="w-full text-sm mt-0.5 outline-none"
+                />
+              </div>
+              <div className="flex-1 min-w-0">
+                <label className="text-xs text-gray-400 font-semibold">계좌번호</label>
+                <input
+                  value={form.bank_account}
+                  onChange={e => update('bank_account', e.target.value)}
+                  placeholder="예) 123456-01-234567"
+                  inputMode="numeric"
+                  className="w-full text-sm mt-0.5 outline-none"
+                />
+              </div>
+            </div>
+            <div className="px-4 py-3">
+              <label className="text-xs text-gray-400 font-semibold">예금주</label>
+              <input
+                value={form.bank_holder}
+                onChange={e => update('bank_holder', e.target.value)}
+                placeholder="예) 홍길동"
+                className="w-full text-sm mt-0.5 outline-none"
               />
             </div>
           </div>

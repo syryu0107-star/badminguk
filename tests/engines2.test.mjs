@@ -12,7 +12,7 @@ import {
   computeSettlement, presetByKey, formatWon as settleWon, WITHHOLDING_PRESETS,
 } from '../src/lib/settlement.js'
 import {
-  formatWon as depWon, shouldShowDeposit, depositGuide,
+  formatWon as depWon, shouldShowDeposit, depositGuide, bankTransferInfo,
 } from '../src/lib/deposit.js'
 import {
   poolMeanMmr, scoreDraw, candidateSeeds, optimizeDraw, explainDraw,
@@ -111,6 +111,35 @@ test('deposit: depositGuide — 무료/확인/환불/대기 톤과 실명 안내
   const withPartner = depositGuide({ payment_status: 'pending' }, { fee: 5000, myName: '홍길동', partnerName: '김철수' })
   assert.ok(withPartner.note.includes('김철수'))
   assert.equal(depWon(5000), '₩5,000')
+})
+
+test('deposit: bankTransferInfo — 계좌 정규화(스네이크/카멜·계좌 없으면 null)', () => {
+  assert.equal(bankTransferInfo({}), null)
+  assert.equal(bankTransferInfo({ bank_name: '국민' }), null) // 계좌번호 없으면 null
+  const snake = bankTransferInfo({ bank_name: '국민', bank_account: '123-45', bank_holder: '홍길동' })
+  assert.equal(snake.bankName, '국민')
+  assert.equal(snake.bankAccount, '123-45')
+  assert.equal(snake.bankHolder, '홍길동')
+  assert.equal(snake.line, '국민 123-45')
+  const camel = bankTransferInfo({ bankAccount: '999' })
+  assert.equal(camel.line, '999') // 은행명 없으면 계좌번호만
+})
+
+test('deposit: depositGuide — 계좌 있으면 안내 문구·bank 반영', () => {
+  const noBank = depositGuide({ payment_status: 'pending' }, { fee: 5000, myName: '홍길동' })
+  assert.equal(noBank.bank, null)
+  assert.ok(noBank.note.includes('문의')) // 계좌 없으면 "문의로 물어보라"
+
+  const withBank = depositGuide({ payment_status: 'pending' }, {
+    fee: 5000, myName: '홍길동',
+    bank: { bank_name: '국민', bank_account: '123456-01-234567', bank_holder: '대회장' },
+  })
+  assert.ok(withBank.bank)
+  assert.equal(withBank.bank.line, '국민 123456-01-234567')
+  assert.ok(withBank.steps[0].includes('아래 계좌')) // 첫 단계가 계좌 안내로 바뀜
+  assert.ok(!withBank.note.includes('문의')) // 계좌 있으면 "문의" 문구 제거
+  // confirmed/free 는 계좌와 무관
+  assert.equal(depositGuide({ payment_status: 'confirmed' }, { fee: 5000, bank: { bank_account: '1' } }).bank, undefined)
 })
 
 // ══════════════════════ drawOptimizer.js ══════════════════════
@@ -497,6 +526,17 @@ test('chatbot: normalize / matchTopic / askBot', () => {
   assert.equal(sc.topic, 'scoring')
 
   assert.equal(askBot('블라블라xyz').kind, 'fallback')
+
+  // 입금 계좌: 대회에 계좌가 있으면 답변에 계좌번호 노출, 없으면 일반 안내
+  const payNoBank = askBot('입금 계좌 어디로 보내요?', {})
+  assert.equal(payNoBank.topic, 'payment')
+  assert.ok(payNoBank.answer.includes('주최자가 안내한 계좌'))
+  const payBank = askBot('계좌번호 알려줘', {
+    tournament: { bank_name: '국민', bank_account: '123456-01-234567', bank_holder: '대회장' },
+  })
+  assert.equal(payBank.topic, 'payment')
+  assert.ok(payBank.answer.includes('123456-01-234567'))
+  assert.ok(payBank.answer.includes('대회장'))
 })
 
 test('chatbot: suggestedQuestions — 있는 정보만·최대 6개', () => {

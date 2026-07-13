@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-13 — [C3] 무통장 입금 계좌 앱 내 표시 — 접수→입금 체인의 마지막 앱-밖 누수(계좌 문의) 봉인
+
+- **선수 "입금 안내"에 은행·계좌번호(복사)·예금주를 자동 표시 — 단톡방으로 계좌 물어보던 수작업 제거**
+  - 파일: `src/lib/deposit.js`, `src/pages/player/MyMatches.jsx`, `src/pages/organizer/CreateTournament.jsx`, `src/lib/chatbot.js`, `supabase/migrations/018_bank_account.sql`(신규), `tests/engines2.test.mjs`
+  - 요약: 직전 런들이 커뮤니케이션 레이어 미발신 NOTIFY 타입(RESULT·SCHEDULE_SHIFT)을 소진한 뒤, 코드 실측으로 남은 **실질 완주 갭**을 재선별 — `deposit.js`가 "주최자가 안내한 계좌로 입금 / 계좌를 모르면 문의로 물어보라"로 끝나 **선수가 앱만으로 입금을 완결하지 못하고 반드시 앱 밖(단톡방)으로 계좌를 물어야** 했다(북극성 접수→입금 무인 체인의 마지막 앱-밖 누수). 원장이 이를 "human-gated(계좌 스키마 결정)"로 묶었으나, **프롬프트가 명시 허용한 "새 마이그레이션(사람 적용) + 코드 graceful degrade" 패턴**상 실제 human-gated 는 PG·외부 키뿐이고 무통장 계좌 텍스트 표시는 지금 shippable 임을 확인(over-claim 정정). **왜 non-human-gated**: 무통장 입금은 이미 이 앱의 결제 방식·계좌는 텍스트일 뿐(PG/가상계좌/서버키 무관), 018 컬럼은 사람이 적용하되 그 전에도 앱 안 깨짐. **구현(순수·비파괴·degrade-safe)**: (1) `bankTransferInfo`(순수·스네이크/카멜 정규화·계좌 없으면 null)+`depositGuide` bank 반영(계좌 있으면 첫 단계·note 문구 전환·"문의로" 제거). (2) MyMatches: 입금 대기 대회만 **별도 try-catch 쿼리**로 계좌 best-effort 조회(기존 명시-컬럼 entries 조회에 안 섞어 018 미적용 시 안 깨짐·실패 시 `setBanks({})` 폴백)+계좌번호 복사 버튼. (3) CreateTournament: 입금 계좌 입력 3필드+submit 은 계좌를 분리해 insert 는 계좌 없이(항상 성공)·계좌는 별도 UPDATE try-catch(018 미적용 무시). (4) chatbot payment personal 전환+계좌 노출(TournamentDetail `select('*')` 자동 전달). 018 미적용/조회 실패 시 기존 문구 자연 폴백, confirmed/free/refunded 분기 불변. 회귀 4개. `npm test` **238/238**(236+2), `npx vite build` green. (자동화율 주최자 95%·선수 95→96%·심판 89%·운영 91% — 입금이 앱 하나로 완결, 접수→입금 체인 마지막 앱-밖 누수 봉인)
+
 ## 2026-07-13 — [C6/C1] 선수 일정 지연 프로액티브 안내 — 정의만 되고 발신 0이던 NOTIFY.SCHEDULE_SHIFT 공백 완성
 
 - **대회가 밀리면 아직 순서가 안 온 선수에게 "약 N분 지연되고 있어요 — 여유있게 준비하세요" 를 앱이 먼저 통지**
