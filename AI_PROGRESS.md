@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-14 — [C1] 콜드 오픈 낡은 호출 오탐 방지 — "방송 놓친 호출 복구"가 끝난 경기까지 되살리던 결함 봉인
+
+- **앱 재오픈 시 이미 끝난 경기의 호출을 "지금 코트로 입장하세요" 긴급 배너로 오탐하던 신뢰도 구멍 제거 — filterLiveCalls 신설**
+  - 파일: `src/lib/notify.js`, `src/pages/player/MyMatches.jsx`, `tests/notify.test.mjs`
+  - 요약: 직전 런들(RESULT·SCHEDULE_SHIFT 미발신 채움·무통장 계좌 표시)로 선수 96%에 도달한 뒤, 남은 비-human-gated·비-마이그레이션 갭을 코드 실측으로 재선별 — C1(프롬프트 "가장 큰 공백") 콜드 오픈 복구 경로(`MyMatches` `fetchRecentCalls(userId).then(rows => rows[0])`)를 정독하니, `fetchRecentCalls`가 **최근 20분 미읽음 `match_call`을 경기 상태와 무관하게** 돌려줘, 선수가 호출받고 코트에 가 경기를 끝냈어도(그 경기 completed) 배너 "확인"을 안 눌렀으면 알림이 `read_at:null`로 남아, 앱을 다시 열 때 **이미 끝난 경기의 호출이 "지금 N번 코트로 입장하세요!" 최상위 긴급 배너로 오탐**해 없는 코트로 헛걸음시키고 호출 시스템 자체를 불신하게 했다(near-zero-touch 신뢰성 구멍). **왜 non-human-gated**: 콜드 복구 엔진은 이미 있는데 **경기 상태 교차검증만 0**이던 순수 결함 — 새 마이그레이션·외부 키·서버 무관, 지금 shippable(남은 명시 갭은 human-gated이거나 015/018 적용 대기라 새 코드 여지 없음). **구현(순수·비파괴·엔진 재사용)**: (1) `notify.js` 순수 `filterLiveCalls(rows, matchStatusById)` — `CALL_DONE_STATUSES`(completed/forfeited/bye/cancelled)면 낡은 호출로 제외, **상태 미상(내 경기 목록에 없음)은 진짜 놓친 호출일 수 있어 유지**(복구 목적 보존·과잉 억제 방지), `match_id`/`payload.matchId` 폴백·비배열 방어. (2) MyMatches `matchStatusRef`(matchId→status)를 기존 매치 로드 직후·빈 목록 시 갱신, 콜드 복구를 `filterLiveCalls(rows, matchStatusRef.current)[0]`로 필터. 복구 실패·013 미적용·매치 미로드 시 기존대로 degrade, 라이브 방송·재알림·경고·ack·공지함 경로 전부 불변. 회귀 3개. `npm test` **241/241**(238+3), `npx vite build` green. (자동화율 주최자 95%·선수 96%(happy-path 불변, C1 콜드 오픈 오탐 결함 제거로 호출 신뢰도 하드닝)·심판 90%·운영 91% — C1 반복 발화 경로의 마지막 오탐 봉인)
+
 ## 2026-07-13 — [C1/심판] 끝난 경기→다음 코트 경기 원터치 이동 — 심판 점수판 완료 화면의 막다른길 제거
 
 - **심판이 경기를 확정한 뒤 "돌아가기"만 있던 완료 화면에 "N번 코트 다음 경기로" CTA 신설 — 연속 경기 진행 루프 완결**

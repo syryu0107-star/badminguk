@@ -522,6 +522,29 @@ export async function fetchNotices(recipientId, { withinDays = 45, limit = 30 } 
 // 공지 읽음 처리 — markCallRead 와 동일한 갱신(테이블 없으면 no-op).
 export const markNoticeRead = markCallRead
 
+// 이미 끝난 경기(완료·부전·바이)의 상태 — 이 상태면 호출은 낡은 것.
+const CALL_DONE_STATUSES = ['completed', 'forfeited', 'bye', 'cancelled']
+
+// ── 복구한 호출 중 아직 유효한 것만 남긴다 (C1 콜드 오픈 오탐 방지) ──
+// 문제: `fetchRecentCalls` 는 최근 20분 안의 미읽음 호출을 모두 돌려주는데,
+//   선수가 호출을 받고 코트에 가 경기를 끝냈어도(그 경기 completed) 아무도
+//   그 알림을 "읽음" 처리하지 않았다면, 앱을 다시 열 때 이미 끝난 경기의
+//   호출이 "지금 N번 코트로 입장하세요!" 긴급 배너로 잘못 떠 선수를 헛걸음
+//   시킨다(호출 인프라 신뢰도 훼손). 이 함수는 선수의 현재 경기 상태 맵
+//   (matchId → status)을 받아, 이미 끝난 경기의 호출을 걸러낸다.
+//   상태를 모르는 경기(맵에 없음)는 진짜 놓친 호출일 수 있으므로 유지한다
+//   (복구 본연의 목적 보존) — 걸러내는 건 "끝난 게 확실한" 호출뿐.
+export function filterLiveCalls(rows, matchStatusById = {}) {
+  if (!Array.isArray(rows)) return []
+  const map = matchStatusById ?? {}
+  return rows.filter(r => {
+    const mid = r?.match_id ?? r?.payload?.matchId
+    const st = mid != null ? map[mid] : undefined
+    if (st != null && CALL_DONE_STATUSES.includes(st)) return false
+    return true
+  })
+}
+
 // ── 미확인 호출 복구: 방송을 놓친 선수용(예: 앱을 닫았다 다시 열었을 때) ──
 // notifications 테이블이 있으면 최근 미읽음 호출을 반환, 없으면 빈 배열로 degrade.
 export async function fetchRecentCalls(recipientId, { withinMin = 20 } = {}) {

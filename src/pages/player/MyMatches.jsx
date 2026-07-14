@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
-import { subscribeNotifications, fetchRecentCalls, markCallRead, fetchNotices, markNoticeRead, ackMatchCall, NOTICE_TYPES } from '../../lib/notify'
+import { subscribeNotifications, fetchRecentCalls, filterLiveCalls, markCallRead, fetchNotices, markNoticeRead, ackMatchCall, NOTICE_TYPES } from '../../lib/notify'
 import { getCheckinWindow, assessSelfCheckin, selfCheckin, fetchMyCheckins } from '../../lib/checkin'
 import { depositGuide, shouldShowDeposit, formatWon } from '../../lib/deposit'
 import { canWithdraw, computeRefund, refundLineText } from '../../lib/refund'
@@ -487,6 +487,7 @@ export default function MyMatches() {
   const [notifyPerm, setNotifyPerm] = useState(() => notificationPermission()) // OS 알림 권한 (C1)
   const myEntryIds     = useRef(new Set())        // 내가 속한 엔트리 id (호출 대상 판정용)
   const myTournamentIds = useRef([])              // 내가 참가한 대회 id (구독 대상)
+  const matchStatusRef = useRef({})               // matchId → status (콜드 오픈 낡은 호출 필터용)
 
   const load = useCallback(async () => {
     setLoadError(false)
@@ -591,6 +592,8 @@ export default function MyMatches() {
         myTeamEntryId: entryIds.find(id => id === m.team1_entry_id) ? m.team1_entry_id : m.team2_entry_id,
       }))
       setMatches(formatted)
+      // 콜드 오픈 시 낡은 호출(이미 끝난 경기)을 거르기 위한 상태 맵.
+      matchStatusRef.current = Object.fromEntries(formatted.map(m => [m.id, m.status]))
 
       // ── 다음 경기 하이라이트 계산 ─────────────────────────────
       const nm = pickNextMatch(formatted)
@@ -618,6 +621,7 @@ export default function MyMatches() {
       setNextMatch(nm)
     } else {
       setMatches([])
+      matchStatusRef.current = {}
       setNextMatch(null)
     }
 
@@ -640,9 +644,10 @@ export default function MyMatches() {
     if (!entries.length) return
 
     // 방송을 놓쳤어도 앱을 다시 열면 최근 미확인 호출을 복구(테이블 있으면).
+    // 단, 이미 끝난 경기(완료·부전)의 낡은 호출은 걸러 헛걸음시키지 않는다(C1).
     if (userId) {
       fetchRecentCalls(userId).then(rows => {
-        const hit = rows[0]
+        const hit = filterLiveCalls(rows, matchStatusRef.current)[0]
         if (hit) {
           setCall({
             court: hit.payload?.court ?? null,

@@ -12,6 +12,7 @@ import {
   buildMatchCall, buildMatchSoon, buildWalkoverWarn, buildCallAck,
   buildCallBatchItems, notificationRow, callMatchBatch,
   buildResultNotice, buildResultNotices, buildScheduleShift,
+  filterLiveCalls,
 } from '../src/lib/notify.js'
 import {
   localDateStr, dayDiff, planCampaigns, pendingCampaigns,
@@ -470,4 +471,35 @@ test('campaign: fetchCampaignRecipients — 빈 categoryIds → []', async () =>
 test('campaign: fetchCampaignRecipients — 조회 실패 시 조용히 [] degrade', async () => {
   const broken = { from() { throw new Error('RLS 거부') } }
   assert.deepEqual(await fetchCampaignRecipients(broken, ['c1']), [])
+})
+
+// ══════════════════════ filterLiveCalls: 콜드 오픈 낡은 호출 필터 (C1) ══════════════════════
+// 선수가 호출을 받고 경기를 끝냈어도 알림을 읽음 처리하지 않으면, 앱을 다시 열 때
+// fetchRecentCalls 가 그 낡은 호출을 돌려줘 "지금 코트로 입장하세요" 오탐 배너가 뜬다.
+// filterLiveCalls 가 이미 끝난 경기의 호출을 걸러야 한다.
+test('filterLiveCalls — 완료·부전·바이 경기 호출은 제외, 진행중·예정은 유지', () => {
+  const rows = [
+    { id: 'n1', match_id: 'm-done', payload: {} },
+    { id: 'n2', match_id: 'm-live', payload: {} },
+    { id: 'n3', match_id: 'm-sched', payload: {} },
+    { id: 'n4', match_id: 'm-forf', payload: {} },
+  ]
+  const status = { 'm-done': 'completed', 'm-live': 'in_progress', 'm-sched': 'scheduled', 'm-forf': 'forfeited' }
+  const out = filterLiveCalls(rows, status)
+  assert.deepEqual(out.map(r => r.id), ['n2', 'n3']) // 끝난 경기(m-done·m-forf) 제외
+})
+
+test('filterLiveCalls — 상태 미상(맵에 없음) 호출은 유지(복구 목적 보존)', () => {
+  const rows = [{ id: 'n1', match_id: 'm-unknown', payload: {} }]
+  // 경기 목록에 없어 상태를 모르면 진짜 놓친 호출일 수 있으므로 유지
+  assert.deepEqual(filterLiveCalls(rows, {}).map(r => r.id), ['n1'])
+  assert.deepEqual(filterLiveCalls(rows, null).map(r => r.id), ['n1'])
+})
+
+test('filterLiveCalls — payload.matchId 폴백·빈/비배열 방어', () => {
+  const rows = [{ id: 'n1', match_id: null, payload: { matchId: 'm-done' } }]
+  assert.deepEqual(filterLiveCalls(rows, { 'm-done': 'bye' }), []) // payload.matchId 로도 끝난 경기 인식
+  assert.deepEqual(filterLiveCalls([], {}), [])
+  assert.deepEqual(filterLiveCalls(null, {}), [])
+  assert.deepEqual(filterLiveCalls(undefined), [])
 })
