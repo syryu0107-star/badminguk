@@ -21,7 +21,8 @@ import Spinner from '../../components/Spinner'
 import ConnectionStatus from '../../components/ConnectionStatus'
 import { useOnline } from '../../lib/useOnline'
 import { planAutoAdvance, observedMatchMinutes } from '../../lib/orchestrator'
-import { ChevronLeft, Gavel, Clock, Play, Trophy, LayoutGrid, Zap } from 'lucide-react'
+import { callMatch } from '../../lib/notify'
+import { ChevronLeft, Gavel, Clock, Play, Trophy, LayoutGrid, Zap, BellRing, Check } from 'lucide-react'
 
 const RED = '#C60C30'
 const BLUE = '#003478'
@@ -33,6 +34,16 @@ function teamLabel(entry, fallback = '미정') {
   const names = [entry.player1?.name, entry.player2?.name].filter(Boolean)
   if (names.length) return names.join(' · ')
   return entry.team_name || fallback
+}
+
+// 경기 호출 수신 대상(선수 profile id) — LiveDashboard.recipientsOf 와 동일하게
+//   양 팀 선수 id 를 모은다. 인앱 실시간 방송은 payload.entryIds(경기에서 파생)로
+//   연결된 선수에게 닿고, 이 id 들은 지속 저장(오프라인 복구·재알림)용이다.
+function callRecipients(match) {
+  return [
+    match?.team1?.player1?.id, match?.team1?.player2?.id,
+    match?.team2?.player1?.id, match?.team2?.player2?.id,
+  ].filter(Boolean)
 }
 
 const fmtTime = (iso) =>
@@ -65,6 +76,7 @@ export default function CourtReferee() {
   const [loadError, setLoadError] = useState(null)
   const [rtState, setRtState] = useState('connecting')
   const [nowTick, setNowTick] = useState(() => Date.now())
+  const [called, setCalled] = useState({}) // matchId → 'sending' | 마지막 호출 시각(ms)
 
   const catIdsRef = useRef(new Set())
   const hadDropRef = useRef(false)
@@ -103,11 +115,11 @@ export default function CourtReferee() {
           team1_entry_id, team2_entry_id, winner_entry_id,
           team1:tournament_entries!team1_entry_id(
             id, team_name,
-            player1:profiles!player1_id(name), player2:profiles!player2_id(name)
+            player1:profiles!player1_id(id, name), player2:profiles!player2_id(id, name)
           ),
           team2:tournament_entries!team2_entry_id(
             id, team_name,
-            player1:profiles!player1_id(name), player2:profiles!player2_id(name)
+            player1:profiles!player1_id(id, name), player2:profiles!player2_id(id, name)
           )
         `)
         .in('category_id', catIds)
@@ -179,6 +191,31 @@ export default function CourtReferee() {
   const courtSet = new Set(Array.from({ length: courtCount }, (_, i) => i + 1))
   for (const m of matches) if (m.court_number != null) courtSet.add(m.court_number)
   const courtList = [...courtSet].sort((a, b) => a - b)
+
+  // ── 선수 호출: 코트에 있는 심판이 "지금 이 코트로 오세요" 를 직접 보낸다 (C1) ──
+  //   주최자 LiveDashboard 오케스트레이터가 빈 코트를 자동 호출하지만, 무인 진행이
+  //   꺼져 있거나 주최자가 대시보드를 안 열어둔 경우 코트가 준비돼도 호출이 안 나간다.
+  //   코트에 물리적으로 있는 심판이 준비 완료를 가장 잘 아는 사람이므로, 대기 중인
+  //   현재 경기에 대해 직접 호출(재호출)할 수 있게 한다. 기존 notify.callMatch 재사용
+  //   (인앱 방송 즉시 도달 + 지속 저장 best-effort) — 새 스키마·외부 키 0.
+  const handleCall = useCallback(async (match) => {
+    if (!match?.id || called[match.id] === 'sending') return
+    if (!(match.team1_entry_id && match.team2_entry_id)) return
+    setCalled(prev => ({ ...prev, [match.id]: 'sending' }))
+    try {
+      await callMatch({
+        match,
+        tournamentId,
+        court: match.court_number ?? null,
+        sport: catNameById[match.category_id] ?? null,
+        recipients: callRecipients(match),
+      })
+      setCalled(prev => ({ ...prev, [match.id]: Date.now() }))
+    } catch (err) {
+      console.error('[CourtReferee] 호출 실패', err)
+      setCalled(prev => { const n = { ...prev }; delete n[match.id]; return n })
+    }
+  }, [called, tournamentId, catNameById])
 
   // 한 코트의 현재/다음 경기 계산
   function courtQueue(cn) {
@@ -309,6 +346,8 @@ export default function CourtReferee() {
           estimates={estimates}
           now={nowTick}
           done={done}
+          called={called}
+          onCall={handleCall}
           onOpenScoreboard={(mid) => navigate(`/referee/${mid}`)}
         />
       )}
@@ -317,8 +356,10 @@ export default function CourtReferee() {
 }
 
 // ── 한 코트의 현재/다음 경기 패널 ─────────────────────────────
-function CourtPanel({ court, current, queue, catNameById, estimates = {}, now, done, onOpenScoreboard }) {
+function CourtPanel({ court, current, queue, catNameById, estimates = {}, now, done, called = {}, onCall, onOpenScoreboard }) {
   const live = current?.status === 'in_progress'
+  const callState = current ? called[current.id] : undefined
+  const bothTeams = !!(current?.team1_entry_id && current?.team2_entry_id)
 
   return (
     <div className="px-4 py-4 space-y-4">
@@ -381,15 +422,35 @@ function CourtPanel({ court, current, queue, catNameById, estimates = {}, now, d
               </p>
             )}
 
+            {/* 선수 호출 — 대기 중(경기 시작 전)일 때만. 코트에 있는 심판이 직접 부른다. */}
+            {!live && !done && bothTeams && (
+              <button
+                onClick={() => onCall?.(current)}
+                disabled={callState === 'sending'}
+                className="w-full mt-4 py-3 rounded-xl text-sm font-bold active:opacity-80 disabled:opacity-60 flex items-center justify-center gap-2 border-2"
+                style={
+                  typeof callState === 'number'
+                    ? { borderColor: '#059669', color: '#059669', background: '#ecfdf5' }
+                    : { borderColor: BLUE, color: BLUE, background: '#fff' }
+                }
+              >
+                {callState === 'sending'
+                  ? <>호출 보내는 중…</>
+                  : typeof callState === 'number'
+                    ? <><Check size={16} /> 호출됨 · {fmtClock(callState)} · 다시 호출</>
+                    : <><BellRing size={16} /> 선수 호출 (지금 코트로)</>}
+              </button>
+            )}
+
             <button
               onClick={() => onOpenScoreboard(current.id)}
-              disabled={done || !(current.team1_entry_id && current.team2_entry_id)}
-              className="w-full mt-4 py-3.5 rounded-xl text-white text-base font-bold active:opacity-80 disabled:opacity-40 flex items-center justify-center gap-2"
+              disabled={done || !bothTeams}
+              className="w-full mt-3 py-3.5 rounded-xl text-white text-base font-bold active:opacity-80 disabled:opacity-40 flex items-center justify-center gap-2"
               style={{ background: live ? RED : `linear-gradient(135deg, ${RED}, ${BLUE})` }}
             >
               {live ? <><Gavel size={18} /> 점수판 이어서 열기</> : <><Play size={18} /> 이 경기 점수 입력 시작</>}
             </button>
-            {!(current.team1_entry_id && current.team2_entry_id) && (
+            {!bothTeams && (
               <p className="text-center text-[11px] text-gray-400 mt-2">
                 아직 양 팀이 확정되지 않았어요 (앞선 경기 결과 대기 중).
               </p>
