@@ -303,6 +303,8 @@ export default function TournamentManage() {
   }
 
   const liveUrl = `${window.location.origin}/live/${id}`
+  // 코트별 심판 모드 진입 주소 — 심판이 QR을 찍으면 자기 코트의 현재/다음 경기 점수판으로 바로 도달
+  const refereeUrl = (cn) => `${window.location.origin}/referee/court/${id}${cn != null ? `/${cn}` : ''}`
 
   useEffect(() => {
     let alive = true
@@ -543,6 +545,74 @@ export default function TournamentManage() {
   <p class="url">${liveUrl}</p>
   <p class="hint">휴대폰 카메라로 QR을 찍으면 지금 경기 상황을 바로 볼 수 있어요.</p>
   <p class="brand">배드민국 — 한국 배드민턴 MMR 플랫폼</p>
+  <script>window.onload = function () { window.print() }<\/script>
+</body>
+</html>`)
+    w.document.close()
+  }
+
+  // 코트별 심판 QR 인쇄 (심판 완주 last-mile) — 코트마다 QR 한 장을 뽑아 그 코트 기둥에 붙이면,
+  //   심판이 QR을 찍는 순간 자기 코트의 현재/다음 경기 점수판(CourtReferee)으로 바로 도달한다.
+  //   지금껏 주최자가 심판에게 URL을 손으로 공유해야만 코트별 심판 모드에 닿을 수 있었다(도달 경로 공백).
+  //   외부 라이브러리·서버·마이그레이션 불필요 — 기존 순수 QR 엔진(qrMatrix/qrSvgString)만 재사용.
+  function openRefereePrintView() {
+    const n = Number(tournament?.court_count) || 0
+    if (n < 1) {
+      alert('먼저 대회 정보에서 코트 수를 지정해 주세요.')
+      return
+    }
+    const w = window.open('', '_blank')
+    if (!w) {
+      alert('팝업이 차단되어 있어요. 팝업 허용 후 다시 눌러주세요.')
+      return
+    }
+    const cards = Array.from({ length: n }, (_, i) => {
+      const cn = i + 1
+      const url = refereeUrl(cn)
+      const m = qrMatrix(url)
+      const qrSvg = m ? qrSvgString(m, 300) : `<p class="fallback">${url}</p>`
+      return `<section class="card">
+        <p class="court-label">코트</p>
+        <p class="court-no">${cn}</p>
+        <div class="qr">${qrSvg}</div>
+        <p class="how">이 QR을 찍으면 <b>${cn}번 코트</b> 점수판이 바로 열려요</p>
+        <p class="note">경기가 끝나면 다음 경기가 자동으로 올라와요 · 이 화면만 열어두세요</p>
+      </section>`
+    }).join('')
+    w.document.write(`<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>${(tournament?.title ?? '대회')} — 코트별 심판 QR</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'Malgun Gothic', sans-serif; padding: 24px; color: #111; }
+  .head { text-align: center; margin-bottom: 20px; }
+  .head .top { color: #003478; font-size: 14px; font-weight: 700; letter-spacing: 2px; }
+  .head h1 { font-size: 24px; margin: 6px 0 2px; }
+  .head .sub { font-size: 14px; color: #C60C30; font-weight: 800; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  .card { border: 2px dashed #ccc; border-radius: 16px; padding: 22px 18px; text-align: center;
+          page-break-inside: avoid; display: flex; flex-direction: column; align-items: center; }
+  .court-label { font-size: 13px; color: #888; font-weight: 700; letter-spacing: 2px; }
+  .court-no { font-size: 64px; font-weight: 900; color: #003478; line-height: 1; margin: 2px 0 12px; }
+  .qr { margin-bottom: 12px; }
+  .how { font-size: 15px; color: #333; font-weight: 700; }
+  .how b { color: #C60C30; }
+  .note { font-size: 12px; color: #999; margin-top: 6px; }
+  .fallback { font-size: 12px; color: #555; word-break: break-all; }
+  .foot { text-align: center; font-size: 12px; color: #bbb; margin-top: 22px; }
+  @media print { body { padding: 12px; } .grid { gap: 12px; } }
+</style>
+</head>
+<body>
+  <div class="head">
+    <p class="top">BADMINGUK · 배드민국</p>
+    <h1>${(tournament?.title ?? '대회')}</h1>
+    <p class="sub">코트별 심판 QR — 코트마다 한 장씩 붙여주세요</p>
+  </div>
+  <div class="grid">${cards}</div>
+  <p class="foot">심판이 QR을 찍으면 로그인 후 그 코트의 경기를 자동으로 따라갑니다 · 배드민국</p>
   <script>window.onload = function () { window.print() }<\/script>
 </body>
 </html>`)
@@ -1069,6 +1139,38 @@ export default function TournamentManage() {
 
           <p className="text-[11px] text-gray-300 flex items-center gap-1">
             <ExternalLink size={11} /> 공유 주소는 대회가 끝난 뒤에도 열려요 — 결과 확인용으로도 쓸 수 있어요.
+          </p>
+        </div>
+
+        {/* 코트별 심판 QR — 심판이 자기 코트에 스스로 도달하도록 (완주 last-mile) */}
+        <h2 className="font-bold mb-2 mt-6 flex items-center gap-1.5">
+          <Gavel size={16} className="text-[#C60C30]" /> 코트별 심판 QR
+        </h2>
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
+          <p className="text-xs text-gray-400 leading-relaxed">
+            코트마다 QR을 <strong>한 장씩</strong> 뽑아 코트 기둥에 붙여두세요. 심판이 QR을 찍으면
+            <strong> 그 코트의 지금 경기 점수판</strong>이 바로 열려요. 경기가 끝나면 다음 경기가
+            자동으로 올라와, 심판은 <strong>화면만 열어두면</strong> 됩니다 (URL을 몰라도 돼요).
+          </p>
+
+          <button
+            onClick={openRefereePrintView}
+            className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl
+                       bg-[#C60C30] text-white text-sm font-bold active:opacity-90"
+          >
+            <Printer size={15} /> 코트별 심판 QR 인쇄 ({tournament?.court_count || 0}개 코트)
+          </button>
+
+          <button
+            onClick={() => window.open(refereeUrl(), '_blank', 'noopener')}
+            className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl
+                       border border-gray-200 text-sm font-bold text-gray-600 active:bg-gray-50"
+          >
+            <Gavel size={15} /> 코트별 심판 모드 바로 열기
+          </button>
+
+          <p className="text-[11px] text-gray-300 flex items-center gap-1">
+            <ExternalLink size={11} /> 심판은 로그인 후 이용해요 — 미리 계정을 만들어 두면 QR만 찍으면 바로 시작돼요.
           </p>
         </div>
       </div>
