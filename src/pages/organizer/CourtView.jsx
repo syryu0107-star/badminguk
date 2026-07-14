@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { Monitor, Clock, RefreshCw, Maximize, Minimize, ChevronRight, AlertTriangle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { planAutoAdvance, observedMatchMinutes } from '../../lib/orchestrator';
 import ConnectionStatus from '../../components/ConnectionStatus';
 import { useOnline } from '../../lib/useOnline';
 
@@ -70,8 +71,24 @@ function teamLabel(entry) {
 const fmtTime = (iso) =>
   iso ? new Date(iso).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : '–';
 
+const fmtClock = (ms) =>
+  ms != null ? new Date(ms).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : '–';
+
 const elapsedMin = (iso) =>
   iso ? Math.max(0, Math.floor((Date.now() - new Date(iso)) / 60_000)) : null;
+
+// 예상 호출 시각 문구 — planAutoAdvance estimate({at,ahead})가 있으면 관측 페이스 기반
+//   "약 HH:MM 호출 예상"(지금 근처면 "곧 호출 예상"), 없으면 계획 시각(scheduled_time)으로 폴백.
+// 주최자 무인·선수 '내 경기'·공개 전광판·심판 코트모드와 같은 엔진으로 통일(코트 현황판).
+function estimateText(estimate, scheduledTime, now) {
+  const at = estimate?.at ?? null;
+  if (at != null) {
+    if (at <= (now ?? Date.now()) + 60_000) return '곧 호출 예상';
+    return `약 ${fmtClock(at)} 호출 예상`;
+  }
+  const t = fmtTime(scheduledTime);
+  return t ? `${t} 예정` : null;
+}
 
 /* 세트(게임) 점수 요약 "21-18, 19-21" */
 function setSummary(scores) {
@@ -83,7 +100,7 @@ function setSummary(scores) {
 }
 
 /* ── 코트 카드 ─────────────────────────────────────────── */
-function CourtCard({ courtNo, current, next, catNameById }) {
+function CourtCard({ courtNo, current, next, catNameById, estimates = {}, now }) {
   const isLive = current?.status === 'in_progress';
   const status = !current ? 'empty' : isLive ? 'live' : 'waiting';
   const meta = {
@@ -262,7 +279,10 @@ function CourtCard({ courtNo, current, next, catNameById }) {
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
             }}>
               <Clock size={12} />
-              {fmtTime(next.scheduled_time)} 예정
+              <span style={{ color: estimates[next.id]?.at != null ? '#7baef5' : T.sub, fontWeight: estimates[next.id]?.at != null ? 700 : 400 }}>
+                {estimateText(estimates[next.id], next.scheduled_time, now) ?? `${fmtTime(next.scheduled_time)} 예정`}
+              </span>
+              {estimates[next.id]?.ahead ? <span>· 앞 {estimates[next.id].ahead}경기</span> : null}
               {catNameById[next.category_id] && <span>· {catNameById[next.category_id]}</span>}
             </div>
           </div>
@@ -284,7 +304,7 @@ export default function CourtView() {
   const [refreshAt, setRefreshAt] = useState(null);
   const [isFull, setIsFull] = useState(false);
   const [rtState, setRtState] = useState('connecting'); // 실시간 채널 상태 (7-6)
-  const [, setTick] = useState(0); // 경과 시간 갱신용
+  const [nowTick, setNowTick] = useState(() => Date.now()); // 경과 시간·예상 호출 시각 갱신용
 
   const rootRef = useRef(null);
   const catIdsRef = useRef(new Set());
@@ -371,9 +391,9 @@ export default function CourtView() {
     return () => clearInterval(t);
   }, [fetchData]);
 
-  /* ── 경과 시간 30초 틱 ── */
+  /* ── 경과 시간·예상 시각 30초 틱 ── */
   useEffect(() => {
-    const t = setInterval(() => setTick((v) => v + 1), 30_000);
+    const t = setInterval(() => setNowTick(Date.now()), 30_000);
     return () => clearInterval(t);
   }, []);
 
@@ -456,6 +476,15 @@ export default function CourtView() {
   /* ── 파생값 ── */
   const catNameById = {};
   for (const c of categories) catNameById[c.id] = c.sport_type;
+
+  // 예상 호출 시각 — 주최자 무인 오케스트레이터·선수 '내 경기'·공개 전광판·심판 코트모드와
+  // 같은 엔진(planAutoAdvance + 관측 페이스 observedMatchMinutes)으로 계산해, 대회가
+  // 부전승·빠른 경기로 앞서거나 밀리면 코트 현황판의 예상 시각도 함께 움직인다(순수 표시).
+  // 코트는 종목을 넘나들며 순차로 쓰이므로 전 종목 경기로 큐를 계산한다.
+  const estimates = useMemo(() => {
+    const obs = observedMatchMinutes(matches, { matchMinutes: 30, now: nowTick });
+    return planAutoAdvance(matches, { matchMinutes: obs, now: nowTick }).estimates;
+  }, [matches, nowTick]);
 
   const playable = matches.filter((m) => !DONE_STATUSES.includes(m.status));
   const doneCount = matches.filter((m) => DONE_STATUSES.includes(m.status)).length;
@@ -636,6 +665,8 @@ export default function CourtView() {
                   current={courtMap[cn]?.current}
                   next={courtMap[cn]?.next}
                   catNameById={catNameById}
+                  estimates={estimates}
+                  now={nowTick}
                 />
               ))}
             </div>
@@ -686,10 +717,15 @@ export default function CourtView() {
                           {catNameById[m.category_id]}
                         </span>
                       )}
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{
+                        display: 'flex', alignItems: 'center', gap: 4,
+                        color: estimates[m.id]?.at != null ? '#7baef5' : T.sub,
+                        fontWeight: estimates[m.id]?.at != null ? 700 : 400,
+                      }}>
                         <Clock size={12} />
-                        {fmtTime(m.scheduled_time)}
+                        {estimateText(estimates[m.id], m.scheduled_time, nowTick) ?? fmtTime(m.scheduled_time)}
                       </span>
+                      {estimates[m.id]?.ahead ? <span>· 앞 {estimates[m.id].ahead}경기</span> : null}
                       <span>
                         {m.court_number != null ? `코트 ${m.court_number}` : '코트 미배정'}
                       </span>

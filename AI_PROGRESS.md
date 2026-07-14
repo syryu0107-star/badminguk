@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-14 — [C6] 코트 현황판(프로젝터) 예상 호출 시각 동적화 — C6 예측 통일의 마지막 표면(5개 표면 전부 동일 엔진)
+
+- **체육관 프로젝터용 공개 코트 현황판 "다음 경기"·"대기열"을 고정 scheduled_time → 관측 페이스 기반 "약 HH:MM 호출 예상"으로 교체 (planAutoAdvance 재사용, 예측 5표면 완전 통일)**
+  - 파일: `src/pages/organizer/CourtView.jsx`
+  - 요약: 직전 4런이 공개 전광판(LiveScore)·심판 코트모드(CourtReferee)까지 동적 예상으로 통일했고, 원장 "다음 후보: CourtView 코트 현황판 예상 시각"을 코드 실측으로 확인 — `CourtView`(대회장 벽에 크게 띄우는 프로젝터 현황판)의 "다음 경기" 라인·"대기열" 행이 여전히 고정 `scheduled_time`(계획)이었다. `planAutoAdvance`+`observedMatchMinutes` 관측 페이스 예측이 주최자 무인·선수 '내 경기'·공개 전광판·심판 코트모드 4표면엔 붙었는데 **정작 대회장에서 가장 크게·많은 사람이 보는 프로젝터 현황판만** 고정 계획 시각 — 대회가 부전승·빠른 경기로 앞서면 실제보다 늦은 시각을 보여 헛걸음(노쇼 위험), 밀리면 이른 시각을 보여 일찍 와 지침. **왜 non-human-gated·비파괴**: 순수 표시(DB 쓰기 0)·기존 엔진 재사용(로직 0 복제, CourtView 쿼리가 필요 컬럼 전부 select 해 추가 조회 0)·마이그레이션/외부 키 0. **구현**: (1) `nowTick`(기존 무명 setTick→타임스탬프 상태)+30초 틱, `estimates` useMemo = `planAutoAdvance(matches,{matchMinutes:observedMatchMinutes(matches)})`.estimates(전 종목 큐). (2) 순수 헬퍼 `estimateText(estimate,scheduledTime,now)` — at 있으면 "약 HH:MM 호출 예상"(now±60초는 "곧 호출 예상"), 없으면 계획 시각 폴백. "다음 경기" 라인·대기열 행 두 곳 `fmtTime` 교체(파랑 강조·"앞 N경기"). 주최자·선수·전광판·심판·프로젝터 5개 표면이 같은 예측 엔진으로 완전 통일. 엔진은 이미 회귀 커버라 신규 테스트 불필요(UI 배선·순수 폴백 헬퍼만). `npm test` **242/242**, `npx vite build` green. (자동화율 주최자 95%·선수 96%·심판 91%·운영 92→93%)
+
 ## 2026-07-14 — [C6] 코트별 심판 모드 예상 호출 시각 동적화 — 경기를 직접 진행하는 심판 화면만 남은 고정 계획 시각을 관측 페이스 예측으로 통일
 
 - **`CourtReferee` "다음 차례 경기"·"이 코트 대기 경기"를 고정 scheduled_time → 관측 페이스 기반 "약 HH:MM 예상"으로 교체 (planAutoAdvance 재사용, 예측 4표면 통일)**
