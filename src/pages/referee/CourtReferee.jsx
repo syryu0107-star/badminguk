@@ -14,12 +14,13 @@
 // 스키마·외부 키 불필요 — 기존 tournament_matches 만 읽고, 실제 점수 저장·승자 진출은
 // 기존 심판 점수판(Scoreboard.jsx)이 담당한다. 이 페이지는 "도달 경로"만 채운다.
 // ============================================================
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import Spinner from '../../components/Spinner'
 import ConnectionStatus from '../../components/ConnectionStatus'
 import { useOnline } from '../../lib/useOnline'
+import { planAutoAdvance, observedMatchMinutes } from '../../lib/orchestrator'
 import { ChevronLeft, Gavel, Clock, Play, Trophy, LayoutGrid, Zap } from 'lucide-react'
 
 const RED = '#C60C30'
@@ -37,6 +38,21 @@ function teamLabel(entry, fallback = '미정') {
 const fmtTime = (iso) =>
   iso ? new Date(iso).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : null
 
+const fmtClock = (ms) =>
+  new Date(ms).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+
+// 예상 호출 시각 문구 — planAutoAdvance estimate({at,ahead})가 있으면 관측 페이스 기반
+//   "약 HH:MM 예상"(지금 근처면 "곧 시작 예상"), 없으면 계획 시각(scheduled_time)으로 폴백.
+function estimateText(estimate, scheduledTime, now) {
+  const at = estimate?.at ?? null
+  if (at != null) {
+    if (at <= (now ?? Date.now()) + 60_000) return '곧 시작 예상'
+    return `약 ${fmtClock(at)} 예상`
+  }
+  const t = fmtTime(scheduledTime)
+  return t ? `${t} 예정` : null
+}
+
 export default function CourtReferee() {
   const { tournamentId, courtNo } = useParams()
   const navigate = useNavigate()
@@ -48,6 +64,7 @@ export default function CourtReferee() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(null)
   const [rtState, setRtState] = useState('connecting')
+  const [nowTick, setNowTick] = useState(() => Date.now())
 
   const catIdsRef = useRef(new Set())
   const hadDropRef = useRef(false)
@@ -135,11 +152,27 @@ export default function CourtReferee() {
     return () => { supabase.removeChannel(channel) }
   }, [tournamentId, fetchData])
 
+  // 폴링(15초) 사이에도 예상 호출 시각이 흐르도록 30초마다 기준 시각 갱신
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 30_000)
+    return () => clearInterval(t)
+  }, [])
+
   // ── 파생값 ──────────────────────────────────────────────
   const catNameById = {}
   for (const c of categories) catNameById[c.id] = c.sport_type
 
   const playable = matches.filter(m => !DONE_STATUSES.includes(m.status))
+
+  // 예상 호출 시각 — 주최자 무인 오케스트레이터·선수 '내 경기'·공개 전광판과 똑같은
+  //   planAutoAdvance 엔진(관측 페이스 반영)을 재사용해, 심판이 보는 대기 경기 예상
+  //   시각이 대회가 앞서거나 밀리면 함께 움직인다(고정 계획 시각 대신). 코트는 종목을
+  //   넘나들며 순차로 쓰이므로 전 종목 경기로 큐를 계산한다.
+  const estimates = useMemo(() => {
+    if (!matches.length) return {}
+    const obs = observedMatchMinutes(matches, { matchMinutes: 30, now: nowTick })
+    return planAutoAdvance(matches, { matchMinutes: obs, now: nowTick }).estimates
+  }, [matches, nowTick])
 
   // 코트 목록 = 대회 court_count 범위 ∪ 실제 배정된 코트 번호
   const courtCount = tournament?.court_count ?? 4
@@ -273,6 +306,8 @@ export default function CourtReferee() {
           court={selectedCourt}
           {...courtQueue(selectedCourt)}
           catNameById={catNameById}
+          estimates={estimates}
+          now={nowTick}
           done={done}
           onOpenScoreboard={(mid) => navigate(`/referee/${mid}`)}
         />
@@ -282,7 +317,7 @@ export default function CourtReferee() {
 }
 
 // ── 한 코트의 현재/다음 경기 패널 ─────────────────────────────
-function CourtPanel({ court, current, queue, catNameById, done, onOpenScoreboard }) {
+function CourtPanel({ court, current, queue, catNameById, estimates = {}, now, done, onOpenScoreboard }) {
   const live = current?.status === 'in_progress'
 
   return (
@@ -337,9 +372,12 @@ function CourtPanel({ court, current, queue, catNameById, done, onOpenScoreboard
               </div>
             </div>
 
-            {!live && fmtTime(current.scheduled_time) && (
-              <p className="text-center text-xs text-gray-400 mt-2 flex items-center justify-center gap-1">
-                <Clock size={12} /> {fmtTime(current.scheduled_time)} 예정
+            {!live && estimateText(estimates[current.id], current.scheduled_time, now) && (
+              <p className="text-center text-xs font-semibold text-[#003478] mt-2 flex items-center justify-center gap-1">
+                <Clock size={12} /> {estimateText(estimates[current.id], current.scheduled_time, now)}
+                {estimates[current.id]?.ahead ? (
+                  <span className="text-gray-400 font-medium">· 앞 {estimates[current.id].ahead}경기</span>
+                ) : null}
               </p>
             )}
 
@@ -376,8 +414,10 @@ function CourtPanel({ court, current, queue, catNameById, done, onOpenScoreboard
                   </p>
                   <p className="text-[11px] text-gray-400 mt-0.5 flex items-center gap-2">
                     {catNameById[m.category_id] && <span>{catNameById[m.category_id]}</span>}
-                    {fmtTime(m.scheduled_time) && (
-                      <span className="flex items-center gap-0.5"><Clock size={10} /> {fmtTime(m.scheduled_time)}</span>
+                    {estimateText(estimates[m.id], m.scheduled_time, now) && (
+                      <span className="flex items-center gap-0.5 text-[#003478] font-semibold">
+                        <Clock size={10} /> {estimateText(estimates[m.id], m.scheduled_time, now)}
+                      </span>
                     )}
                   </p>
                 </div>
