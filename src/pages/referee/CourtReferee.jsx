@@ -21,8 +21,8 @@ import Spinner from '../../components/Spinner'
 import ConnectionStatus from '../../components/ConnectionStatus'
 import { useOnline } from '../../lib/useOnline'
 import { planAutoAdvance, observedMatchMinutes } from '../../lib/orchestrator'
-import { callMatch } from '../../lib/notify'
-import { ChevronLeft, Gavel, Clock, Play, Trophy, LayoutGrid, Zap, BellRing, Check } from 'lucide-react'
+import { callMatch, subscribeCallAcks } from '../../lib/notify'
+import { ChevronLeft, Gavel, Clock, Play, Trophy, LayoutGrid, Zap, BellRing, Check, UserCheck } from 'lucide-react'
 
 const RED = '#C60C30'
 const BLUE = '#003478'
@@ -77,6 +77,7 @@ export default function CourtReferee() {
   const [rtState, setRtState] = useState('connecting')
   const [nowTick, setNowTick] = useState(() => Date.now())
   const [called, setCalled] = useState({}) // matchId → 'sending' | 마지막 호출 시각(ms)
+  const [acked, setAcked] = useState({})   // matchId → 확인 시각(ms) — 선수 "가고 있어요" (C1)
 
   const catIdsRef = useRef(new Set())
   const hadDropRef = useRef(false)
@@ -170,6 +171,21 @@ export default function CourtReferee() {
     return () => clearInterval(t)
   }, [])
 
+  // 선수 호출 확인(ack) 수신 — 심판이 부른 선수가 "가고 있어요" 를 누르면 대회 채널로
+  //   확인 신호가 방송된다(주최자 LiveDashboard 와 동일 신호). 지금껏 이 확인은 주최자
+  //   대시보드에만 "오는 중" 배지로 떴고, 정작 코트에서 직접 호출한 심판은 선수가
+  //   응답했는지 알 수 없어 무작정 기다려야 했다(호출→응답 피드백 루프 단절). 여기서도
+  //   구독해 심판이 "선수 확인 · 오는 중"을 바로 본다(기존 subscribeCallAcks 재사용·방송만).
+  useEffect(() => {
+    if (!tournamentId) return
+    const unsub = subscribeCallAcks(tournamentId, (payload) => {
+      const mid = payload?.matchId
+      if (!mid) return
+      setAcked(prev => ({ ...prev, [mid]: Date.now() }))
+    })
+    return unsub
+  }, [tournamentId])
+
   // ── 파생값 ──────────────────────────────────────────────
   const catNameById = {}
   for (const c of categories) catNameById[c.id] = c.sport_type
@@ -202,6 +218,7 @@ export default function CourtReferee() {
     if (!match?.id || called[match.id] === 'sending') return
     if (!(match.team1_entry_id && match.team2_entry_id)) return
     setCalled(prev => ({ ...prev, [match.id]: 'sending' }))
+    setAcked(prev => { const n = { ...prev }; delete n[match.id]; return n }) // 재호출 시 이전 확인 리셋
     try {
       await callMatch({
         match,
@@ -347,6 +364,7 @@ export default function CourtReferee() {
           now={nowTick}
           done={done}
           called={called}
+          acked={acked}
           onCall={handleCall}
           onOpenScoreboard={(mid) => navigate(`/referee/${mid}`)}
         />
@@ -356,9 +374,10 @@ export default function CourtReferee() {
 }
 
 // ── 한 코트의 현재/다음 경기 패널 ─────────────────────────────
-function CourtPanel({ court, current, queue, catNameById, estimates = {}, now, done, called = {}, onCall, onOpenScoreboard }) {
+function CourtPanel({ court, current, queue, catNameById, estimates = {}, now, done, called = {}, acked = {}, onCall, onOpenScoreboard }) {
   const live = current?.status === 'in_progress'
   const callState = current ? called[current.id] : undefined
+  const ackTs = current ? acked[current.id] : undefined
   const bothTeams = !!(current?.team1_entry_id && current?.team2_entry_id)
 
   return (
@@ -440,6 +459,13 @@ function CourtPanel({ court, current, queue, catNameById, estimates = {}, now, d
                     ? <><Check size={16} /> 호출됨 · {fmtClock(callState)} · 다시 호출</>
                     : <><BellRing size={16} /> 선수 호출 (지금 코트로)</>}
               </button>
+            )}
+
+            {/* 선수가 "가고 있어요" 로 응답하면 심판에게 바로 표시 — 무작정 기다리지 않게 */}
+            {!live && !done && typeof ackTs === 'number' && (
+              <p className="mt-2 text-center text-xs font-bold text-emerald-600 flex items-center justify-center gap-1.5">
+                <UserCheck size={14} /> 선수 확인 · 오는 중 ({fmtClock(ackTs)})
+              </p>
             )}
 
             <button

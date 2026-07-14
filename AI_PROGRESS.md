@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-14 — [C1/심판] 심판 코트 모드 선수 호출 확인 수신 — 호출→응답 피드백 루프를 심판 쪽에서 닫음
+
+- **선수 "가고 있어요" 확인이 주최자 대시보드에만 뜨던 것을, 코트에서 직접 호출한 심판 화면에도 "선수 확인 · 오는 중" 배지로 표시**
+  - 파일: `src/pages/referee/CourtReferee.jsx`
+  - 요약: 직전 런이 `CourtReferee`에 "선수 호출 (지금 코트로)" 버튼을 달아 코트에 있는 심판이 직접 호출할 수 있게 했으나, 코드 실측으로 남은 심판 갭을 재선별 — 선수가 호출 배너에서 "가고 있어요"(`ackMatchCall`)를 눌러도 그 확인 신호(`SIGNAL.CALL_ACK` broadcast)는 **오직 주최자 `LiveDashboard`만 구독**(`subscribeCallAcks`→"선수 확인 · 오는 중" 초록 배지+부전승 유예)해, **정작 코트에서 직접 부른 심판은 선수가 응답했는지 알 수 없어 무작정 기다려야** 했다(호출→응답 피드백 루프가 심판 쪽에서 끊김·near-zero touch 심판측 공백). **왜 non-human-gated·비파괴**: 확인 신호·구독 헬퍼(`subscribeCallAcks`)·발신부(선수 배너 `ackMatchCall`)가 모두 이미 존재 — 심판 화면에서 **구독만 0**이던 순수 배선. 방송만(지속 저장·외부 발송 0)·새 스키마·외부 키·마이그레이션 0·서버 웹푸시(VAPID·human-gated)와 무관. **구현**: (1) `acked` 상태(matchId→확인 시각 ms). (2) `subscribeCallAcks(tournamentId)` useEffect(payload.matchId 확인 시 `setAcked`·LiveDashboard 와 동일 신호·수신 콜백 오류가 구독 죽이지 않음·cleanup 반환). (3) `handleCall`이 재호출 시 그 경기 ack 리셋(다시 응답할 때까지 배지 사라짐 — LiveDashboard `ackTs≥calledAt` 가드와 동형). (4) CourtPanel 호출 버튼 아래 초록 "선수 확인 · 오는 중 (HH:MM)" 배지(`UserCheck` 아이콘·`!live && !done && ackTs`). 주최자 구독은 그대로라 부전승 유예 관리 불변(추가 수신자일 뿐)·순수 배선이라 엔진 회귀 유지(신규 순수 로직 없음). `npm test` **242/242**, `npx vite build` green. 배선 grep 확인. (자동화율 주최자 95%·선수 96%·심판 93→94%·운영 93%)
+
 ## 2026-07-14 — [C1/심판] 코트별 심판 모드 선수 호출 버튼 — 주최자 대시보드 없이도 심판이 코트에서 직접 호출
 
 - **코트에 있는 심판이 대기 중인 현재 경기의 선수를 직접 호출(재호출) — 무인 호출 경로 이중화**
