@@ -1,8 +1,9 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { Clock, MapPin, Wifi, Trophy, RefreshCw, ListOrdered, AlertTriangle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { calculatePoolStandings } from '../../lib/tournament';
+import { planAutoAdvance, observedMatchMinutes } from '../../lib/orchestrator';
 import ConnectionStatus from '../../components/ConnectionStatus';
 import { useOnline } from '../../lib/useOnline';
 
@@ -69,7 +70,7 @@ function CertBadge({ level }) {
   );
 }
 
-function MetaChips({ match, poolName, roundName }) {
+function MetaChips({ match, poolName, roundName, hideTime = false }) {
   return (
     <div className="flex items-center gap-2 flex-wrap text-xs text-gray-500">
       {match.court_number != null && (
@@ -77,7 +78,7 @@ function MetaChips({ match, poolName, roundName }) {
       )}
       {poolName && <span>{poolName}</span>}
       {roundName && <span>{roundName}</span>}
-      {match.scheduled_time && (
+      {!hideTime && match.scheduled_time && (
         <span className="flex items-center gap-1">
           <Clock size={11} />
           {fmtClock(match.scheduled_time)}
@@ -151,8 +152,16 @@ function LiveMatchCard({ match, poolName, roundName }) {
   );
 }
 
-/* 예정 경기 행 */
-function ScheduledRow({ match, poolName, roundName }) {
+/* 예정 경기 행
+ * estimate: planAutoAdvance 가 계산한 { at(ms), ahead } — 관측 페이스 기반 "예상 호출 시각".
+ *   대회가 계획보다 앞서거나 밀리면 이 예상 시각이 실제 진행에 맞춰 움직여, 전광판을 보는
+ *   선수가 원래 계획된 scheduled_time(고정)이 아니라 "지금 페이스면 언제 호출될지" 를 본다
+ *   (계획대로 안 흘러가는 대회에서 헛되이 일찍/늦게 와 노쇼가 되는 것을 줄인다). 코트 미배정·
+ *   양 팀 미확정으로 예상값이 없으면 기존 계획 시각(scheduled_time)으로 자연 폴백. */
+function ScheduledRow({ match, poolName, roundName, estimate, now }) {
+  const at = estimate?.at ?? null;
+  const ahead = estimate?.ahead ?? null;
+  const soon = at != null && at <= (now ?? Date.now()) + 60_000;
   return (
     <div className="rounded-xl border border-blue-100 bg-white px-4 py-3">
       <div className="flex items-center gap-2">
@@ -164,8 +173,15 @@ function ScheduledRow({ match, poolName, roundName }) {
           {teamLabel(match.team2_entry)}
         </span>
       </div>
-      <div className="flex justify-center mt-1.5">
-        <MetaChips match={match} poolName={poolName} roundName={roundName} />
+      <div className="flex flex-col items-center gap-1 mt-1.5">
+        <MetaChips match={match} poolName={poolName} roundName={roundName} hideTime={at != null} />
+        {at != null && (
+          <span className="flex items-center gap-1 text-xs font-bold text-[#003478]">
+            <Clock size={11} />
+            {soon ? '곧 호출 예상' : `약 ${fmtClock(at)} 호출 예상`}
+            {ahead ? <span className="text-gray-400 font-medium">· 앞 {ahead}경기</span> : null}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -462,6 +478,22 @@ export default function LiveScore() {
     };
   }, [id, loadData]);
 
+  // 예상 호출 시각용 시계 — 폴링(30초) 사이에도 예상 시각이 흐르도록 주기 갱신.
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  // 관측 페이스 기반 예상 호출 시각 (matchId → { at, ahead }). 주최자 무인 오케스트레이터·
+  // 선수 '내 경기' 예상시각과 동일한 planAutoAdvance 엔진을 재사용해 전광판·앱이 일관된다.
+  // 코트는 종목을 넘나들며 순차로 쓰이므로 전체 경기(catIds 전 종목)로 큐를 계산한다.
+  const projected = useMemo(() => {
+    if (!matches.length) return {};
+    const obs = observedMatchMinutes(matches, { matchMinutes: 30, now: nowTick });
+    return planAutoAdvance(matches, { matchMinutes: obs, now: nowTick }).estimates;
+  }, [matches, nowTick]);
+
   /* ── 파생 값 ──────────────────────────────────────────── */
   const activeCat = categories.find((c) => c.id === activeCatId);
   const catMatches = matches.filter((m) => m.category_id === activeCatId);
@@ -681,7 +713,7 @@ export default function LiveScore() {
                 </h3>
                 <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
                   {scheduledMatches.map((m) => (
-                    <ScheduledRow key={m.id} match={m} {...matchLabels(m)} />
+                    <ScheduledRow key={m.id} match={m} {...matchLabels(m)} estimate={projected[m.id]} now={nowTick} />
                   ))}
                 </div>
               </section>

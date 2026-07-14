@@ -3,6 +3,12 @@
 > 자율 개선 에이전트가 완료한 로드맵 항목 기록. 이미 완료된 항목은 다시 하지 않는다.
 > 각 항목: 날짜(UTC) · 로드맵 번호 · 변경 파일 · 한 줄 요약.
 
+## 2026-07-14 — [C6] 전광판 예상 호출 시각 동적화 — 공개 전광판이 고정 계획 시각만 보여주던 신뢰도 구멍 봉인
+
+- **공개 전광판 "예정 경기"를 고정 scheduled_time → 관측 페이스 기반 동적 "약 HH:MM 호출 예상"으로 교체 (planAutoAdvance 재사용)**
+  - 파일: `src/pages/public/LiveScore.jsx`, `tests/engines.test.mjs`
+  - 요약: 커뮤니케이션 레이어(RESULT·SCHEDULE_SHIFT)·무통장 계좌·콜드 오픈 오탐을 소진해 선수 96%에 도달한 뒤, 가장 낮은 두 플로우(심판 90%·운영 91%)의 명시 백로그(C6 "rescheduleAfterForfeit 연결"·로드맵 1-8)를 코드 실측. **과대주장 정정**: `rescheduleAfterForfeit`(scheduler.js)는 테스트 외 호출부 0이라 라이브 미연결이 맞지만, 라이브에 붙이는 건 **오히려 회귀** — 이 함수는 `scheduledTime`을 덮어써 앞당기는데 라이브 `analyzeDelay`가 `scheduled_time`을 **"계획 baseline"**으로 삼아 지연(planned vs projected)을 계산하므로 덮어쓰면 delayMin 이 항상 0이 돼 지연 감지가 무너진다. 즉 라이브는 (scheduled_time 을 안 건드리고) `planAutoAdvance` 동적 예상으로 "빈 코트 자동 투입"을 이미 실현 중 → **진짜 갭 = 그 동적 예상이 정작 가장 많은 사람이 보는 공개 전광판(`LiveScore`)엔 안 붙어, 예정 경기가 고정 `scheduled_time`만 표시**. 대회가 부전승·빠른 경기로 계획보다 앞서면 전광판이 실제보다 늦은 시각을 보여 선수가 헛되이 늦게 와 노쇼, 밀리면 이른 시각을 보여 일찍 와 지침(가장 많이 보는 화면의 신뢰도 구멍). **왜 non-human-gated·비파괴**: 순수 표시(DB 쓰기 0)·기존 엔진(`planAutoAdvance`+`observedMatchMinutes`) 재사용(로직 0 복제)·마이그레이션/외부 키 0·`analyzeDelay` baseline 불변(scheduled_time 안 건드림). **구현**: (1) `projected` useMemo = `planAutoAdvance(matches,{matchMinutes:observedMatchMinutes(...)})` estimates(전 종목 경기로 큐 — 코트는 종목 넘나들며 순차 사용), `nowTick`(30초)로 폴링 사이에도 예상 시각이 흐름. (2) `ScheduledRow` 가 estimate 를 받아 "약 HH:MM 호출 예상 · 앞 N경기"(빈 코트 맨 앞·now±60초는 "곧 호출 예상") 파랑 강조 표시, `MetaChips` 는 `hideTime` 옵션으로 중복 계획시각 숨김(비-scheduled 카드 불변). 코트 미배정/양팀 미확정으로 예상값 없으면 기존 계획 시각으로 자연 폴백. 주최자 무인·선수 '내 경기'·전광판이 같은 예측 엔진으로 일관. 회귀 1개(빈 코트 즉시 at≈now·앞0 / 대기 경기 관측 페이스 뒤로·앞1). `npm test` **242/242**(241+1), `npx vite build` green. (자동화율 주최자 95%·선수 96%·심판 90%·운영 91→92% — 가장 많이 보는 공개 전광판 예상 호출 시각이 실제 페이스로 정확해져 노쇼·헛걸음 위험↓, C6 동적 재조정이 전광판까지 노출)
+
 ## 2026-07-14 — [C1] 콜드 오픈 낡은 호출 오탐 방지 — "방송 놓친 호출 복구"가 끝난 경기까지 되살리던 결함 봉인
 
 - **앱 재오픈 시 이미 끝난 경기의 호출을 "지금 코트로 입장하세요" 긴급 배너로 오탐하던 신뢰도 구멍 제거 — filterLiveCalls 신설**
